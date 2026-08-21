@@ -51,6 +51,9 @@ export async function createIsolatedOpenCodeState(
     lsp: false,
     model: `${testProviderID}/${testModelID}`,
     small_model: `${testProviderID}/${testModelID}`,
+    agent: {
+      build: { model: `${testProviderID}/${testModelID}`, mode: "primary" },
+    },
     enabled_providers: [testProviderID],
     tools: { diagnostic_context: true },
     plugin: [[pathToFileURL(options.pluginPath).href, { evidencePath }]],
@@ -58,7 +61,7 @@ export async function createIsolatedOpenCodeState(
       [testProviderID]: {
         id: testProviderID,
         name: "Deterministic live test provider",
-        env: [],
+        env: ["LIVE_TEST_API_KEY"],
         npm: "@ai-sdk/openai-compatible",
         models: {
           [testModelID]: {
@@ -78,7 +81,47 @@ export async function createIsolatedOpenCodeState(
       },
     },
   };
+  const v2Config = {
+    model: `${testProviderID}/${testModelID}`,
+    default_agent: "build",
+    agents: {
+      build: { model: `${testProviderID}/${testModelID}`, mode: "primary" },
+    },
+    providers: {
+      [testProviderID]: {
+        name: "Deterministic live test provider",
+        api: {
+          type: "aisdk",
+          package: "@ai-sdk/openai-compatible",
+          url: options.providerBaseUrl,
+        },
+        request: { body: { apiKey: "local-test-key" } },
+        models: {
+          [testModelID]: {
+            name: "Deterministic model",
+            api: {
+              id: testModelID,
+              type: "aisdk",
+              package: "@ai-sdk/openai-compatible",
+              url: options.providerBaseUrl,
+            },
+            capabilities: { tools: true, input: ["text"], output: ["text"] },
+            request: { body: { apiKey: "local-test-key" } },
+            cost: { input: 0, output: 0 },
+            limit: { context: 100_000, output: 1_000 },
+          },
+        },
+      },
+    },
+  };
   await writeFile(configPath, `${JSON.stringify(config, undefined, 2)}\n`, { mode: 0o600 });
+  await writeFile(
+    join(paths.config, "opencode.json"),
+    `${JSON.stringify(v2Config, undefined, 2)}\n`,
+    {
+      mode: 0o600,
+    },
+  );
 
   const environment = {
     HOME: paths.home,
@@ -94,12 +137,12 @@ export async function createIsolatedOpenCodeState(
     OPENCODE_TEST_HOME: paths.home,
     OPENCODE_TEST_MANAGED_CONFIG_DIR: paths.managed,
     OPENCODE_DISABLE_PROJECT_CONFIG: "1",
-    OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
     OPENCODE_DISABLE_MODELS_FETCH: "1",
     OPENCODE_DISABLE_AUTOUPDATE: "1",
     OPENCODE_DISABLE_LSP_DOWNLOAD: "1",
     OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
     OPENCODE_AUTH_CONTENT: "{}",
+    LIVE_TEST_API_KEY: "local-test-key",
     npm_config_cache: paths.npmCache,
     NO_COLOR: "1",
     LANG: "C.UTF-8",
