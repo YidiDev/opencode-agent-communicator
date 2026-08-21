@@ -1,10 +1,16 @@
 import type { Server } from "bun";
 
-import { diagnosticToolID, liveDeadlineMs, testModelID } from "./constants";
+import {
+  diagnosticProviderCallID,
+  diagnosticToolID,
+  liveDeadlineMs,
+  testModelID,
+} from "./constants";
 
 export interface ProviderHarness {
   readonly baseUrl: string;
   readonly requests: readonly unknown[];
+  waitForRequestText(text: string, afterSequence?: number): Promise<ProviderRequestObservation>;
   waitForText(text: string, afterSequence?: number): Promise<ProviderRequestGate>;
   stop(): Promise<void>;
 }
@@ -14,6 +20,12 @@ export interface ProviderRequestGate {
   readonly body: unknown;
   release(text?: string): void;
   waitForCancellation(): Promise<void>;
+}
+
+export interface ProviderRequestObservation {
+  readonly sequence: number;
+  readonly body: unknown;
+  readonly receivedAt: number;
 }
 
 interface Deferred<T> {
@@ -61,16 +73,16 @@ function eventStream(lines: readonly unknown[]): Response {
   return new Response(body, { headers: { "content-type": "text/event-stream" } });
 }
 
-function toolResponse(): Response {
+function toolResponse(name = diagnosticToolID, arguments_ = "{}"): Response {
   return eventStream([
     chunk({ role: "assistant" }),
     chunk({
       tool_calls: [
         {
           index: 0,
-          id: "call_live_diagnostic",
+          id: diagnosticProviderCallID,
           type: "function",
-          function: { name: diagnosticToolID, arguments: "{}" },
+          function: { name, arguments: arguments_ },
         },
       ],
     }),
@@ -130,8 +142,10 @@ function gatedTextResponse(release: Promise<string>, cancelled: Deferred<void>):
 
 export function launchDeterministicProvider(options: { gated?: boolean } = {}): ProviderHarness {
   const requests: unknown[] = [];
+  const observations: ProviderRequestObservation[] = [];
   const gates: ProviderRequestGate[] = [];
-  const arrivals = new Set<Deferred<void>>();
+  const gateArrivals = new Set<Deferred<void>>();
+  const requestArrivals = new Set<Deferred<void>>();
   const server: Server<undefined> = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -143,6 +157,16 @@ export function launchDeterministicProvider(options: { gated?: boolean } = {}): 
       }
       const body: unknown = JSON.parse(await request.text());
       requests.push(body);
+      observations.push({ sequence: requests.length, body, receivedAt: Date.now() });
+      for (const arrival of requestArrivals) arrival.resolve(undefined);
+      requestArrivals.clear();
+      const serialized = JSON.stringify(body);
+      if (serialized.includes("legacy-retry")) {
+        return Response.json(
+          { error: { message: "phase0 deterministic retryable 503", type: "server_error" } },
+          { status: 503, headers: { "retry-after-ms": "60000" } },
+        );
+      }
       if (options.gated) {
         const release = deferred<string>();
         const cancelled = deferred<void>();
@@ -157,11 +181,15 @@ export function launchDeterministicProvider(options: { gated?: boolean } = {}): 
             return withDeadline(cancelled.promise, `provider request ${sequence} cancellation`);
           },
         });
-        for (const arrival of arrivals) arrival.resolve(undefined);
-        arrivals.clear();
+        for (const arrival of gateArrivals) arrival.resolve(undefined);
+        gateArrivals.clear();
         return gatedTextResponse(release.promise, cancelled);
       }
-      return hasToolResult(body) ? textResponse() : toolResponse();
+      if (hasToolResult(body)) return textResponse();
+      const approval = serialized.match(/tool-approval-(allow|deny|ask)/)?.[1];
+      if (approval) return toolResponse("diagnostic_approval", JSON.stringify({ mode: approval }));
+      if (serialized.includes("tool-cancellation")) return toolResponse("diagnostic_cancellation");
+      return toolResponse();
     },
   });
 
@@ -169,6 +197,19 @@ export function launchDeterministicProvider(options: { gated?: boolean } = {}): 
     baseUrl: `http://127.0.0.1:${server.port}/v1`,
     get requests(): readonly unknown[] {
       return requests;
+    },
+    async waitForRequestText(text: string, afterSequence = 0): Promise<ProviderRequestObservation> {
+      const match = (): ProviderRequestObservation | undefined =>
+        observations.find(
+          (request) =>
+            request.sequence > afterSequence && JSON.stringify(request.body).includes(text),
+        );
+      const existing = match();
+      if (existing) return existing;
+      const arrival = deferred<void>();
+      requestArrivals.add(arrival);
+      await withDeadline(arrival.promise, `provider request containing ${JSON.stringify(text)}`);
+      return this.waitForRequestText(text, afterSequence);
     },
     async waitForText(text: string, afterSequence = 0): Promise<ProviderRequestGate> {
       const match = (): ProviderRequestGate | undefined =>
@@ -178,7 +219,7 @@ export function launchDeterministicProvider(options: { gated?: boolean } = {}): 
       const existing = match();
       if (existing) return existing;
       const arrival = deferred<void>();
-      arrivals.add(arrival);
+      gateArrivals.add(arrival);
       await withDeadline(arrival.promise, `provider request containing ${JSON.stringify(text)}`);
       return this.waitForText(text, afterSequence);
     },

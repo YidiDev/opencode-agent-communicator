@@ -9,6 +9,7 @@ import {
   type SessionInputAdmitted,
 } from "@opencode-ai/sdk/v2/client";
 
+import { cleanupAll } from "./harness/cleanup";
 import { resolveExactProjectCli } from "./harness/cli";
 import {
   diagnosticToolID,
@@ -101,42 +102,58 @@ async function launchFixture(): Promise<LiveFixture> {
   const projectRoot = join(thisDirectory, "..", "..");
   const pluginPath = await realpath(join(thisDirectory, "fixtures", "diagnostic-plugin.ts"));
   const provider = launchDeterministicProvider({ gated: true });
-  const isolation = await createIsolatedOpenCodeState({
-    providerBaseUrl: provider.baseUrl,
-    pluginPath,
-  });
-  const cliPath = await resolveExactProjectCli(projectRoot);
-  const version = Bun.spawnSync([cliPath, "--version"], {
-    cwd: isolation.project,
-    env: isolation.environment,
-  });
-  expect(version.exitCode).toBe(0);
-  expect(version.stdout.toString()).toBe(`${exactOpenCodeVersion}\n`);
-  const serve = launchManagedProcess({
-    command: cliPath,
-    arguments: ["serve", "--hostname", "127.0.0.1", "--port", "0"],
-    cwd: isolation.project,
-    environment: isolation.environment,
-  });
-  const baseUrl = await waitForOutputLine(
-    serve.child,
-    (line) => line.match(/^opencode server listening on (http:\/\/127\.0\.0\.1:\d+)$/)?.[1],
-  );
-  const client = createOpencodeClient({ baseUrl, directory: isolation.project });
-  await initializeLocation(client, isolation);
-  return {
-    baseUrl,
-    client,
-    eventSequences: new Map(),
-    isolation,
-    provider,
-    serve,
-    async close(): Promise<void> {
-      await serve.terminate();
-      await provider.stop();
-      await isolation.remove();
-    },
-  };
+  let isolation: IsolatedOpenCodeState | undefined;
+  let serve: ManagedProcess | undefined;
+  try {
+    isolation = await createIsolatedOpenCodeState({
+      providerBaseUrl: provider.baseUrl,
+      pluginPath,
+    });
+    const cliPath = await resolveExactProjectCli(projectRoot);
+    const version = Bun.spawnSync([cliPath, "--version"], {
+      cwd: isolation.project,
+      env: isolation.environment,
+    });
+    expect(version.exitCode).toBe(0);
+    expect(version.stdout.toString()).toBe(`${exactOpenCodeVersion}\n`);
+    serve = launchManagedProcess({
+      command: cliPath,
+      arguments: ["serve", "--hostname", "127.0.0.1", "--port", "0"],
+      cwd: isolation.project,
+      environment: isolation.environment,
+    });
+    let baseUrl: string;
+    try {
+      baseUrl = await waitForOutputLine(
+        serve.child,
+        (line) => line.match(/^opencode server listening on (http:\/\/127\.0\.0\.1:\d+)$/)?.[1],
+      );
+    } catch (error: unknown) {
+      await cleanupAll([() => serve?.terminate()], error);
+      throw new Error("unreachable server readiness cleanup");
+    }
+    const client = createOpencodeClient({ baseUrl, directory: isolation.project });
+    await initializeLocation(client, isolation);
+    const running = serve;
+    const state = isolation;
+    return {
+      baseUrl,
+      client,
+      eventSequences: new Map(),
+      isolation: state,
+      provider,
+      serve: running,
+      async close(): Promise<void> {
+        await cleanupAll([() => running.terminate(), () => provider.stop(), () => state.remove()]);
+      },
+    };
+  } catch (error: unknown) {
+    await cleanupAll(
+      [() => serve?.terminate(), () => provider.stop(), () => isolation?.remove()],
+      error,
+    );
+    throw new Error("unreachable fixture cleanup");
+  }
 }
 
 const model = { providerID: testProviderID, id: testModelID } as const;
@@ -556,6 +573,7 @@ async function proveInterruptAndQueueSurvival(fixture: LiveFixture): Promise<voi
 
 test("proves Phase 0 native session semantics with the exact local SDK and CLI", async () => {
   const fixture = await launchFixture();
+  let testFailure: unknown;
   try {
     await proveIdentityAndListing(fixture);
     await proveStatusSeparation(fixture);
@@ -567,7 +585,9 @@ test("proves Phase 0 native session semantics with the exact local SDK and CLI",
     expect(successful(await fixture.client.instance.dispose(), "server instance dispose")).toBe(
       true,
     );
+  } catch (error: unknown) {
+    testFailure = error;
   } finally {
-    await fixture.close();
+    await cleanupAll([() => fixture.close()], testFailure);
   }
 });
