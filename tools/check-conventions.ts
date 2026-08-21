@@ -34,7 +34,11 @@ const exceptionRules = new Set([
   "ts-expect-error",
   "architecture",
   "import-cycle",
+  "coverage-functions",
+  "coverage-lines",
 ]);
+
+const coverageExceptionRules = new Set(["coverage-functions", "coverage-lines"]);
 
 function toProjectPath(rootDirectory: string, path: string): string {
   return relative(rootDirectory, path).split(sep).join("/");
@@ -123,6 +127,20 @@ function parseExceptionCandidate(
         "error",
         projectPath,
         `${location} has unknown rule "${rule}".`,
+      ),
+    );
+    return undefined;
+  }
+  if (
+    coverageExceptionRules.has(rule) &&
+    (!path.startsWith("src/") || ![".ts", ".tsx", ".mts", ".cts"].includes(extname(path)))
+  ) {
+    diagnostics.push(
+      diagnostic(
+        "quality-exceptions",
+        "error",
+        projectPath,
+        `${location} coverage exception must target an exact production TypeScript file.`,
       ),
     );
     return undefined;
@@ -477,7 +495,7 @@ export function checkConventions(options: CheckConventionsOptions): ConventionDi
     );
   });
   for (const exception of exceptions) {
-    if (!exception.isUsed) {
+    if (!exception.isUsed && !coverageExceptionRules.has(exception.rule)) {
       diagnostics.push(
         diagnostic(
           "quality-exceptions",
