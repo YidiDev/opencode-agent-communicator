@@ -7,7 +7,8 @@ communication and coordination between first-class OpenCode sessions. It is for
 users running several sessions concurrently against the same workspace and
 OpenCode backend.
 
-The first published prerelease will expose the complete revised surface:
+The first published prerelease target is exactly `0.1.0` and will expose the complete
+revised surface:
 
 - `session_list`
 - `session_send`
@@ -1285,7 +1286,8 @@ support. It contains no remote command or synthetic wake experiments.
   matrices.
 - Freeze tool schemas, domain errors, defaults, and compatibility policy.
 - Pass live acceptance on Linux, macOS, and Windows.
-- Publish stable only after all acceptance criteria hold.
+- Let user testing of the complete `0.1.0` prerelease lead to `1.0.0`; publish that
+  stable release only after all acceptance criteria hold.
 
 ## 19. Testing Strategy
 
