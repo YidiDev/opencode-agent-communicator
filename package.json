@@ -12,10 +12,11 @@
     "check:coverage": "bun tools/run-coverage.ts",
     "typecheck": "tsc --noEmit",
     "check": "bun run format:check && bun run lint && bun run check:conventions && bun run typecheck && bun test test/unit test/integration test/black-box",
-    "test": "bun test",
+    "test": "bun test test/unit test/integration test/black-box",
     "test:unit": "bun test test/unit",
     "test:integration": "bun test test/integration",
-    "test:coverage": "bun test test/unit test/integration test/black-box --coverage --coverage-reporter=lcov && bun run check:coverage"
+    "test:coverage": "bun test test/unit test/integration test/black-box --coverage --coverage-reporter=lcov && bun run check:coverage",
+    "test:live": "bun test test/live"
   },
   "dependencies": {
     "@opencode-ai/plugin": "1.18.21",
@@ -25,6 +26,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.10",
     "@types/bun": "1.4.0",
+    "opencode-ai": "1.18.21",
     "typescript": "5.9.3"
   }
 }
