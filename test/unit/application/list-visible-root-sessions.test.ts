@@ -8,12 +8,18 @@ import type {
   VisibleRootSessionPort,
 } from "../../../src/domain/sessions";
 import { validateSessionId } from "../../../src/domain/sessions";
+import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 
 function id(value: string): SessionId {
   const result = validateSessionId(value);
   if (!result.ok) throw new Error(result.message);
   return result.value;
 }
+
+const workspace = validateWorkspaceKey("workspace:one");
+if (!workspace.ok) throw new Error("invalid workspace fixture");
+const workspaceKey = workspace.value;
+const sourceSessionId = id("ses_source");
 
 function session(input: {
   id: string;
@@ -48,6 +54,33 @@ function port(items: readonly RootSessionObservation[]): {
   };
 }
 
+function list(
+  fake: ReturnType<typeof port>,
+  query: Parameters<typeof listVisibleRootSessions>[2] = {},
+  membership: "visible" | "hidden" | "fault" | "foreign" = "visible",
+) {
+  return listVisibleRootSessions(
+    {
+      sessions: fake.port,
+      membership: {
+        async readCurrentRoots(suppliedWorkspaceKey) {
+          if (membership === "fault") throw new Error("private membership fault");
+          if (membership === "foreign" || suppliedWorkspaceKey !== workspaceKey) {
+            throw new Error("foreign workspace");
+          }
+          return {
+            sourceVisible: membership === "visible",
+            targetVisible: membership === "visible",
+            sourceTitle: "Source",
+          };
+        },
+      },
+    },
+    { workspaceKey, sourceSessionId },
+    query,
+  );
+}
+
 describe("visible root session listing", () => {
   test("defaults to the 50 newest non-archived roots", async () => {
     const items = Array.from({ length: 55 }, (_, index) =>
@@ -55,7 +88,7 @@ describe("visible root session listing", () => {
     );
     items.push(session({ id: "ses_archived", updatedAtMs: 1000, isArchived: true }));
     const fake = port(items);
-    const result = await listVisibleRootSessions(fake.port);
+    const result = await list(fake);
     expect(fake.requests).toEqual([false]);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -73,7 +106,7 @@ describe("visible root session listing", () => {
       session({ id: "ses_idleOld", updatedAtMs: 10 }),
       session({ id: "ses_unknown", updatedAtMs: 50, status: "unknown" }),
     ]);
-    const result = await listVisibleRootSessions(fake.port, { status: "active", limit: 2 });
+    const result = await list(fake, { status: "active", limit: 2 });
     expect(result).toMatchObject({
       ok: true,
       value: [
@@ -89,7 +122,7 @@ describe("visible root session listing", () => {
       session({ id: "ses_archived", updatedAtMs: 2, isArchived: true }),
       session({ id: "ses_unknown", updatedAtMs: 3, status: "unknown" }),
     ]);
-    const result = await listVisibleRootSessions(fake.port, {
+    const result = await list(fake, {
       status: "idle",
       includeArchived: true,
     });
@@ -104,7 +137,7 @@ describe("visible root session listing", () => {
     const fake = port([
       session({ id: "ses_canonical", updatedAtMs: 1, title: "\u001b[31mTitle\u202e" }),
     ]);
-    expect(await listVisibleRootSessions(fake.port)).toMatchObject({
+    expect(await list(fake)).toMatchObject({
       ok: true,
       value: [{ id: "ses_canonical", title: "Title", isActive: false }],
     });
@@ -114,7 +147,7 @@ describe("visible root session listing", () => {
     "rejects invalid limit %s before native I/O",
     async (limit) => {
       const fake = port([]);
-      expect(await listVisibleRootSessions(fake.port, { limit })).toMatchObject({
+      expect(await list(fake, { limit })).toMatchObject({
         ok: false,
         error: { code: "invalid_arguments", retryable: false },
       });
@@ -129,8 +162,19 @@ describe("visible root session listing", () => {
         throw new Error(secret);
       },
     };
-    const result = await listVisibleRootSessions(failing);
-    expect(result).toEqual({
+    const ports = {
+      sessions: failing,
+      membership: {
+        async readCurrentRoots() {
+          return { sourceVisible: true, targetVisible: true, sourceTitle: "Source" };
+        },
+      },
+    };
+    const actual = await listVisibleRootSessions(ports, {
+      workspaceKey,
+      sourceSessionId,
+    });
+    expect(actual).toEqual({
       ok: false,
       error: {
         code: "native_unavailable",
@@ -138,6 +182,75 @@ describe("visible root session listing", () => {
         retryable: true,
       },
     });
-    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(actual)).not.toContain(secret);
+  });
+
+  test.each(["archived", "deleted", "child"])(
+    "rejects a caller that is currently %s without consulting limited list results",
+    async () => {
+      const fake = port([session({ id: "ses_other", updatedAtMs: 1 })]);
+      expect(await list(fake, { limit: 1 }, "hidden")).toMatchObject({
+        ok: false,
+        error: { code: "caller_not_visible", retryable: false },
+      });
+      expect(fake.requests).toEqual([]);
+    },
+  );
+
+  test("fails safely for foreign workspace context and membership faults", async () => {
+    const fake = port([]);
+    for (const classification of ["foreign", "fault"] as const) {
+      const result = await list(fake, {}, classification);
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          code: "native_unavailable",
+          message: "Current session membership is unavailable.",
+          retryable: true,
+        },
+      });
+    }
+    expect(fake.requests).toEqual([]);
+  });
+
+  test("passes the supplied workspace binding to membership and rejects a foreign context", async () => {
+    const foreign = validateWorkspaceKey("workspace:foreign");
+    if (!foreign.ok) throw new Error("invalid foreign workspace fixture");
+    const foreignWorkspaceKey = foreign.value;
+    const fake = port([]);
+    const seen: string[] = [];
+    const result = await listVisibleRootSessions(
+      {
+        sessions: fake.port,
+        membership: {
+          async readCurrentRoots(suppliedWorkspaceKey) {
+            seen.push(suppliedWorkspaceKey);
+            if (suppliedWorkspaceKey !== workspaceKey) throw new Error("foreign binding");
+            return { sourceVisible: true, targetVisible: true, sourceTitle: "Source" };
+          },
+        },
+      },
+      { workspaceKey: foreignWorkspaceKey, sourceSessionId },
+    );
+    expect(seen).toEqual(["workspace:foreign"]);
+    expect(result).toMatchObject({ ok: false, error: { code: "native_unavailable" } });
+    expect(fake.requests).toEqual([]);
+  });
+
+  test("validates host-canonical caller ID before membership I/O", async () => {
+    const fake = port([]);
+    const result = await listVisibleRootSessions(
+      {
+        sessions: fake.port,
+        membership: {
+          async readCurrentRoots() {
+            throw new Error("must not run");
+          },
+        },
+      },
+      { workspaceKey, sourceSessionId: "foreign" },
+    );
+    expect(result).toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
+    expect(fake.requests).toEqual([]);
   });
 });
