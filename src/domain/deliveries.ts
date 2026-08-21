@@ -18,7 +18,8 @@ export type DeliveryParticipantRole = "source" | "target";
 
 const transitions: Readonly<Record<DeliveryState, readonly DeliveryState[]>> = {
   prepared: ["submitting", "cancelled"],
-  submitting: ["admission_unknown", "admitted", "failed"],
+  // Native evidence may atomically report both admission and promotion before either is persisted.
+  submitting: ["admission_unknown", "admitted", "promoted", "failed"],
   admission_unknown: ["admitted", "promoted", "failed"],
   admitted: ["promoted"],
   promoted: [],

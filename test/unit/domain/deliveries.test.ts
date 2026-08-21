@@ -39,6 +39,7 @@ describe("message delivery state machine", () => {
       "prepared->submitting",
       "prepared->cancelled",
       "submitting->admitted",
+      "submitting->promoted",
       "submitting->admission_unknown",
       "submitting->failed",
       "admission_unknown->admitted",
