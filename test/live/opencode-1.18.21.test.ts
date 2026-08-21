@@ -3,6 +3,7 @@ import { realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { cleanupAll } from "./harness/cleanup";
 import { resolveExactProjectCli } from "./harness/cli";
 import {
   diagnosticToolID,
@@ -65,6 +66,7 @@ test("validates the isolated exact OpenCode 1.18.21 live surface", async () => {
   const provider = launchDeterministicProvider();
   let isolation: IsolatedOpenCodeState | undefined;
   let serve: ManagedProcess | undefined;
+  let testFailure: unknown;
 
   try {
     const cliPath = await resolveExactProjectCli(projectRoot);
@@ -210,9 +212,12 @@ test("validates the isolated exact OpenCode 1.18.21 live surface", async () => {
     expect(
       (await readEvidence(isolation.evidencePath)).some((item) => item.event === "executed"),
     ).toBe(true);
+  } catch (error: unknown) {
+    testFailure = error;
   } finally {
-    await serve?.terminate();
-    await provider.stop();
-    await isolation?.remove();
+    await cleanupAll(
+      [() => serve?.terminate(), () => provider.stop(), () => isolation?.remove()],
+      testFailure,
+    );
   }
 });
