@@ -6,6 +6,9 @@ import type {
   SessionStatusFilter,
   VisibleRootSessionPort,
 } from "../domain/sessions";
+import { validateSessionId } from "../domain/sessions";
+import type { WorkspaceKey } from "../domain/workspaces";
+import type { CurrentWorkspaceMembershipPort } from "./delivery-ports";
 
 const defaultSessionLimit = 50;
 const maximumSessionLimit = 100;
@@ -14,6 +17,16 @@ export interface SessionListQuery {
   readonly status?: SessionStatusFilter;
   readonly includeArchived?: boolean;
   readonly limit?: number;
+}
+
+export interface SessionListContext {
+  readonly workspaceKey: WorkspaceKey;
+  readonly sourceSessionId: unknown;
+}
+
+export interface SessionListPorts {
+  readonly membership: CurrentWorkspaceMembershipPort;
+  readonly sessions: VisibleRootSessionPort;
 }
 
 export interface VisibleRootSession {
@@ -45,15 +58,34 @@ function invalidLimit(): DomainResult<readonly VisibleRootSession[]> {
 }
 
 export async function listVisibleRootSessions(
-  port: VisibleRootSessionPort,
+  ports: SessionListPorts,
+  context: SessionListContext,
   query: SessionListQuery = {},
 ): Promise<DomainResult<readonly VisibleRootSession[]>> {
+  const source = validateSessionId(context.sourceSessionId);
+  if (!source.ok) return domainFailure("invalid_arguments", source.message, false);
   const limit = query.limit ?? defaultSessionLimit;
   if (!Number.isInteger(limit) || limit < 1 || limit > maximumSessionLimit) return invalidLimit();
   const includeArchived = query.includeArchived ?? false;
   const status = query.status ?? "all";
   try {
-    const sessions = await port.readVisibleRoots(includeArchived);
+    const membership = await ports.membership.readCurrentRoots(
+      context.workspaceKey,
+      source.value,
+      source.value,
+    );
+    if (!membership.sourceVisible) {
+      return domainFailure(
+        "caller_not_visible",
+        "Caller is not a current visible root session.",
+        false,
+      );
+    }
+  } catch (_cause: unknown) {
+    return domainFailure("native_unavailable", "Current session membership is unavailable.", true);
+  }
+  try {
+    const sessions = await ports.sessions.readVisibleRoots(includeArchived);
     const visible = sessions
       .filter((session) => includeArchived || !session.isArchived)
       .map((session) => ({

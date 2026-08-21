@@ -1,13 +1,23 @@
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
-
+import type {
+  CurrentWorkspaceMembershipPort,
+  NativeQueueAdmissionPort,
+} from "../../application/delivery-ports";
 import type { HostHealthPort } from "../../domain/host";
+import type { RootSessionObservation, VisibleRootSessionPort } from "../../domain/sessions";
+import type { WorkspaceKey } from "../../domain/workspaces";
+import { validateWorkspaceKey } from "../../domain/workspaces";
 import {
-  type ActivityStatus,
-  type RootSessionObservation,
-  type SessionId,
-  type VisibleRootSessionPort,
-  validateSessionId,
-} from "../../domain/sessions";
+  isAuthoritativeClientRejection,
+  parseAdmissionResponse,
+} from "./opencode-1-18-21-admission";
+import {
+  combineRootSets,
+  mergedActivityStatus,
+  parseActiveMap,
+  parseSessionArray,
+  parseV2SessionArray,
+} from "./opencode-1-18-21-sessions";
 
 interface NativeEnvelope {
   readonly data?: unknown;
@@ -18,11 +28,22 @@ interface V2ClientSurface {
   readonly global: { health(): Promise<unknown> };
   readonly v2: {
     readonly session: {
+      active(): Promise<unknown>;
       list(parameters: {
         readonly directory: string;
         readonly limit: number;
         readonly order: "desc";
       }): Promise<unknown>;
+      prompt(
+        parameters: {
+          readonly sessionID: string;
+          readonly id: string;
+          readonly prompt: { readonly text: string };
+          readonly delivery: "queue";
+          readonly resume: true;
+        },
+        options: { readonly signal: AbortSignal },
+      ): Promise<unknown>;
     };
   };
 }
@@ -48,9 +69,13 @@ export interface OpenCodeNativeAdapterInput {
   readonly client: unknown;
   readonly directory: string;
   readonly serverUrl: URL;
+  readonly workspaceKey: WorkspaceKey;
 }
 
-export type OpenCodeNativeAdapter = HostHealthPort & VisibleRootSessionPort;
+export type OpenCodeNativeAdapter = HostHealthPort &
+  VisibleRootSessionPort &
+  NativeQueueAdmissionPort &
+  CurrentWorkspaceMembershipPort;
 
 class NativeAdapterFault extends Error {
   constructor(message: string, cause?: unknown) {
@@ -99,80 +124,6 @@ function legacySurface(client: unknown): LegacyClientSurface {
   };
 }
 
-interface NativeSession {
-  readonly id: SessionId;
-  readonly title: string;
-  readonly updatedAtMs: number;
-  readonly isArchived: boolean;
-}
-
-function nativeSession(value: unknown): NativeSession {
-  if (!isRecord(value) || typeof value.title !== "string" || !isRecord(value.time)) {
-    throw new NativeAdapterFault("Native session entry is malformed.");
-  }
-  const id = validateSessionId(value.id);
-  const updated = value.time.updated;
-  const archived = value.time.archived;
-  if (!id.ok || typeof updated !== "number" || !Number.isFinite(updated)) {
-    throw new NativeAdapterFault("Native session identity or update time is malformed.");
-  }
-  if (archived !== undefined && (typeof archived !== "number" || !Number.isFinite(archived))) {
-    throw new NativeAdapterFault("Native session archive time is malformed.");
-  }
-  return {
-    id: id.value,
-    title: value.title,
-    updatedAtMs: updated,
-    isArchived: archived !== undefined,
-  };
-}
-
-function sessionArray(value: unknown, label: string): NativeSession[] {
-  if (!Array.isArray(value)) throw new NativeAdapterFault(`${label} is malformed.`);
-  return value.map(nativeSession);
-}
-
-function v2SessionArray(value: unknown): NativeSession[] {
-  const response = envelopeData(value, "V2 session listing");
-  if (!isRecord(response)) throw new NativeAdapterFault("V2 listing is malformed.");
-  return sessionArray(response.data, "V2 listing data");
-}
-
-function activityStatus(value: unknown): ActivityStatus {
-  if (!isRecord(value)) return "unknown";
-  if (value.type === "busy" || value.type === "idle") return value.type;
-  if (
-    value.type === "retry" &&
-    Number.isInteger(value.attempt) &&
-    typeof value.message === "string" &&
-    typeof value.next === "number" &&
-    Number.isFinite(value.next)
-  ) {
-    return "retry";
-  }
-  return "unknown";
-}
-
-function statusFor(statuses: Record<string, unknown>, id: SessionId): ActivityStatus {
-  return id in statuses ? activityStatus(statuses[id]) : "idle";
-}
-
-function combineRootSets(
-  visibleRoots: readonly NativeSession[],
-  archivedRoots: readonly NativeSession[],
-): NativeSession[] {
-  const rootsById = new Map<SessionId, NativeSession>();
-  for (const root of visibleRoots) rootsById.set(root.id, { ...root, isArchived: false });
-  for (const archived of archivedRoots) {
-    rootsById.set(archived.id, {
-      ...archived,
-      // Membership in the archived=true set is the authoritative archive evidence.
-      isArchived: true,
-    });
-  }
-  return [...rootsById.values()];
-}
-
 export function createOpenCode11821NativeAdapter(
   input: OpenCodeNativeAdapterInput,
   dependencies: OpenCodeNativeAdapterDependencies = {},
@@ -182,6 +133,8 @@ export function createOpenCode11821NativeAdapter(
   const v2 = createV2({ baseUrl: input.serverUrl.toString(), directory: input.directory });
   const legacy = legacySurface(input.client);
   const now = dependencies.now ?? Date.now;
+  const configuredWorkspace = validateWorkspaceKey(input.workspaceKey);
+  if (!configuredWorkspace.ok) throw new NativeAdapterFault(configuredWorkspace.message);
 
   return {
     async readHealth(): Promise<unknown> {
@@ -191,7 +144,7 @@ export function createOpenCode11821NativeAdapter(
       const archivedRequest = includeArchived
         ? legacy.listRoots({ roots: true, archived: true, directory: input.directory })
         : undefined;
-      const [listedResult, visibleRootsResult, archivedRootsResult, statusResult] =
+      const [listedResult, visibleRootsResult, archivedRootsResult, statusResult, activeResult] =
         await Promise.all([
           v2.v2.session.list({ directory: input.directory, limit: 100, order: "desc" }),
           legacy.listRoots({
@@ -201,24 +154,29 @@ export function createOpenCode11821NativeAdapter(
           }),
           archivedRequest,
           legacy.readStatus({ directory: input.directory }),
+          v2.v2.session.active(),
         ]);
-      const listed = v2SessionArray(listedResult);
-      const visibleRoots = sessionArray(
+      const listed = parseV2SessionArray(listedResult);
+      const visibleRoots = parseSessionArray(
         envelopeData(visibleRootsResult, "Legacy visible root listing"),
         "Visible root listing",
       );
       const archivedRoots =
         archivedRootsResult === undefined
           ? []
-          : sessionArray(
+          : parseSessionArray(
               envelopeData(archivedRootsResult, "Legacy archived root listing"),
               "Archived root listing",
             );
       const roots = combineRootSets(visibleRoots, archivedRoots);
       const statusData = envelopeData(statusResult, "Legacy status");
       if (!isRecord(statusData)) throw new NativeAdapterFault("Legacy status map is malformed.");
+      const activeData = parseActiveMap(activeResult);
       const listedById = new Map(listed.map((session) => [session.id, session]));
       const observedAtMs = now();
+      if (!Number.isFinite(observedAtMs) || observedAtMs < 0) {
+        throw new NativeAdapterFault("Observation clock is invalid.");
+      }
       return roots.map((root) => {
         const display = listedById.get(root.id) ?? root;
         return {
@@ -226,10 +184,55 @@ export function createOpenCode11821NativeAdapter(
           title: display.title,
           updatedAtMs: display.updatedAtMs,
           isArchived: root.isArchived,
-          status: statusFor(statusData, root.id),
+          status: mergedActivityStatus(statusData, activeData, root.id),
           observedAtMs,
         };
       });
+    },
+    async readCurrentRoots(workspaceKey, sourceSessionId, targetSessionId) {
+      const suppliedWorkspace = validateWorkspaceKey(workspaceKey);
+      if (!suppliedWorkspace.ok || suppliedWorkspace.value !== configuredWorkspace.value) {
+        throw new NativeAdapterFault("Workspace binding does not match this native adapter.");
+      }
+      const roots = parseSessionArray(
+        envelopeData(
+          await legacy.listRoots({
+            roots: true,
+            archived: false,
+            directory: input.directory,
+          }),
+          "Legacy current root listing",
+        ),
+        "Current root listing",
+      );
+      const byId = new Map(roots.map((root) => [root.id, root]));
+      return {
+        sourceVisible: byId.has(sourceSessionId),
+        targetVisible: byId.has(targetSessionId),
+        sourceTitle: byId.get(sourceSessionId)?.title,
+      };
+    },
+    async queueMessage(message) {
+      if (message.abort.aborted) return { kind: "unknown" };
+      let response: unknown;
+      try {
+        response = await v2.v2.session.prompt(
+          {
+            sessionID: message.targetSessionId,
+            id: message.nativeMessageId,
+            prompt: { text: message.envelope },
+            delivery: "queue",
+            resume: true,
+          },
+          { signal: message.abort },
+        );
+      } catch (_cause: unknown) {
+        return { kind: "unknown" };
+      }
+      if (isAuthoritativeClientRejection(response, message.abort.aborted)) {
+        return { kind: "definitive_rejection" };
+      }
+      return parseAdmissionResponse(response, message, now);
     },
   };
 }
