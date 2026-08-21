@@ -5,8 +5,12 @@
   "type": "module",
   "packageManager": "bun@1.4.0",
   "scripts": {
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "biome check --formatter-enabled=false .",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "test:unit": "bun test test/unit"
   },
   "dependencies": {
     "@opencode-ai/plugin": "1.18.21",
