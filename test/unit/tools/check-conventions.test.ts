@@ -220,4 +220,25 @@ describe("quality exceptions", () => {
 
     expect(findings(root, "quality-exceptions")).toHaveLength(4);
   });
+
+  test("validates coverage exception targets without declaring valid entries stale", () => {
+    const root = createRepository();
+    write(root, "src/domain/value.ts", "export const value = 1;");
+    const exception = {
+      path: "src/domain/value.ts",
+      rule: "coverage-lines",
+      reason: "Generated source is not reachable from the test process.",
+      removalCondition: "Remove when source generation is replaced.",
+    };
+    write(root, "quality-exceptions.json", JSON.stringify({ exceptions: [exception] }));
+    expect(findings(root, "quality-exceptions")).toHaveLength(0);
+
+    write(
+      root,
+      "quality-exceptions.json",
+      JSON.stringify({ exceptions: [{ ...exception, path: "test/unit/value.test.ts" }] }),
+    );
+    write(root, "test/unit/value.test.ts", "export {};");
+    expect(findings(root, "quality-exceptions")).toHaveLength(1);
+  });
 });

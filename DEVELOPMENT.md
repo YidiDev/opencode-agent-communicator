@@ -245,6 +245,13 @@ All other production source requires at least 85% line coverage and 80% branch
 coverage. Generated code and unreachable platform branches MAY be excluded only
 through the reviewed central allowlist.
 
+The bootstrap coverage checker treats `src/domain`, `src/application`, and all
+adapter modules as critical. Bun 1.4.0 LCOV does not contain branch data, so the
+checker enforces the line thresholds plus supplementary 90%/80% function
+thresholds without representing functions as branches. The branch thresholds
+remain a release requirement and MUST be enforced by a proven branch-capable
+runner before v1 is declared ready.
+
 Coverage is a backstop, not evidence of correctness. A change with weak
 assertions is incomplete even when percentages pass.
 
