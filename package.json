@@ -1,0 +1,21 @@
+{
+  "name": "opencode-agent-communicator",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.0",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "1.18.21",
+    "@opencode-ai/sdk": "1.18.21",
+    "zod": "4.1.8"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.10",
+    "@types/bun": "1.4.0",
+    "typescript": "5.9.3"
+  }
+}
