@@ -65,6 +65,18 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  linux-store-acceptance:
+    name: Docker Linux SQLite acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run pinned glibc/musl and OverlayFS/tmpfs matrix
+        run: bash tools/run-linux-store-acceptance.sh
+
   portability:
     name: Experimental portability (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
