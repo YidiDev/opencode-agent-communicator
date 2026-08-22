@@ -1,3 +1,22 @@
 {
-  "exceptions": []
+  "exceptions": [
+    {
+      "path": "src/adapters/store/store-types.ts",
+      "rule": "coverage-functions",
+      "reason": "Bun 1.4 reports one anonymous type-only/default-initializer function as uncovered even though this module has 100% line coverage and all runtime functions and error classes are directly exercised.",
+      "removalCondition": "Remove when Bun LCOV identifies the synthetic function or a branch-capable coverage runner replaces the bootstrap function metric."
+    },
+    {
+      "path": "src/adapters/store/migrations.ts",
+      "rule": "source-file-lines",
+      "reason": "The append-only migration contains matching forward and reverse immutable SQLite table rebuilds; splitting SQL history across modules would make checksum review and reversibility less reliable.",
+      "removalCondition": "Remove if the migration is moved to a generated, checksum-verified migration artifact format that remains reviewable as one immutable unit."
+    },
+    {
+      "path": "src/domain/ownership.ts",
+      "rule": "coverage-functions",
+      "reason": "Bun 1.4 reports the explicitly instantiated OwnershipLostFault class as an uncovered function even though ownership.ts has 100% line coverage and both the fault contract and fencing validator are directly tested.",
+      "removalCondition": "Remove when Bun LCOV correctly attributes class construction or the branch-capable release coverage runner replaces the bootstrap function metric."
+    }
+  ]
 }

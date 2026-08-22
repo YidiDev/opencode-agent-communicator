@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type {
   CompleteSubmissionInput,
   DeliveryPersistencePort,
+  DeliveryStoreFailureCode,
   DeliveryStoreResult,
   DeliveryTransitionInput,
   NativeQueueAdmission,
@@ -16,7 +17,11 @@ import {
 } from "../../../src/domain/deliveries";
 import { validateDeliveryId, validateNativeMessageId } from "../../../src/domain/generated-ids";
 import type { Sha256Digest } from "../../../src/domain/message-payload";
-import { type FencingToken, validateFencingToken } from "../../../src/domain/ownership";
+import {
+  type FencingToken,
+  OwnershipLostFault,
+  validateFencingToken,
+} from "../../../src/domain/ownership";
 import { validateSessionId } from "../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 
@@ -57,6 +62,7 @@ class RecoveryStore implements DeliveryPersistencePort {
   readonly transitions: DeliveryState[] = [];
   readonly listInputs: Array<Parameters<DeliveryPersistencePort["listRecoverable"]>[0]> = [];
   claimedByToken: FencingToken | undefined;
+  completeFailure: DeliveryStoreFailureCode | undefined;
 
   constructor(state: "prepared" | "submitting") {
     this.delivery = record(state);
@@ -110,6 +116,7 @@ class RecoveryStore implements DeliveryPersistencePort {
 
   async completeSubmission(input: CompleteSubmissionInput) {
     this.checkToken(input.fencingToken);
+    if (this.completeFailure) return { ok: false as const, code: this.completeFailure };
     const legal =
       canTransitionDelivery(this.delivery.state, input.state) ||
       (this.delivery.state === "submitting" && input.state === "promoted");
@@ -194,6 +201,7 @@ function recoveryFixture(state: "prepared" | "submitting") {
     acquireCalls: 0,
     barrierCalls: 0,
     ownerCurrent: true,
+    clockValue: 10,
   };
   const ports = {
     deliveries: store,
@@ -231,10 +239,7 @@ function recoveryFixture(state: "prepared" | "submitting") {
       },
     },
     clock: {
-      nowMs: (() => {
-        let value = 10;
-        return () => ++value;
-      })(),
+      nowMs: () => ++fixture.clockValue,
     },
   };
   return { fixture, ports };
@@ -313,10 +318,91 @@ describe("delivery crash recovery", () => {
       deadlineMs: 99,
       limit: 10,
     });
-    expect(result).toMatchObject({ ok: true, value: { submittingMarkedUnknown: 0 } });
+    expect(result).toMatchObject({ ok: false, error: { code: "ownership_lost" } });
     expect(fixture.store.delivery.state).toBe("submitting");
     expect(fixture.store.transitions).toEqual([]);
     expect(fixture.barrierCalls).toBe(1);
+  });
+
+  test("stops bounded stale draining when the startup deadline elapses", async () => {
+    const { fixture, ports } = recoveryFixture("submitting");
+    const result = await recoverMessageDeliveries(ports, {
+      workspaceKey,
+      abort: new AbortController().signal,
+      deadlineMs: 11,
+      limit: 10,
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "ownership_lost" } });
+    expect(fixture.store.transitions).toEqual([]);
+  });
+
+  test("rechecks deadline after prepared membership before claiming", async () => {
+    const { fixture, ports } = recoveryFixture("prepared");
+    ports.membership.readCurrentRoots = async () => {
+      fixture.clockValue = 50;
+      return { sourceVisible: true, targetVisible: true, sourceTitle: "source" };
+    };
+    const result = await recoverMessageDeliveries(ports, {
+      workspaceKey,
+      abort: new AbortController().signal,
+      deadlineMs: 50,
+      limit: 10,
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "ownership_lost" } });
+    expect(fixture.store.delivery.state).toBe("prepared");
+    expect(fixture.nativeCalls).toEqual([]);
+  });
+
+  test("fails closed on malformed prepared recovery metadata", async () => {
+    const { fixture, ports } = recoveryFixture("prepared");
+    fixture.store.delivery = {
+      ...fixture.store.delivery,
+      contentSha256: "malformed" as Sha256Digest,
+    };
+    const result = await recoverMessageDeliveries(ports, {
+      workspaceKey,
+      abort: new AbortController().signal,
+      limit: 10,
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "state_conflict" } });
+    expect(fixture.nativeCalls).toEqual([]);
+  });
+
+  test("returns ownership_lost when abort arrives after claim and before native admission", async () => {
+    const { fixture, ports } = recoveryFixture("prepared");
+    const controller = new AbortController();
+    const claim = ports.deliveries.claimPrepared.bind(ports.deliveries);
+    ports.deliveries.claimPrepared = async (input) => {
+      const result = await claim(input);
+      controller.abort();
+      return result;
+    };
+    const result = await recoverMessageDeliveries(ports, {
+      workspaceKey,
+      abort: controller.signal,
+      limit: 10,
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "ownership_lost" } });
+    expect(fixture.store.delivery.state).toBe("submitting");
+    expect(fixture.nativeCalls).toEqual([]);
+  });
+
+  test("does not report recovery success when interrupted during the native effect", async () => {
+    const { fixture, ports } = recoveryFixture("prepared");
+    const controller = new AbortController();
+    ports.nativeQueue.queueMessage = async (input) => {
+      fixture.nativeCalls.push(input);
+      controller.abort();
+      return { kind: "admitted", admittedSeq: 71, observedAtMs: 500 };
+    };
+    const result = await recoverMessageDeliveries(ports, {
+      workspaceKey,
+      abort: controller.signal,
+      limit: 10,
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "ownership_lost" } });
+    expect(fixture.store.delivery.state).toBe("submitting");
+    expect(fixture.nativeCalls).toHaveLength(1);
   });
 
   test("fails with safe delivery correlation when fencing ownership is stale", async () => {
@@ -332,6 +418,66 @@ describe("delivery crash recovery", () => {
       error: { code: "ownership_lost", details: { delivery_id: deliveryId } },
     });
     expect(fixture.store.delivery.state).toBe("submitting");
+  });
+});
+
+describe("delivery recovery fault and batch handling", () => {
+  test("stops when abort arrives after a stale batch read", async () => {
+    const { fixture, ports } = recoveryFixture("submitting");
+    const controller = new AbortController();
+    const list = ports.deliveries.listRecoverable.bind(ports.deliveries);
+    ports.deliveries.listRecoverable = async (input) => {
+      const records = await list(input);
+      if (input.state === "submitting") controller.abort();
+      return records;
+    };
+    const result = await recoverMessageDeliveries(ports, {
+      workspaceKey,
+      abort: controller.signal,
+      limit: 10,
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "ownership_lost" } });
+    expect(fixture.store.transitions).toEqual([]);
+  });
+
+  test("fails closed on malformed stale metadata", async () => {
+    const { fixture, ports } = recoveryFixture("submitting");
+    fixture.store.delivery = {
+      ...fixture.store.delivery,
+      contentSha256: "bad" as Sha256Digest,
+    };
+    const result = await recoverMessageDeliveries(ports, {
+      workspaceKey,
+      abort: new AbortController().signal,
+      limit: 10,
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "state_conflict" } });
+  });
+
+  test("propagates a failed stale classification without reading prepared work", async () => {
+    const { fixture, ports } = recoveryFixture("submitting");
+    fixture.store.completeFailure = "ownership_lost";
+    const result = await recoverMessageDeliveries(ports, {
+      workspaceKey,
+      abort: new AbortController().signal,
+      limit: 10,
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "ownership_lost" } });
+    expect(fixture.store.listInputs.map((input) => input.state)).toEqual(["submitting"]);
+  });
+
+  test("rejects a store that reports success without classifying stale state", async () => {
+    const { fixture, ports } = recoveryFixture("submitting");
+    ports.deliveries.completeSubmission = async () => ({
+      ok: true,
+      delivery: fixture.store.delivery,
+    });
+    const result = await recoverMessageDeliveries(ports, {
+      workspaceKey,
+      abort: new AbortController().signal,
+      limit: 10,
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "state_conflict" } });
   });
 
   test("maps recovery list storage faults without leaking details", async () => {
@@ -352,6 +498,55 @@ describe("delivery crash recovery", () => {
         retryable: true,
       },
     });
+  });
+
+  test("maps the domain ownership fault from a recovery query distinctly", async () => {
+    const { ports } = recoveryFixture("prepared");
+    ports.deliveries.listRecoverable = async () => {
+      throw new OwnershipLostFault("safe ownership loss");
+    };
+    const result = await recoverMessageDeliveries(ports, {
+      workspaceKey,
+      abort: new AbortController().signal,
+      limit: 10,
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "ownership_lost" } });
+  });
+
+  test("drains limit plus one stale submissions before querying prepared work", async () => {
+    const { fixture, ports } = recoveryFixture("submitting");
+    const stale = Array.from({ length: 11 }, (_, index) => ({
+      ...record("submitting"),
+      id: valid(validateDeliveryId(`dlv_${(index + 1).toString(16).padStart(32, "0")}`)),
+    }));
+    const queryStates: string[] = [];
+    ports.deliveries.listRecoverable = async (input) => {
+      queryStates.push(input.state);
+      return input.state === "submitting" ? stale.slice(0, input.limit) : [];
+    };
+    ports.deliveries.completeSubmission = async (input) => {
+      const index = stale.findIndex((delivery) => delivery.id === input.deliveryId);
+      const current = stale[index];
+      if (!current) throw new Error("missing stale recovery fixture");
+      stale.splice(index, 1);
+      return {
+        ok: true as const,
+        delivery: {
+          ...current,
+          state: "admission_unknown" as const,
+          admissionUnknownAtMs: input.nowMs,
+          updatedAtMs: input.nowMs,
+        },
+      };
+    };
+    const result = await recoverMessageDeliveries(ports, {
+      workspaceKey,
+      abort: new AbortController().signal,
+      limit: 10,
+    });
+    expect(result).toMatchObject({ ok: true, value: { submittingMarkedUnknown: 11 } });
+    expect(queryStates).toEqual(["submitting", "submitting", "submitting", "prepared"]);
+    expect(fixture.nativeCalls).toEqual([]);
   });
 
   test("never resubmits a recovered prepared delivery after an ambiguous native attempt", async () => {

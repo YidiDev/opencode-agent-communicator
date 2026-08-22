@@ -28,7 +28,7 @@ export interface ClockPort {
 }
 
 export interface OwnershipPort {
-  /** Acquires one opaque epoch newer than every token previously granted by this owner store. */
+  /** Acquires ownership or returns this owner's current epoch; only takeover advances the token. */
   acquire(): Promise<FencingToken>;
   isCurrent(token: FencingToken): Promise<boolean>;
 }

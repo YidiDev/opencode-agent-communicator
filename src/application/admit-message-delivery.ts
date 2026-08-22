@@ -131,11 +131,21 @@ export async function admitClaimedMessage(
     readonly delivery: DeliveryMetadata;
     readonly envelope: string;
     readonly abort: AbortSignal;
+    readonly deadlineMs?: number;
+    /** Recovery must stop rather than report success when its startup control is interrupted. */
+    readonly interruptionMeansOwnershipLoss?: true;
   },
 ): Promise<DomainResult<DeliveryMetadata>> {
+  const stopped = (): boolean =>
+    input.interruptionMeansOwnershipLoss === true &&
+    (input.abort.aborted ||
+      (input.deadlineMs !== undefined && ports.clock.nowMs() >= input.deadlineMs));
+  if (stopped()) return deliveryStoreFailure("ownership_lost", input.delivery.id);
   if (!(await ports.ownership.isCurrent(input.fencingToken))) {
     return deliveryStoreFailure("ownership_lost", input.delivery.id);
   }
+  // No awaited work is allowed between this final control check and the native effect.
+  if (stopped()) return deliveryStoreFailure("ownership_lost", input.delivery.id);
   let outcome: NativeQueueAdmission;
   try {
     outcome = await ports.nativeQueue.queueMessage({
@@ -147,6 +157,7 @@ export async function admitClaimedMessage(
   } catch (_cause: unknown) {
     outcome = { kind: "unknown" };
   }
+  if (stopped()) return deliveryStoreFailure("ownership_lost", input.delivery.id);
   if (input.abort.aborted && outcome.kind === "definitive_rejection") {
     outcome = { kind: "unknown" };
   }

@@ -101,8 +101,9 @@ class MemoryDeliveries implements DeliveryPersistencePort {
       this.record = withState(this.record, "cancelled", input.nowMs);
       this.retainedEnvelope = undefined;
       this.events.push("cancelled");
+      return { ok: true, delivery: this.record };
     }
-    return { ok: true, delivery: this.record };
+    return { ok: false, code: "state_conflict" };
   }
 
   async claimPrepared(input: DeliveryTransitionInput): Promise<DeliveryClaimResult> {

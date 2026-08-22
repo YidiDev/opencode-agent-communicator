@@ -1,5 +1,5 @@
 import { type DeliveryMetadata, isCoherentDeliveryMetadata } from "../domain/deliveries";
-import type { FencingToken } from "../domain/ownership";
+import { type FencingToken, OwnershipLostFault } from "../domain/ownership";
 import { type DomainResult, domainFailure } from "../domain/results";
 import type { WorkspaceKey } from "../domain/workspaces";
 import { admitClaimedMessage, deliveryStoreFailure } from "./admit-message-delivery";
@@ -29,25 +29,27 @@ export interface MessageRecoverySummary {
   readonly preparedCancelled: number;
 }
 
-async function markSubmittingUnknown(
+function isRecoveryStopped(
+  ports: MessageRecoveryPorts,
+  abort: AbortSignal,
+  deadlineMs: number | undefined,
+): boolean {
+  return abort.aborted || (deadlineMs !== undefined && ports.clock.nowMs() >= deadlineMs);
+}
+
+async function classifySubmittingBatch(
   ports: MessageRecoveryPorts,
   workspaceKey: WorkspaceKey,
   fencingToken: FencingToken,
-  startupBarrier: StartupRecoveryBarrier,
+  records: readonly DeliveryMetadata[],
   abort: AbortSignal,
-  limit: number,
+  deadlineMs: number | undefined,
 ): Promise<DomainResult<number>> {
-  const records = await ports.deliveries.listRecoverable({
-    fencingToken,
-    workspaceKey,
-    state: "submitting",
-    limit,
-    excludeClaimedByToken: fencingToken,
-    startupBarrier,
-  });
   let changed = 0;
   for (const delivery of records) {
-    if (abort.aborted) break;
+    if (isRecoveryStopped(ports, abort, deadlineMs)) {
+      return deliveryStoreFailure("ownership_lost", delivery.id);
+    }
     if (!isCoherentDeliveryMetadata(delivery)) {
       return deliveryStoreFailure("state_conflict", delivery.id);
     }
@@ -62,9 +64,49 @@ async function markSubmittingUnknown(
       nowMs: ports.clock.nowMs(),
     });
     if (!result.ok) return deliveryStoreFailure(result.code, delivery.id);
+    if (
+      result.delivery.state !== "admission_unknown" ||
+      !isCoherentDeliveryMetadata(result.delivery)
+    ) {
+      return deliveryStoreFailure("state_conflict", delivery.id);
+    }
     changed += 1;
   }
   return { ok: true, value: changed };
+}
+
+async function markSubmittingUnknown(
+  ports: MessageRecoveryPorts,
+  workspaceKey: WorkspaceKey,
+  fencingToken: FencingToken,
+  startupBarrier: StartupRecoveryBarrier,
+  abort: AbortSignal,
+  deadlineMs: number | undefined,
+  limit: number,
+): Promise<DomainResult<number>> {
+  let changed = 0;
+  while (true) {
+    if (isRecoveryStopped(ports, abort, deadlineMs)) return deliveryStoreFailure("ownership_lost");
+    const records = await ports.deliveries.listRecoverable({
+      fencingToken,
+      workspaceKey,
+      state: "submitting",
+      limit,
+      excludeClaimedByToken: fencingToken,
+      startupBarrier,
+    });
+    if (records.length === 0) return { ok: true, value: changed };
+    const batch = await classifySubmittingBatch(
+      ports,
+      workspaceKey,
+      fencingToken,
+      records,
+      abort,
+      deadlineMs,
+    );
+    if (!batch.ok) return batch;
+    changed += batch.value;
+  }
 }
 
 async function recoverPrepared(
@@ -72,16 +114,26 @@ async function recoverPrepared(
   workspaceKey: WorkspaceKey,
   fencingToken: FencingToken,
   abort: AbortSignal,
+  deadlineMs: number | undefined,
   records: readonly DeliveryMetadata[],
 ): Promise<DomainResult<{ readonly submitted: number; readonly cancelled: number }>> {
   let submitted = 0;
   let cancelled = 0;
   for (const delivery of records) {
-    if (abort.aborted) break;
+    if (isRecoveryStopped(ports, abort, deadlineMs)) {
+      return deliveryStoreFailure("ownership_lost", delivery.id);
+    }
     if (!isCoherentDeliveryMetadata(delivery)) {
       return deliveryStoreFailure("state_conflict", delivery.id);
     }
-    const recovered = await recoverOnePrepared(ports, workspaceKey, fencingToken, abort, delivery);
+    const recovered = await recoverOnePrepared(
+      ports,
+      workspaceKey,
+      fencingToken,
+      abort,
+      deadlineMs,
+      delivery,
+    );
     if (!recovered.ok) return recovered;
     if (recovered.value === "submitted") submitted += 1;
     if (recovered.value === "cancelled") cancelled += 1;
@@ -111,11 +163,20 @@ async function recoverOnePrepared(
   workspaceKey: WorkspaceKey,
   fencingToken: FencingToken,
   abort: AbortSignal,
+  deadlineMs: number | undefined,
   delivery: DeliveryMetadata,
 ): Promise<DomainResult<"submitted" | "cancelled" | "skipped">> {
   const membership = await readRecoveryMembership(ports, workspaceKey, delivery);
   if (!membership.ok) return membership;
-  if (abort.aborted) return { ok: true, value: "skipped" };
+  if (isRecoveryStopped(ports, abort, deadlineMs)) {
+    return deliveryStoreFailure("ownership_lost", delivery.id);
+  }
+  if (!(await ports.ownership.isCurrent(fencingToken))) {
+    return deliveryStoreFailure("ownership_lost", delivery.id);
+  }
+  if (isRecoveryStopped(ports, abort, deadlineMs)) {
+    return deliveryStoreFailure("ownership_lost", delivery.id);
+  }
   if (!membership.value.sourceVisible || !membership.value.targetVisible) {
     const cancelled = await ports.deliveries.cancelPrepared({
       fencingToken,
@@ -127,10 +188,9 @@ async function recoverOnePrepared(
       ? { ok: true, value: "cancelled" }
       : deliveryStoreFailure(cancelled.code, delivery.id);
   }
-  if (!(await ports.ownership.isCurrent(fencingToken))) {
+  if (isRecoveryStopped(ports, abort, deadlineMs)) {
     return deliveryStoreFailure("ownership_lost", delivery.id);
   }
-  if (abort.aborted) return { ok: true, value: "skipped" };
   const claim = await ports.deliveries.claimPrepared({
     fencingToken,
     workspaceKey,
@@ -144,12 +204,23 @@ async function recoverOnePrepared(
   if (claim.delivery.state !== "submitting" || claim.envelope === undefined) {
     return { ok: true, value: "skipped" };
   }
+  if (isRecoveryStopped(ports, abort, deadlineMs)) {
+    return deliveryStoreFailure("ownership_lost", delivery.id);
+  }
+  if (!(await ports.ownership.isCurrent(fencingToken))) {
+    return deliveryStoreFailure("ownership_lost", delivery.id);
+  }
+  if (isRecoveryStopped(ports, abort, deadlineMs)) {
+    return deliveryStoreFailure("ownership_lost", delivery.id);
+  }
   const admission = await admitClaimedMessage(ports, {
     workspaceKey,
     fencingToken,
     delivery: claim.delivery,
     envelope: claim.envelope,
     abort,
+    interruptionMeansOwnershipLoss: true,
+    ...(deadlineMs === undefined ? {} : { deadlineMs }),
   });
   if (
     !admission.ok &&
@@ -188,9 +259,16 @@ export async function recoverMessageDeliveries(
       fencingToken,
       startupBarrier,
       input.abort,
+      input.deadlineMs,
       input.limit,
     );
     if (!ambiguous.ok) return ambiguous;
+    if (
+      input.abort.aborted ||
+      (input.deadlineMs !== undefined && ports.clock.nowMs() >= input.deadlineMs)
+    ) {
+      return deliveryStoreFailure("ownership_lost");
+    }
     const preparedRecords = await ports.deliveries.listRecoverable({
       fencingToken,
       workspaceKey: input.workspaceKey,
@@ -204,6 +282,7 @@ export async function recoverMessageDeliveries(
       input.workspaceKey,
       fencingToken,
       input.abort,
+      input.deadlineMs,
       preparedRecords,
     );
     if (!prepared.ok) return prepared;
@@ -215,7 +294,8 @@ export async function recoverMessageDeliveries(
         preparedCancelled: prepared.value.cancelled,
       },
     };
-  } catch (_cause: unknown) {
+  } catch (cause: unknown) {
+    if (cause instanceof OwnershipLostFault) return deliveryStoreFailure("ownership_lost");
     return domainFailure("storage_unavailable", "Delivery recovery storage is unavailable.", true);
   }
 }

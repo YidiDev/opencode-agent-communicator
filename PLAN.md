@@ -472,6 +472,11 @@ submitting -> failed
 admission_unknown -> admitted | promoted | failed
 ```
 
+A native promoted result may be persisted directly from `submitting` to
+`promoted` in one atomic database mutation. That mutation records both admitted
+and promoted sequence evidence and timestamps; it does not expose a separately
+committed intermediate `admitted` state.
+
 Ambiguous records are reconciled only from authoritative native evidence and
 are never automatically resubmitted.
 
@@ -801,6 +806,9 @@ submitting -> delivery_unknown
 submitting -> delivery_failed
 delivery_unknown -> admitted | promoted | delivery_failed
 ```
+
+Direct `submitting -> promoted` persistence is one atomic mutation that records
+the implied admitted and promoted history together, rather than two commits.
 
 `prepared` is committed before the first steer attempt and proves no native call
 has begun, so restart recovery may perform that first submission. `submitting`
