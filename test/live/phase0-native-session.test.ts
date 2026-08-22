@@ -8,6 +8,10 @@ import {
   type SessionDurableEvent,
   type SessionInputAdmitted,
 } from "@opencode-ai/sdk/v2/client";
+import { createOpenCode11821NativeAdapter } from "../../src/adapters/native/opencode-1-18-21";
+import { validateNativeMessageId } from "../../src/domain/generated-ids";
+import { validateSessionId } from "../../src/domain/sessions";
+import { validateWorkspaceKey } from "../../src/domain/workspaces";
 
 import { cleanupAll } from "./harness/cleanup";
 import { resolveExactProjectCli } from "./harness/cli";
@@ -571,6 +575,43 @@ async function proveInterruptAndQueueSurvival(fixture: LiveFixture): Promise<voi
   expect(second.sequence).toBeLessThan(third.sequence);
 }
 
+async function proveProductionAdapterParsingAndMergedActivity(fixture: LiveFixture): Promise<void> {
+  const sessionID = await createV2Session(
+    fixture,
+    "ses_01PHASE0000000000000000008",
+    "Production adapter live proof",
+  );
+  const validatedSessionID = validateSessionId(sessionID);
+  const nativeMessageID = validateNativeMessageId(`msg_${"a".repeat(32)}`);
+  const workspaceKey = validateWorkspaceKey("workspace:phase0");
+  if (!validatedSessionID.ok || !nativeMessageID.ok || !workspaceKey.ok) {
+    throw new Error("production adapter live fixture IDs are invalid");
+  }
+  const adapter = createOpenCode11821NativeAdapter({
+    client: fixture.client,
+    directory: fixture.isolation.project,
+    serverUrl: new URL(fixture.baseUrl),
+    workspaceKey: workspaceKey.value,
+  });
+  const admission = await adapter.queueMessage({
+    targetSessionId: validatedSessionID.value,
+    nativeMessageId: nativeMessageID.value,
+    envelope: "production-adapter-live-proof",
+    abort: new AbortController().signal,
+  });
+  expect(admission.kind).toBe("admitted");
+  if (admission.kind !== "admitted") throw new Error("production adapter admission was not proven");
+  expect(admission.admittedSeq).toBeGreaterThanOrEqual(0);
+  expect(admission.observedAtMs).toBeGreaterThanOrEqual(0);
+
+  const request = await fixture.provider.waitForText("production-adapter-live-proof");
+  const observations = await adapter.readVisibleRoots(false);
+  expect(observations.find((item) => item.id === validatedSessionID.value)?.status).toBe("busy");
+  request.release();
+  await waitForStepEnd(fixture, sessionID);
+  await expectActivity(fixture, sessionID, false);
+}
+
 test("proves Phase 0 native session semantics with the exact local SDK and CLI", async () => {
   const fixture = await launchFixture();
   let testFailure: unknown;
@@ -581,6 +622,7 @@ test("proves Phase 0 native session semantics with the exact local SDK and CLI",
     await proveActiveSteer(fixture);
     await proveSteerRace(fixture);
     await proveInterruptAndQueueSurvival(fixture);
+    await proveProductionAdapterParsingAndMergedActivity(fixture);
     await proveSubscriptionDisposal(fixture);
     expect(successful(await fixture.client.instance.dispose(), "server instance dispose")).toBe(
       true,

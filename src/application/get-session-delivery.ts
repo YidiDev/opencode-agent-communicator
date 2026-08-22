@@ -1,5 +1,6 @@
 import { isCoherentDeliveryMetadata, type ParticipantDelivery } from "../domain/deliveries";
 import { validateDeliveryId } from "../domain/generated-ids";
+import { OwnershipLostFault } from "../domain/ownership";
 import { type DomainResult, domainFailure } from "../domain/results";
 import type { SessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
@@ -43,7 +44,10 @@ export async function getSessionDelivery(
         false,
       );
     }
-  } catch (_cause: unknown) {
+  } catch (cause: unknown) {
+    if (cause instanceof OwnershipLostFault) {
+      return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+    }
     return domainFailure("native_unavailable", "Current session membership is unavailable.", true);
   }
 
@@ -56,7 +60,10 @@ export async function getSessionDelivery(
     return found && isCoherentDeliveryMetadata(found.delivery)
       ? { ok: true, value: found }
       : hiddenFailure();
-  } catch (_cause: unknown) {
+  } catch (cause: unknown) {
+    if (cause instanceof OwnershipLostFault) {
+      return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+    }
     return domainFailure("storage_unavailable", "Delivery storage is unavailable.", true);
   }
 }

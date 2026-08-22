@@ -7,6 +7,7 @@ import { getSessionDelivery } from "../../../src/application/get-session-deliver
 import type { DeliveryMetadata, DeliveryParticipantRole } from "../../../src/domain/deliveries";
 import { validateDeliveryId, validateNativeMessageId } from "../../../src/domain/generated-ids";
 import type { Sha256Digest } from "../../../src/domain/message-payload";
+import { OwnershipLostFault } from "../../../src/domain/ownership";
 import { validateSessionId } from "../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 
@@ -54,6 +55,7 @@ interface LookupFixture {
   }>;
   membership: CurrentRootMembership;
   throwStorage: boolean;
+  throwOwnership: boolean;
 }
 
 function lookupFixture(): LookupFixture {
@@ -62,6 +64,7 @@ function lookupFixture(): LookupFixture {
     queries,
     membership: { sourceVisible: true, targetVisible: false, sourceTitle: "caller" },
     throwStorage: false,
+    throwOwnership: false,
     deliveries: {
       async createPrepared() {
         throw new Error("not used");
@@ -80,6 +83,7 @@ function lookupFixture(): LookupFixture {
       },
       async getForParticipant(query) {
         queries.push(query);
+        if (result.throwOwnership) throw new OwnershipLostFault("private ownership detail");
         if (result.throwStorage) throw new Error("private storage detail");
         if (query.workspaceKey !== workspaceKey) return undefined;
         let role: DeliveryParticipantRole | undefined;
@@ -225,5 +229,42 @@ describe("session_delivery_get authorization", () => {
       },
     });
     expect(JSON.stringify(result)).not.toContain("private storage detail");
+  });
+
+  test("preserves real ownership fault classification without leaking details", async () => {
+    const fake = lookupFixture();
+    fake.throwOwnership = true;
+    const result = await getSessionDelivery(
+      ports(fake),
+      { workspaceKey, sourceSessionId },
+      { delivery_id: deliveryId },
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "ownership_lost",
+        message: "Coordinator ownership was lost.",
+        retryable: false,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("private ownership detail");
+  });
+
+  test("preserves ownership loss from the membership boundary", async () => {
+    const fake = lookupFixture();
+    const result = await getSessionDelivery(
+      {
+        deliveries: fake.deliveries,
+        membership: {
+          async readCurrentRoots() {
+            throw new OwnershipLostFault("private membership ownership detail");
+          },
+        },
+      },
+      { workspaceKey, sourceSessionId },
+      { delivery_id: deliveryId },
+    );
+    expect(result).toMatchObject({ ok: false, error: { code: "ownership_lost" } });
+    expect(JSON.stringify(result)).not.toContain("private membership ownership detail");
   });
 });
