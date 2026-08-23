@@ -32,8 +32,8 @@ export function validateSessionId(value: unknown): SessionIdValidation {
   // establishes a bounded, transport-safe namespace; it cannot establish generation or entropy.
   if (
     typeof value !== "string" ||
-    !/^ses_[A-Za-z0-9]+$/.test(value) ||
-    value.length > sessionIdPolicy.prefix.length + sessionIdPolicy.maximumHostPayloadLength
+    value.length > sessionIdPolicy.prefix.length + sessionIdPolicy.maximumHostPayloadLength ||
+    !/^ses_[A-Za-z0-9]+$/.test(value)
   ) {
     return { ok: false, message: "Session ID is malformed." };
   }
