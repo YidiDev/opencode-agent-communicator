@@ -68,10 +68,12 @@ describe("bounded request retention", () => {
     const cancelled = insertTerminal(raw, "1", "cancelled", cutoff, nowMs - 1);
     insertTerminal(raw, "2", "deadline_expired", cutoff - 1, cutoff - 1);
     const available = insertTerminal(raw, "3", "answered", cutoff - 10, cutoff - 10);
-    raw.run(
-      "INSERT INTO request_payloads(request_id, payload_json, envelope_json) VALUES (?, '{}', '{}')",
-      [cancelled],
-    );
+    expect(() =>
+      raw.run(
+        "INSERT INTO request_payloads(request_id, payload_json, envelope_json) VALUES (?, '{}', '{}')",
+        [cancelled],
+      ),
+    ).toThrow();
     raw.run(
       `INSERT INTO request_rate_events(workspace_key, source_session_id, target_session_id, occurred_at_ms)
        VALUES ('request-test','ses_source','ses_target',?),

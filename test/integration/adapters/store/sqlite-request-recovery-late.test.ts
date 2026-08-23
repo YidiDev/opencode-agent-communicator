@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 
 import type { LinuxBunSqliteStore } from "../../../../src/adapters/store/sqlite-store";
 import { validateNativeMessageId, validateRequestId } from "../../../../src/domain/generated-ids";
@@ -25,6 +26,8 @@ const terminalCases = [
 
 function insertTerminalCases(raw: Database, token: FencingToken): void {
   for (const [suffix, kind, resolution, resultState] of terminalCases) {
+    const resultJson = kind === "ask" ? '{"kind":"ask","answers":[[]]}' : '{"kind":"wait"}';
+    const resultBytes = new TextEncoder().encode(resultJson);
     raw.run(
       `INSERT INTO requests(id, workspace_key, source_session_id, target_session_id,
          native_message_id, kind, resolution_state, delivery_state, result_state,
@@ -41,15 +44,16 @@ function insertTerminalCases(raw: Database, token: FencingToken): void {
         resolution,
         resultState,
         token,
-        resultState === "available" ? 2 : null,
-        resultState === "available" ? "a".repeat(64) : null,
+        resultState === "available" ? resultBytes.length : null,
+        resultState === "available" ? createHash("sha256").update(resultBytes).digest("hex") : null,
         resultState === "available" ? 3000 : null,
         resultState === "available" ? 86_403_000 : null,
       ],
     );
     if (resultState === "available") {
-      raw.run("INSERT INTO request_results(request_id, result_json) VALUES (?, '{}')", [
+      raw.run("INSERT INTO request_results(request_id, result_json) VALUES (?, ?)", [
         `req_${suffix.repeat(32)}`,
+        resultJson,
       ]);
     }
   }
@@ -115,14 +119,18 @@ describe("late request delivery outcomes", () => {
       inspection.query<{ count: number }, []>("SELECT count(*) AS count FROM request_results").get()
         ?.count,
     ).toBe(2);
-    expect(
-      inspection
-        .query<{ count: number }, [string]>(
-          `SELECT count(*) AS count FROM requests
-         WHERE result_state = 'available' AND result_sha256 = ? AND result_byte_length = 2`,
-        )
-        .get("a".repeat(64))?.count,
-    ).toBe(2);
+    const retained = inspection
+      .query<{ json: string; bytes: number; digest: string }, []>(
+        `SELECT rr.result_json AS json, r.result_byte_length AS bytes, r.result_sha256 AS digest
+         FROM requests AS r JOIN request_results AS rr ON rr.request_id = r.id
+         ORDER BY r.id`,
+      )
+      .all();
+    for (const row of retained) {
+      const bytes = new TextEncoder().encode(row.json);
+      expect(row.bytes).toBe(bytes.length);
+      expect(row.digest).toBe(createHash("sha256").update(bytes).digest("hex"));
+    }
     inspection.close(true);
     database.close();
   });

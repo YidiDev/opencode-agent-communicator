@@ -65,6 +65,7 @@ export function validBoundedText(value: unknown, maximumBytes: number): value is
   return (
     typeof value === "string" &&
     value.length > 0 &&
+    value.length <= maximumBytes &&
     !containsUnsafeRequestTextControl(value) &&
     new TextEncoder().encode(value).length <= maximumBytes
   );
@@ -73,6 +74,7 @@ export function validBoundedText(value: unknown, maximumBytes: number): value is
 export function validOptionalText(value: unknown, maximumBytes: number): value is string {
   return (
     typeof value === "string" &&
+    value.length <= maximumBytes &&
     !containsUnsafeRequestTextControl(value) &&
     new TextEncoder().encode(value).length <= maximumBytes
   );

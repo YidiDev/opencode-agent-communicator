@@ -52,6 +52,9 @@ export const sqliteStoreHardCeilings = {
   retainedResultBytesPerSource: 4 * 1024 * 1024,
   retainedResultBytesPerTarget: 8 * 1024 * 1024,
   retainedResultBytesPerWorkspace: 32 * 1024 * 1024,
+  availableResultsPerSource: 512,
+  availableResultsPerTarget: 1_024,
+  availableResultsPerWorkspace: 4_096,
   requestTraversalNodes: 2_048,
   rateWindowMs: 60_000,
 } as const;
@@ -83,12 +86,18 @@ export interface SqliteStoreLimits {
   readonly requestsPerSourceWindow: number;
   readonly requestsPerTargetWindow: number;
   readonly requestsPerWorkspaceWindow: number;
-  /** Configuration ceiling reserved for later result-write persistence; not yet enforced. */
+  /** Available canonical result bytes retained for requests from one source. */
   readonly retainedResultBytesPerSource: number;
-  /** Configuration ceiling reserved for later result-write persistence; not yet enforced. */
+  /** Available canonical result bytes retained for requests to one target. */
   readonly retainedResultBytesPerTarget: number;
-  /** Configuration ceiling reserved for later result-write persistence; not yet enforced. */
+  /** Available canonical result bytes retained across the workspace. */
   readonly retainedResultBytesPerWorkspace: number;
+  /** Available result rows retained for requests from one source. */
+  readonly availableResultsPerSource: number;
+  /** Available result rows retained for requests to one target. */
+  readonly availableResultsPerTarget: number;
+  /** Available result rows retained across the workspace. */
+  readonly availableResultsPerWorkspace: number;
   /** Maximum unique wait-graph nodes visited by one admission deadlock check. */
   readonly requestTraversalNodes: number;
   readonly rateWindowMs: number;
@@ -117,6 +126,9 @@ export const sqliteStoreDefaultLimits: SqliteStoreLimits = {
   retainedResultBytesPerSource: 256 * 1024,
   retainedResultBytesPerTarget: 512 * 1024,
   retainedResultBytesPerWorkspace: 4 * 1024 * 1024,
+  availableResultsPerSource: 64,
+  availableResultsPerTarget: 128,
+  availableResultsPerWorkspace: 512,
   requestTraversalNodes: 512,
   rateWindowMs: 60_000,
 };
@@ -289,6 +301,21 @@ export function resolveStoreLimits(input: Partial<SqliteStoreLimits> = {}): Sqli
       "retainedResultBytesPerWorkspace",
       value.retainedResultBytesPerWorkspace,
       sqliteStoreHardCeilings.retainedResultBytesPerWorkspace,
+    ),
+    availableResultsPerSource: boundedInteger(
+      "availableResultsPerSource",
+      value.availableResultsPerSource,
+      sqliteStoreHardCeilings.availableResultsPerSource,
+    ),
+    availableResultsPerTarget: boundedInteger(
+      "availableResultsPerTarget",
+      value.availableResultsPerTarget,
+      sqliteStoreHardCeilings.availableResultsPerTarget,
+    ),
+    availableResultsPerWorkspace: boundedInteger(
+      "availableResultsPerWorkspace",
+      value.availableResultsPerWorkspace,
+      sqliteStoreHardCeilings.availableResultsPerWorkspace,
     ),
     requestTraversalNodes: boundedInteger(
       "requestTraversalNodes",

@@ -109,21 +109,7 @@ export class OwnershipRepository {
     this.context.localToken = token;
     this.context.localExpiresMonotonicMs = monotonic + this.context.leaseDurationMs;
     this.context.nextRenewMonotonicMs = monotonic + Math.floor(this.context.leaseDurationMs / 3);
-    const stale = this.context.database
-      .query<CountRow, [string, number]>(
-        `SELECT (
-           (SELECT count(*) FROM deliveries
-           WHERE workspace_key = ?1 AND state = 'submitting' AND claimed_fencing_token != ?2) +
-           (SELECT count(*) FROM requests
-            WHERE workspace_key = ?1 AND delivery_state = 'submitting'
-              AND claimed_fencing_token != ?2)
-         ) AS count`,
-      )
-      .get(this.context.workspaceKey, token);
-    if (!stale || !Number.isSafeInteger(stale.count) || stale.count < 0) {
-      throw new StoreIntegrityError("The startup recovery aggregate was malformed.");
-    }
-    this.context.startupBlockedToken = stale.count > 0 ? token : undefined;
+    this.context.startupBlockedToken = this.staleClassificationComplete(token) ? undefined : token;
     return token;
   }
 
@@ -189,8 +175,8 @@ export class OwnershipRepository {
     }
   }
 
-  markStaleClassificationProgress(token: FencingToken): void {
-    if (this.context.startupBlockedToken !== token) return;
+  /** Observe after transactional validation; apply only after immediate() durably commits. */
+  staleClassificationComplete(token: FencingToken): boolean {
     const stale = this.context.database
       .query<CountRow, [string, number]>(
         `SELECT (
@@ -202,10 +188,16 @@ export class OwnershipRepository {
          ) AS count`,
       )
       .get(this.context.workspaceKey, token);
-    if (!stale || !Number.isSafeInteger(stale.count)) {
+    if (!stale || !Number.isSafeInteger(stale.count) || stale.count < 0) {
       throw new StoreIntegrityError("The startup recovery aggregate was malformed.");
     }
-    if (stale.count === 0) this.context.startupBlockedToken = undefined;
+    return stale.count === 0;
+  }
+
+  applyCommittedStaleClassificationProgress(token: FencingToken, complete: boolean): void {
+    if (complete && this.context.startupBlockedToken === token) {
+      this.context.startupBlockedToken = undefined;
+    }
   }
 
   establish(token: FencingToken, control: OperationControl): StartupRecoveryBarrier {

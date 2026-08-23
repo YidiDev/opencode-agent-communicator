@@ -2,8 +2,10 @@ import type {
   CompleteRequestDeliveryInput,
   RequestStoreResult,
 } from "../../application/request-ports";
+import { validateRequestId } from "../../domain/generated-ids";
 import { OwnershipLostFault } from "../../domain/ownership";
 import type { RequestMetadata } from "../../domain/request-types";
+import { validateWorkspaceKey } from "../../domain/workspaces";
 import type { OwnershipRepository } from "./ownership-repository";
 import {
   eraseRequestPrivateContent,
@@ -12,6 +14,7 @@ import {
   requestStoreNowMs,
   selectRequest,
 } from "./request-repository-shared";
+import { validateStoredResultState } from "./request-result-validation";
 import { type StoreContext, StoreIntegrityError } from "./store-types";
 
 function validCompletionEvidence(
@@ -48,7 +51,11 @@ export class RequestDeliveryRepository {
   ) {}
 
   completeDelivery(input: CompleteRequestDeliveryInput): RequestStoreResult {
-    if (input.workspaceKey !== this.context.workspaceKey)
+    if (
+      input.workspaceKey !== this.context.workspaceKey ||
+      !validateWorkspaceKey(input.workspaceKey).ok ||
+      !validateRequestId(input.requestId).ok
+    )
       return { ok: false, code: "state_conflict" };
     const atLimit = requestPageLimitReached(this.context);
     try {
@@ -57,17 +64,35 @@ export class RequestDeliveryRepository {
         const storeNowMs = requestStoreNowMs(this.context);
         const before = selectRequest(this.context, input.workspaceKey, input.requestId);
         if (!before || !this.legal(before, input, storeNowMs)) {
-          return { ok: false as const, code: "state_conflict" as const };
+          return {
+            result: { ok: false as const, code: "state_conflict" as const },
+            staleClassificationComplete: undefined,
+          };
         }
-        if (this.context.startupBlockedToken === input.fencingToken) this.assertStaleUnknown(input);
-        if (before.resolutionState !== "pending") this.assertPrivateErased(before.id);
+        const classifyingStaleSubmission = this.context.startupBlockedToken === input.fencingToken;
+        if (classifyingStaleSubmission) this.assertStaleUnknown(input);
+        if (before.resolutionState !== "pending") validateStoredResultState(this.context, before);
         this.writeCompletion(input, before, storeNowMs);
-        this.ownership.markStaleClassificationProgress(input.fencingToken);
         const request = selectRequest(this.context, input.workspaceKey, input.requestId);
         if (!request) throw new StoreIntegrityError("The request completion result was absent.");
-        return { ok: true as const, request };
+        if (request.resolutionState !== "pending") {
+          validateStoredResultState(this.context, request);
+        }
+        return {
+          result: { ok: true as const, request },
+          staleClassificationComplete: classifyingStaleSubmission
+            ? this.ownership.staleClassificationComplete(input.fencingToken)
+            : undefined,
+        };
       });
-      return transaction.immediate();
+      const committed = transaction.immediate();
+      if (committed.staleClassificationComplete !== undefined) {
+        this.ownership.applyCommittedStaleClassificationProgress(
+          input.fencingToken,
+          committed.staleClassificationComplete,
+        );
+      }
+      return committed.result;
     } catch (cause: unknown) {
       return requestFailure(cause, atLimit);
     }
@@ -151,6 +176,7 @@ export class RequestDeliveryRepository {
         ? "deadline_expired"
         : "delivery_failed"
       : before.resolutionState;
+    if (pending) eraseRequestPrivateContent(this.context, before.id);
     const changed = this.context.database.run(
       `UPDATE requests SET delivery_state = 'delivery_failed', resolution_state = ?,
          resolved_at_ms = CASE WHEN resolution_state = 'pending' THEN ? ELSE resolved_at_ms END,
@@ -172,7 +198,6 @@ export class RequestDeliveryRepository {
       ],
     );
     if (changed.changes !== 1) throw new StoreIntegrityError("The request failure CAS failed.");
-    if (pending) eraseRequestPrivateContent(this.context, before.id);
   }
 
   private updateEvidence(
@@ -203,15 +228,5 @@ export class RequestDeliveryRepository {
       ],
     );
     if (changed.changes !== 1) throw new StoreIntegrityError("The request evidence CAS failed.");
-  }
-
-  private assertPrivateErased(requestId: string): void {
-    const row = this.context.database
-      .query<{ readonly count: number }, [string]>(
-        `SELECT (SELECT count(*) FROM request_payloads WHERE request_id = ?1) +
-                (SELECT count(*) FROM request_wait_edges WHERE request_id = ?1) AS count`,
-      )
-      .get(requestId);
-    if (row?.count !== 0) throw new StoreIntegrityError("Terminal request content was retained.");
   }
 }
