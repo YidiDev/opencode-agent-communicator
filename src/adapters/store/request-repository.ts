@@ -242,27 +242,80 @@ export class RequestRepository {
       const transaction = this.context.database.transaction(() => {
         this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
         const storeNowMs = requestStoreNowMs(this.context);
-        const rows = this.context.database
-          .query<RequestRow, [string, number, number]>(
-            `SELECT ${requestMetadataColumns} FROM requests
-             WHERE workspace_key = ? AND resolution_state = 'pending' AND deadline_at_ms <= ?
-             ORDER BY deadline_at_ms, id LIMIT ?`,
-          )
-          .all(input.workspaceKey, storeNowMs, input.limit);
-        const requests: RequestMetadata[] = [];
-        for (const row of rows) {
-          const before = hydrateRequest(row);
-          this.expireOne(before, storeNowMs);
-          const request = selectRequest(this.context, input.workspaceKey, before.id);
-          if (!request) throw new StoreIntegrityError("An expired request was absent.");
-          requests.push(request);
-        }
-        return { ok: true as const, requests };
+        return {
+          ok: true as const,
+          requests: this.expireDueOwned(input.workspaceKey, storeNowMs, input.limit),
+        };
       });
       return transaction.immediate();
     } catch (cause: unknown) {
       return requestFailure(cause, atLimit);
     }
+  }
+
+  expireDueOwned(workspaceKey: string, storeNowMs: number, limit: number): RequestMetadata[] {
+    const rows = this.context.database
+      .query<RequestRow, [string, number, number]>(
+        `SELECT ${requestMetadataColumns} FROM requests INDEXED BY requests_deadline
+         WHERE workspace_key = ? AND resolution_state = 'pending' AND deadline_at_ms <= ?
+         ORDER BY deadline_at_ms, id LIMIT ?`,
+      )
+      .all(workspaceKey, storeNowMs, limit);
+    return this.expireRowsOwned(workspaceKey, storeNowMs, rows);
+  }
+
+  expireDueForSourceOwned(
+    workspaceKey: string,
+    sourceSessionId: string,
+    storeNowMs: number,
+    limit: number,
+  ): RequestMetadata[] {
+    const rows = this.context.database
+      .query<RequestRow, [string, string, number, number]>(
+        `SELECT ${requestMetadataColumns} FROM requests INDEXED BY requests_due_source
+         WHERE workspace_key = ? AND source_session_id = ? AND resolution_state = 'pending'
+           AND deadline_at_ms <= ? ORDER BY deadline_at_ms, id LIMIT ?`,
+      )
+      .all(workspaceKey, sourceSessionId, storeNowMs, limit);
+    return this.expireRowsOwned(workspaceKey, storeNowMs, rows);
+  }
+
+  expireDueForTargetOwned(
+    workspaceKey: string,
+    targetSessionId: string,
+    storeNowMs: number,
+    limit: number,
+  ): RequestMetadata[] {
+    const rows = this.context.database
+      .query<RequestRow, [string, string, number, number]>(
+        `SELECT ${requestMetadataColumns} FROM requests INDEXED BY requests_due_target
+         WHERE workspace_key = ? AND target_session_id = ? AND resolution_state = 'pending'
+           AND deadline_at_ms <= ? ORDER BY deadline_at_ms, id LIMIT ?`,
+      )
+      .all(workspaceKey, targetSessionId, storeNowMs, limit);
+    return this.expireRowsOwned(workspaceKey, storeNowMs, rows);
+  }
+
+  private expireRowsOwned(
+    workspaceKey: string,
+    storeNowMs: number,
+    rows: readonly RequestRow[],
+  ): RequestMetadata[] {
+    const requests: RequestMetadata[] = [];
+    for (const row of rows) {
+      const before = hydrateRequest(row);
+      this.expireOne(before, storeNowMs);
+      const request = selectRequest(this.context, workspaceKey, before.id);
+      if (!request) throw new StoreIntegrityError("An expired request was absent.");
+      requests.push(request);
+    }
+    return requests;
+  }
+
+  expireExactDueOwned(workspaceKey: string, requestId: string, storeNowMs: number): void {
+    const request = selectRequest(this.context, workspaceKey, requestId);
+    if (request?.resolutionState !== "pending" || request.deadlineAtMs > storeNowMs) return;
+    this.expireOne(request, storeNowMs);
   }
 
   private expireOne(before: RequestMetadata, nowMs: number): void {
