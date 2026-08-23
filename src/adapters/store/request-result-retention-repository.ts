@@ -43,43 +43,89 @@ export class RequestResultRetentionRepository {
         .transaction((): ExpireAvailableResultsResult => {
           this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
           const nowMs = requestStoreNowMs(this.context);
-          const rows = this.context.database
-            .query<RequestRow, [string, number, number]>(
-              `SELECT ${requestMetadataColumns} FROM requests INDEXED BY requests_result_expiry
-             WHERE workspace_key = ? AND result_state = 'available' AND result_expires_at_ms <= ?
-             ORDER BY result_expires_at_ms, id LIMIT ?`,
-            )
-            .all(input.workspaceKey, nowMs, input.limit);
-          const requests: ExpiredAnsweredOrReachedRequestMetadata[] = [];
-          for (const row of rows) {
-            const before = hydrateRequest(row);
-            eraseStoredResult(this.context, before.id);
-            const changed = this.context.database.run(
-              `UPDATE requests SET result_state = 'expired', result_expired_at_ms = ?,
-               updated_at_ms = ?, result_byte_length = NULL, result_sha256 = NULL
-             WHERE workspace_key = ? AND id = ? AND result_state = 'available'
-               AND result_expires_at_ms <= ?`,
-              [nowMs, nowMs, input.workspaceKey, before.id, nowMs],
-            );
-            if (changed.changes !== 1) {
-              throw new StoreIntegrityError("The request result expiry CAS failed.");
-            }
-            const request = selectRequest(this.context, input.workspaceKey, before.id);
-            if (!request) throw new StoreIntegrityError("The expired result metadata was absent.");
-            validateStoredResultState(this.context, request);
-            if (
-              (request.resolutionState !== "answered" && request.resolutionState !== "reached") ||
-              request.resultState !== "expired"
-            ) {
-              throw new StoreIntegrityError("The expired request result state was malformed.");
-            }
-            requests.push(request);
-          }
-          return { ok: true, requests };
+          return {
+            ok: true,
+            requests: this.expireAvailableOwned(input.workspaceKey, nowMs, input.limit),
+          };
         })
         .immediate();
     } catch (cause: unknown) {
       return requestFailure(cause, atLimit);
     }
+  }
+
+  expireAvailableOwned(
+    workspaceKey: string,
+    nowMs: number,
+    limit: number,
+  ): ExpiredAnsweredOrReachedRequestMetadata[] {
+    const rows = this.context.database
+      .query<RequestRow, [string, number, number]>(
+        `SELECT ${requestMetadataColumns} FROM requests INDEXED BY requests_result_expiry
+         WHERE workspace_key = ? AND result_state = 'available' AND result_expires_at_ms <= ?
+         ORDER BY result_expires_at_ms, id LIMIT ?`,
+      )
+      .all(workspaceKey, nowMs, limit);
+    return this.expireRowsOwned(workspaceKey, nowMs, rows);
+  }
+
+  expireAvailableForSourceOwned(
+    workspaceKey: string,
+    sourceSessionId: string,
+    nowMs: number,
+    limit: number,
+  ): ExpiredAnsweredOrReachedRequestMetadata[] {
+    const rows = this.context.database
+      .query<RequestRow, [string, string, number, number]>(
+        `SELECT ${requestMetadataColumns} FROM requests INDEXED BY requests_result_due_source
+         WHERE workspace_key = ? AND source_session_id = ? AND result_state = 'available'
+           AND result_expires_at_ms <= ? ORDER BY result_expires_at_ms, id LIMIT ?`,
+      )
+      .all(workspaceKey, sourceSessionId, nowMs, limit);
+    return this.expireRowsOwned(workspaceKey, nowMs, rows);
+  }
+
+  expireExactAvailableOwned(workspaceKey: string, requestId: string, nowMs: number): void {
+    const row = this.context.database
+      .query<RequestRow, [string, string, number]>(
+        `SELECT ${requestMetadataColumns} FROM requests
+         WHERE workspace_key = ? AND id = ? AND result_state = 'available'
+           AND result_expires_at_ms <= ?`,
+      )
+      .get(workspaceKey, requestId, nowMs);
+    if (row) this.expireRowsOwned(workspaceKey, nowMs, [row]);
+  }
+
+  private expireRowsOwned(
+    workspaceKey: string,
+    nowMs: number,
+    rows: readonly RequestRow[],
+  ): ExpiredAnsweredOrReachedRequestMetadata[] {
+    const requests: ExpiredAnsweredOrReachedRequestMetadata[] = [];
+    for (const row of rows) {
+      const before = hydrateRequest(row);
+      eraseStoredResult(this.context, before.id);
+      const changed = this.context.database.run(
+        `UPDATE requests SET result_state = 'expired', result_expired_at_ms = ?,
+         updated_at_ms = MAX(updated_at_ms, ?), result_byte_length = NULL, result_sha256 = NULL
+         WHERE workspace_key = ? AND id = ? AND result_state = 'available'
+           AND result_expires_at_ms <= ?`,
+        [nowMs, nowMs, workspaceKey, before.id, nowMs],
+      );
+      if (changed.changes !== 1) {
+        throw new StoreIntegrityError("The request result expiry CAS failed.");
+      }
+      const request = selectRequest(this.context, workspaceKey, before.id);
+      if (!request) throw new StoreIntegrityError("The expired result metadata was absent.");
+      validateStoredResultState(this.context, request);
+      if (
+        (request.resolutionState !== "answered" && request.resolutionState !== "reached") ||
+        request.resultState !== "expired"
+      ) {
+        throw new StoreIntegrityError("The expired request result state was malformed.");
+      }
+      requests.push(request);
+    }
+    return requests;
   }
 }
