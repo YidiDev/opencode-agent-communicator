@@ -32,6 +32,7 @@ function valid<Value>(
 }
 
 const workspaceKey = valid(validateWorkspaceKey("workspace:one"));
+const sourceSessionId = valid(validateSessionId("ses_source"));
 const targetSessionId = valid(validateSessionId("ses_target"));
 const nativeMessageId = valid(validateNativeMessageId(`msg_${"a".repeat(32)}`));
 
@@ -110,6 +111,58 @@ function nativeSession(id: string, title: string, updated: number, archived?: nu
 }
 
 describe("OpenCode 1.18.21 native adapter", () => {
+  test("observes exact request participants and merged target activity without listing V2 metadata", async () => {
+    const fake = fixture({
+      visibleRoots: [
+        nativeSession("ses_source", "source", 1),
+        nativeSession("ses_target", "target", 2),
+      ],
+      statuses: {
+        ses_target: { type: "retry", attempt: 1, message: "later", next: 10 },
+      },
+      active: { ses_target: { type: "running" } },
+    });
+    expect(
+      await fake.adapter.observeRequestParticipants(
+        workspaceKey,
+        sourceSessionId,
+        targetSessionId,
+        new AbortController().signal,
+      ),
+    ).toEqual({ sourceVisible: true, targetVisible: true, targetStatus: "retry" });
+    expect(fake.calls.filter((call) => call.surface === "v2.list")).toHaveLength(0);
+    expect(fake.calls.filter((call) => call.surface === "legacy.roots")).toHaveLength(1);
+    expect(fake.calls.filter((call) => call.surface === "legacy.status")).toHaveLength(1);
+    expect(fake.calls.filter((call) => call.surface === "v2.active")).toHaveLength(1);
+  });
+
+  test("rejects inherited and getter-backed request activity maps", async () => {
+    const inherited = Object.create({ ses_target: { type: "busy" } });
+    const getter = Object.defineProperty({}, "ses_target", {
+      enumerable: true,
+      get() {
+        return { type: "running" };
+      },
+    });
+    for (const options of [{ statuses: inherited }, { active: getter }]) {
+      const fake = fixture({
+        visibleRoots: [
+          nativeSession("ses_source", "source", 1),
+          nativeSession("ses_target", "target", 2),
+        ],
+        ...options,
+      });
+      await expect(
+        fake.adapter.observeRequestParticipants(
+          workspaceKey,
+          sourceSessionId,
+          targetSessionId,
+          new AbortController().signal,
+        ),
+      ).rejects.toThrow();
+    }
+  });
+
   test("constructs V2 from serverUrl and reads exact health through V2", async () => {
     const fake = fixture();
     expect(await fake.adapter.readHealth()).toEqual({ healthy: true, version: "1.18.21" });

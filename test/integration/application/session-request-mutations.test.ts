@@ -21,6 +21,7 @@ test("application response path leaves authoritative option validation inside th
   expect(await store.createPrepared(fixture)).toMatchObject({ ok: true });
   const notifications: unknown[][] = [];
   const ports = {
+    readiness: { assertReady: () => undefined },
     clock: { nowMs: () => 0 },
     digest: requestDigestPort,
     membership: {

@@ -106,6 +106,7 @@ function ports(options: {
       },
     },
     value: {
+      readiness: { assertReady: () => undefined },
       clock: { nowMs: options.now ?? (() => 0) },
       digest: { sha256: async () => new Uint8Array(32) },
       membership: {

@@ -3,6 +3,10 @@ import { OwnershipLostFault } from "../domain/ownership";
 import { type DomainResult, domainFailure } from "../domain/results";
 import { validateSessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
+import {
+  assertCommunicatorReady,
+  type CommunicatorReadinessPort,
+} from "./communicator-readiness-port";
 import type { CurrentWorkspaceMembershipPort } from "./delivery-ports";
 import { encodeRequestListCursor, parseRequestListCursor } from "./request-list-cursor";
 import type { ParticipantRequestMetadata, RequestParticipantQueryPort } from "./request-ports";
@@ -16,11 +20,14 @@ export interface SessionRequestListResult {
   readonly nextCursor?: string;
 }
 
+export interface SessionRequestListPorts {
+  readonly readiness: CommunicatorReadinessPort;
+  readonly membership: CurrentWorkspaceMembershipPort;
+  readonly requests: RequestParticipantQueryPort;
+}
+
 export async function listSessionRequests(
-  ports: {
-    readonly membership: CurrentWorkspaceMembershipPort;
-    readonly requests: RequestParticipantQueryPort;
-  },
+  ports: SessionRequestListPorts,
   context: {
     readonly workspaceKey: WorkspaceKey;
     readonly callerSessionId: unknown;
@@ -28,6 +35,7 @@ export async function listSessionRequests(
   },
   query: { readonly role?: unknown; readonly cursor?: unknown; readonly limit?: unknown } = {},
 ): Promise<DomainResult<SessionRequestListResult>> {
+  assertCommunicatorReady(ports.readiness);
   const caller = validateSessionId(context.callerSessionId);
   if (!caller.ok) return domainFailure("invalid_arguments", caller.message, false);
   const role = query.role ?? "all";

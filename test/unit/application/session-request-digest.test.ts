@@ -35,6 +35,7 @@ function harness(options: {
   return {
     counts,
     ports: {
+      readiness: { assertReady: () => undefined },
       clock: { nowMs: options.now ?? (() => 0) },
       digest: {
         sha256: async (input: Uint8Array) => {

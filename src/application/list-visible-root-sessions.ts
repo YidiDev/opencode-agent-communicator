@@ -8,6 +8,10 @@ import type {
 } from "../domain/sessions";
 import { validateSessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
+import {
+  assertCommunicatorReady,
+  type CommunicatorReadinessPort,
+} from "./communicator-readiness-port";
 import type { CurrentWorkspaceMembershipPort } from "./delivery-ports";
 
 const defaultSessionLimit = 50;
@@ -25,6 +29,7 @@ export interface SessionListContext {
 }
 
 export interface SessionListPorts {
+  readonly readiness: CommunicatorReadinessPort;
   readonly membership: CurrentWorkspaceMembershipPort;
   readonly sessions: VisibleRootSessionPort;
 }
@@ -62,6 +67,7 @@ export async function listVisibleRootSessions(
   context: SessionListContext,
   query: SessionListQuery = {},
 ): Promise<DomainResult<readonly VisibleRootSession[]>> {
+  assertCommunicatorReady(ports.readiness);
   const source = validateSessionId(context.sourceSessionId);
   if (!source.ok) return domainFailure("invalid_arguments", source.message, false);
   const limit = query.limit ?? defaultSessionLimit;

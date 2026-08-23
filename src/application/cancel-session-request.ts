@@ -1,6 +1,10 @@
 import { isCoherentRequestMetadata } from "../domain/request-metadata";
 import type { RequestMetadata, RequestResolutionState } from "../domain/request-types";
 import type { DomainResult } from "../domain/results";
+import {
+  assertCommunicatorReady,
+  type CommunicatorReadinessPort,
+} from "./communicator-readiness-port";
 import type { ClockPort, CurrentWorkspaceMembershipPort } from "./delivery-ports";
 import type { CommittedRequestNotificationPort } from "./request-notification-port";
 import type { RequestTerminalPersistencePort } from "./request-ports";
@@ -34,6 +38,7 @@ export interface SessionRequestCancelResult {
 }
 
 export interface SessionRequestCancelPorts {
+  readonly readiness: CommunicatorReadinessPort;
   readonly membership: CurrentWorkspaceMembershipPort;
   readonly clock: ClockPort;
   readonly requests: RequestTerminalPersistencePort;
@@ -45,6 +50,7 @@ export async function cancelSessionRequest(
   context: SessionRequestMutationContext,
   args: SessionRequestCancelArguments,
 ): Promise<DomainResult<SessionRequestCancelResult>> {
+  assertCommunicatorReady(ports.readiness);
   const identity = validateRequestMutation(context, args.request_id);
   if (!identity.ok) return identity;
   const current = await requireCurrentCaller(ports, context, identity.value.callerSessionId);

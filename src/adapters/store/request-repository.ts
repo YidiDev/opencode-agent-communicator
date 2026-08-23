@@ -7,6 +7,7 @@ import type {
 } from "../../application/request-ports";
 import { validateRequestId } from "../../domain/generated-ids";
 import type { RequestMetadata } from "../../domain/request-types";
+import { submittingRequestsPerWorkspaceHardCeiling } from "../../domain/safety-ceilings";
 import { validateWorkspaceKey } from "../../domain/workspaces";
 import type { OwnershipRepository } from "./ownership-repository";
 import {
@@ -31,6 +32,10 @@ interface PayloadRow extends RequestRow {
   readonly envelopeJson: unknown;
   readonly retainedContentBytes: unknown;
 }
+
+export const requestSubmittingWorkspaceCountSql = `SELECT count(*) AS count
+  FROM requests INDEXED BY requests_submitting_recovery
+  WHERE workspace_key = ? AND delivery_state = 'submitting'`;
 
 export class RequestRepository {
   constructor(
@@ -211,6 +216,15 @@ export class RequestRepository {
       throw new StoreIntegrityError("Stored request content failed trust validation.");
     }
     assertPendingWaitEdge(this.context, before);
+    const submitting = this.context.database
+      .query<{ readonly count: number }, [string]>(requestSubmittingWorkspaceCountSql)
+      .get(input.workspaceKey)?.count;
+    if (!Number.isSafeInteger(submitting) || (submitting as number) < 0) {
+      throw new StoreIntegrityError("The submitting request count was malformed.");
+    }
+    if ((submitting as number) >= submittingRequestsPerWorkspaceHardCeiling) {
+      return { ok: false, code: "quota_exceeded" };
+    }
     const changed = this.context.database.run(
       `UPDATE requests SET delivery_state = 'submitting', submitted_at_ms = ?, updated_at_ms = ?,
          claimed_fencing_token = ?

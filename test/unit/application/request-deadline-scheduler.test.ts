@@ -680,3 +680,79 @@ test("fault reporting does not assimilate thenables and observes ordinary native
   expect(calls).toBe(2);
   expect(thenReads).toBe(0);
 });
+
+test("readiness and exact lifecycle status remain stable across ready, stop, and fault", async () => {
+  const ready = schedulerFixture({});
+  expect(ready.scheduler.status).toBe("idle");
+  expect(await ready.scheduler.startAndWaitReady()).toEqual({ ok: true });
+  expect(ready.scheduler.status).toBe("ready");
+  expect(await ready.scheduler.startAndWaitReady()).toEqual({ ok: true });
+  ready.scheduler.stop();
+  expect(ready.scheduler.status).toBe("stopped");
+  expect((await ready.scheduler.startAndWaitReady()).ok).toBe(false);
+
+  const faulted = schedulerFixture({ expires: [{ ok: true, requests: "bad" } as never] });
+  const readiness = await faulted.scheduler.startAndWaitReady();
+  expect(readiness).toMatchObject({
+    ok: false,
+    fault: { code: "port_contract_violation" },
+  });
+  expect(faulted.scheduler.status).toBe("faulted");
+  expect(faulted.scheduler.fault?.code).toBe("port_contract_violation");
+  expect(await faulted.scheduler.startAndWaitReady()).toEqual(readiness);
+});
+
+test("default monotonic clock participates in readiness when no override is supplied", async () => {
+  const timers = new FakeTimers();
+  const scheduler = new RequestDeadlineScheduler({
+    requests: {
+      expireDueRequests: async () => ({ ok: true, requests: [] }),
+      readNextPendingDeadline: async () => ({ storeObservedAtMs: 0, maximumSleepMs: 100 }),
+    },
+    notifications: { notifyTerminal: () => undefined },
+    fencingToken: token,
+    workspaceKey,
+    timers,
+  });
+  expect(await scheduler.startAndWaitReady()).toEqual({ ok: true });
+  scheduler.stop();
+});
+
+test("lease rechecks run bounded request maintenance recurrently", async () => {
+  const timers = new FakeTimers();
+  let resultMaintenance = 0;
+  let retentionMaintenance = 0;
+  const scheduler = new RequestDeadlineScheduler({
+    requests: {
+      expireDueRequests: async () => ({ ok: true, requests: [] }),
+      readNextPendingDeadline: async () => ({ storeObservedAtMs: 0, maximumSleepMs: 100 }),
+    },
+    maintenance: {
+      resultRetention: {
+        async expireAvailableResults() {
+          resultMaintenance += 1;
+          return { ok: true, requests: [] };
+        },
+      },
+      requestRetention: {
+        async collectRequestRetention() {
+          retentionMaintenance += 1;
+          return { ok: true, deletedRequests: 0, deletedRateEvents: 0 };
+        },
+      },
+    },
+    notifications: { notifyTerminal: () => undefined },
+    fencingToken: token,
+    workspaceKey,
+    timers,
+    nowMonotonicMs: () => 0,
+  });
+  expect(await scheduler.startAndWaitReady()).toEqual({ ok: true });
+  timers.fire();
+  await scheduler.drain();
+  expect({ resultMaintenance, retentionMaintenance }).toEqual({
+    resultMaintenance: 2,
+    retentionMaintenance: 2,
+  });
+  scheduler.stop();
+});

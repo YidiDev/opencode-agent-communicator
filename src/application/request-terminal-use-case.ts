@@ -8,6 +8,7 @@ import { type DomainResult, domainFailure } from "../domain/results";
 import type { SessionId } from "../domain/sessions";
 import { validateSessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
+import type { CommunicatorReadinessPort } from "./communicator-readiness-port";
 import type { ClockPort, CurrentWorkspaceMembershipPort } from "./delivery-ports";
 import type { CommittedRequestNotificationPort } from "./request-notification-port";
 import { type RequestStoreFailureCode, requestStoreFailureCodes } from "./request-ports";
@@ -47,6 +48,7 @@ export interface SessionRequestMutationContext {
 }
 
 export interface RequestMutationControlPorts {
+  readonly readiness: CommunicatorReadinessPort;
   readonly membership: CurrentWorkspaceMembershipPort;
   readonly clock: ClockPort;
 }

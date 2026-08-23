@@ -1,6 +1,11 @@
 import type { Database } from "bun:sqlite";
 
 import { type FencingToken, OwnershipLostFault } from "../../domain/ownership";
+import {
+  availableResultsPerWorkspaceHardCeiling,
+  deliveryRecordsPerWorkspaceHardCeiling,
+  pendingRequestsPerWorkspaceHardCeiling,
+} from "../../domain/safety-ceilings";
 import type { WorkspaceKey } from "../../domain/workspaces";
 
 export interface LinuxFileStat {
@@ -33,7 +38,7 @@ export const sqliteStoreHardCeilings = {
   databaseBytes: 256 * 1024 * 1024,
   deliveryRecordsPerSource: 10_000,
   deliveryRecordsPerTarget: 10_000,
-  deliveryRecordsPerWorkspace: 50_000,
+  deliveryRecordsPerWorkspace: deliveryRecordsPerWorkspaceHardCeiling,
   deliveriesPerSourceWindow: 300,
   deliveriesPerTargetWindow: 600,
   deliveriesPerWorkspaceWindow: 3_000,
@@ -42,7 +47,7 @@ export const sqliteStoreHardCeilings = {
   retainedEnvelopeBytesPerWorkspace: 256 * 1024 * 1024,
   pendingRequestsPerSource: 128,
   pendingRequestsPerTarget: 256,
-  pendingRequestsPerWorkspace: 1_024,
+  pendingRequestsPerWorkspace: pendingRequestsPerWorkspaceHardCeiling,
   pendingRequestBytesPerSource: 4 * 1024 * 1024,
   pendingRequestBytesPerTarget: 8 * 1024 * 1024,
   pendingRequestBytesPerWorkspace: 32 * 1024 * 1024,
@@ -54,7 +59,7 @@ export const sqliteStoreHardCeilings = {
   retainedResultBytesPerWorkspace: 32 * 1024 * 1024,
   availableResultsPerSource: 512,
   availableResultsPerTarget: 1_024,
-  availableResultsPerWorkspace: 4_096,
+  availableResultsPerWorkspace: availableResultsPerWorkspaceHardCeiling,
   requestTraversalNodes: 2_048,
   rateWindowMs: 60_000,
 } as const;

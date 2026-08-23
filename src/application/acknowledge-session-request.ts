@@ -1,5 +1,9 @@
 import { isCoherentRequestMetadata } from "../domain/request-metadata";
 import type { DomainResult } from "../domain/results";
+import {
+  assertCommunicatorReady,
+  type CommunicatorReadinessPort,
+} from "./communicator-readiness-port";
 import type { ClockPort, CurrentWorkspaceMembershipPort } from "./delivery-ports";
 import type { RequestTerminalPersistencePort } from "./request-ports";
 import {
@@ -27,6 +31,7 @@ export interface SessionRequestAckResult {
 }
 
 export interface SessionRequestAckPorts {
+  readonly readiness: CommunicatorReadinessPort;
   readonly membership: CurrentWorkspaceMembershipPort;
   readonly clock: ClockPort;
   readonly requests: RequestTerminalPersistencePort;
@@ -37,6 +42,7 @@ export async function acknowledgeSessionRequest(
   context: SessionRequestMutationContext,
   args: SessionRequestAckArguments,
 ): Promise<DomainResult<SessionRequestAckResult>> {
+  assertCommunicatorReady(ports.readiness);
   const identity = validateRequestMutation(context, args.request_id);
   if (!identity.ok) return identity;
   const current = await requireCurrentCaller(ports, context, identity.value.callerSessionId);
