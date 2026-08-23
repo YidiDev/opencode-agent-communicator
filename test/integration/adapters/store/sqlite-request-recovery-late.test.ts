@@ -96,6 +96,48 @@ async function completeTerminalCase(
 }
 
 describe("late request delivery outcomes", () => {
+  test("walks more than one hundred prepared rows with an immutable keyset cursor", async () => {
+    const clock = requestClock(100);
+    const database = openRequestStore({ nowWallMs: clock.wall, nowMonotonicMs: clock.monotonic });
+    const token = await database.acquire();
+    const raw = new Database(database.databasePath, { strict: true });
+    raw.run(
+      "INSERT OR IGNORE INTO workspaces(workspace_key, created_at_ms) VALUES ('request-test', 0)",
+    );
+    for (let index = 0; index < 101; index += 1) {
+      const suffix = (index + 1).toString(16).padStart(32, "0");
+      raw.run(
+        `INSERT INTO requests(id, workspace_key, source_session_id, target_session_id,
+           native_message_id, kind, resolution_state, delivery_state, result_state,
+           payload_byte_length, retained_content_byte_length, payload_sha256,
+           created_at_ms, updated_at_ms, deadline_at_ms)
+         VALUES (?, 'request-test', 'ses_source', 'ses_target', ?, 'wait', 'pending',
+           'prepared', 'none', 1, 2, ?, ?, ?, 100000)`,
+        [`req_${suffix}`, `msg_${suffix}`, "a".repeat(64), index + 1_000, index + 1_000],
+      );
+    }
+    raw.close(true);
+    const first = await database.listRecoverableRequests({
+      fencingToken: token,
+      workspaceKey: requestTestWorkspace(),
+      state: "prepared",
+      limit: 100,
+    });
+    const boundary = first.at(-1);
+    if (!boundary) throw new Error("prepared keyset boundary is absent");
+    const second = await database.listRecoverableRequests({
+      fencingToken: token,
+      workspaceKey: requestTestWorkspace(),
+      state: "prepared",
+      limit: 100,
+      cursor: { createdAtMs: boundary.createdAtMs, id: boundary.id },
+    });
+    expect(first).toHaveLength(100);
+    expect(second).toHaveLength(1);
+    expect(second[0]?.createdAtMs).toBeGreaterThan(boundary.createdAtMs);
+    database.close();
+  });
+
   test("preserves representative terminal winners and available result content", async () => {
     const database = openRequestStore();
     const token = await database.acquire();

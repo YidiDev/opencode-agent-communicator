@@ -46,6 +46,7 @@ describe("internal session tools call application boundaries", () => {
   test("list emits exact snake_case JSON and teaches the queue workflow", async () => {
     const tool = createSessionListTool(
       {
+        readiness: { assertReady: () => undefined },
         membership: {
           async readCurrentRoots() {
             return { sourceVisible: true, targetVisible: true, sourceTitle: "Source" };
@@ -92,6 +93,7 @@ describe("internal session tools call application boundaries", () => {
   test("delivery get preserves hidden lookup and declared application failures as JSON", async () => {
     const tool = createSessionDeliveryGetTool(
       {
+        readiness: { assertReady: () => undefined },
         membership: {
           async readCurrentRoots() {
             return { sourceVisible: true, targetVisible: true, sourceTitle: "Source" };
@@ -114,7 +116,10 @@ describe("internal session tools call application boundaries", () => {
   });
 
   test("send validates structural context and returns expected domain failure without throwing", async () => {
-    const ports = { deliveries: unusedDeliveries() } as unknown as SessionSendPorts;
+    const ports = {
+      readiness: { assertReady() {} },
+      deliveries: unusedDeliveries(),
+    } as unknown as SessionSendPorts;
     const tool = createSessionSendTool(ports, workspaceKey);
     const output = JSON.parse(
       await tool.execute(

@@ -5,6 +5,10 @@ import {
 } from "../domain/request-content";
 import { isCoherentRequestMetadata } from "../domain/request-metadata";
 import { type DomainResult, domainFailure } from "../domain/results";
+import {
+  assertCommunicatorReady,
+  type CommunicatorReadinessPort,
+} from "./communicator-readiness-port";
 import type { ClockPort, CurrentWorkspaceMembershipPort } from "./delivery-ports";
 import type { CommittedRequestNotificationPort } from "./request-notification-port";
 import type { RequestTerminalPersistencePort } from "./request-ports";
@@ -37,6 +41,7 @@ export interface SessionSignalResult {
 }
 
 export interface SessionSignalPorts {
+  readonly readiness: CommunicatorReadinessPort;
   readonly membership: CurrentWorkspaceMembershipPort;
   readonly clock: ClockPort;
   readonly digest: Sha256DigestPort;
@@ -49,6 +54,7 @@ export async function signalSessionRequest(
   context: SessionRequestMutationContext,
   args: SessionSignalArguments,
 ): Promise<DomainResult<SessionSignalResult>> {
+  assertCommunicatorReady(ports.readiness);
   const identity = validateRequestMutation(context, args.request_id);
   if (!identity.ok) return identity;
   const evidence = validateWaitRequestResult(

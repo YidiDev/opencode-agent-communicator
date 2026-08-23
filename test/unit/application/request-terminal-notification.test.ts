@@ -59,6 +59,7 @@ function ports(
 ) {
   const hidden = async () => ({ ok: false, code: "not_found_or_unauthorized" as const }) as never;
   return {
+    readiness: { assertReady: () => undefined },
     clock: { nowMs: () => 0 },
     digest: { sha256: async () => new Uint8Array(32).fill(0xaa) },
     membership: {

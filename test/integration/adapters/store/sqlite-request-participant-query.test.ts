@@ -313,6 +313,7 @@ test("unauthorized exact get cannot expire or inspect a corrupt due request", as
   raw.close(true);
 
   const ports = {
+    readiness: { assertReady: () => undefined },
     membership: {
       readCurrentRoots: async () => ({
         sourceTitle: undefined,

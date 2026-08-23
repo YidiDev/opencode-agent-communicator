@@ -61,6 +61,7 @@ function list(
 ) {
   return listVisibleRootSessions(
     {
+      readiness: { assertReady: () => undefined },
       sessions: fake.port,
       membership: {
         async readCurrentRoots(suppliedWorkspaceKey) {
@@ -163,6 +164,7 @@ describe("visible root session listing", () => {
       },
     };
     const ports = {
+      readiness: { assertReady: () => undefined },
       sessions: failing,
       membership: {
         async readCurrentRoots() {
@@ -221,6 +223,7 @@ describe("visible root session listing", () => {
     const seen: string[] = [];
     const result = await listVisibleRootSessions(
       {
+        readiness: { assertReady: () => undefined },
         sessions: fake.port,
         membership: {
           async readCurrentRoots(suppliedWorkspaceKey) {
@@ -241,6 +244,7 @@ describe("visible root session listing", () => {
     const fake = port([]);
     const result = await listVisibleRootSessions(
       {
+        readiness: { assertReady: () => undefined },
         sessions: fake.port,
         membership: {
           async readCurrentRoots() {

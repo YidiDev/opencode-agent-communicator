@@ -221,6 +221,7 @@ function fixture(): Fixture {
     authorizationBindings,
     acquireCalls: 0,
     ports: {
+      readiness: { assertReady() {} },
       membership: {
         async readCurrentRoots() {
           const membership = memberships.shift();
@@ -295,6 +296,21 @@ function deferred(): { readonly promise: Promise<void>; readonly resolve: () => 
 }
 
 describe("session_send orchestration", () => {
+  test("throws lifecycle not-ready before validation or any effect", async () => {
+    const fake = fixture();
+    const fault = new Error("communicator not ready");
+    fake.ports.readiness.assertReady = () => {
+      throw fault;
+    };
+    await expect(
+      sendSessionMessage(fake.ports, context(), { session_id: "invalid", content: 7 }),
+    ).rejects.toBe(fault);
+    expect(fake.memberships).toHaveLength(3);
+    expect(fake.acquireCalls).toBe(0);
+    expect(fake.authorizationBindings).toEqual([]);
+    expect(fake.nativeCalls).toEqual([]);
+  });
+
   test("derives source from context, fixes the message ID, and reports admission evidence only", async () => {
     const fake = fixture();
     const invocation = context();

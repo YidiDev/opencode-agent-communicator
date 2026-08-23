@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { mergedActivityStatus } from "../../../../src/adapters/native/opencode-1-18-21-sessions";
+import {
+  mergedActivityStatus,
+  parseSessionArray,
+  parseV2SessionArray,
+} from "../../../../src/adapters/native/opencode-1-18-21-sessions";
 import { validateSessionId } from "../../../../src/domain/sessions";
 
 const validated = validateSessionId("ses_truth");
@@ -48,4 +52,29 @@ describe("OpenCode 1.18.21 merged activity truth table", () => {
   ])("rejects malformed legacy retry %#", (legacy) => {
     expect(mergedActivityStatus({ [sessionId]: legacy }, {}, sessionId)).toBe("unknown");
   });
+});
+
+test("session snapshots reject inherited, getter, revoked, sparse, extended, and oversized arrays", () => {
+  const session = { id: "ses_truth", title: "Truth", time: { updated: 1 } };
+  const sparse = new Array(1);
+  const getter = Object.defineProperty([], "0", { enumerable: true, get: () => session });
+  Object.defineProperty(getter, "length", { value: 1 });
+  const inherited: unknown[] = [session];
+  Object.setPrototypeOf(inherited, Object.create(Array.prototype));
+  const extended = [session] as unknown[] & { extra?: true };
+  extended.extra = true;
+  const oversized = Array.from({ length: 1_001 }, () => session);
+  const revoked = Proxy.revocable([session], {});
+  revoked.revoke();
+  for (const value of [sparse, getter, inherited, extended, oversized, revoked.proxy]) {
+    expect(() => parseSessionArray(value, "Hostile listing")).toThrow("malformed");
+  }
+});
+
+test("V2 parsing consumes one descriptor snapshot rather than validating then rereading data", () => {
+  const envelope = Object.defineProperty({}, "data", {
+    enumerable: true,
+    get: () => ({ data: [] }),
+  });
+  expect(() => parseV2SessionArray(envelope)).toThrow("malformed");
 });

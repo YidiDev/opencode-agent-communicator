@@ -33,6 +33,15 @@ export interface OwnershipPort {
   isCurrent(token: FencingToken): Promise<boolean>;
 }
 
+export interface MessageRecoveryPorts {
+  readonly membership: CurrentWorkspaceMembershipPort;
+  readonly deliveries: DeliveryPersistencePort;
+  readonly nativeQueue: NativeQueueAdmissionPort;
+  readonly ownership: OwnershipPort;
+  readonly startupBarrier: RecoveryStartupBarrierPort;
+  readonly clock: ClockPort;
+}
+
 export interface OperationControl {
   readonly abort: AbortSignal;
   readonly deadlineMs?: number;
@@ -134,6 +143,8 @@ export interface DeliveryPersistencePort {
           readonly workspaceKey: WorkspaceKey;
           readonly state: "prepared";
           readonly limit: number;
+          /** Immutable exclusive keyset boundary for the ordered startup traversal. */
+          readonly cursor?: Readonly<{ readonly createdAtMs: number; readonly id: DeliveryId }>;
         }
       | {
           readonly fencingToken: FencingToken;
@@ -178,6 +189,12 @@ export interface NativeQueueAdmissionPort {
 export interface StartupRecoveryBarrier {
   readonly established: true;
   readonly fencingToken: FencingToken;
+}
+
+export interface MessageRecoverySummary {
+  readonly submittingMarkedUnknown: number;
+  readonly preparedSubmitted: number;
+  readonly preparedCancelled: number;
 }
 
 export interface RecoveryStartupBarrierPort {

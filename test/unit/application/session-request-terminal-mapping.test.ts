@@ -110,6 +110,7 @@ function acknowledgedMetadata(atMs: number): RequestMetadata {
 
 function ports(requests: RequestTerminalPersistencePort, notify?: (...args: unknown[]) => void) {
   return {
+    readiness: { assertReady: () => undefined },
     clock: { nowMs: () => 0 },
     digest: { sha256: async () => new Uint8Array(32).fill(0xff) },
     membership: {

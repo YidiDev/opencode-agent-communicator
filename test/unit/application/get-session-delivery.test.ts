@@ -98,6 +98,7 @@ function lookupFixture(): LookupFixture {
 
 function ports(fake: LookupFixture) {
   return {
+    readiness: { assertReady: () => undefined },
     deliveries: fake.deliveries,
     membership: {
       async readCurrentRoots() {
@@ -184,6 +185,7 @@ describe("session_delivery_get authorization", () => {
     let membershipCalls = 0;
     const result = await getSessionDelivery(
       {
+        readiness: { assertReady: () => undefined },
         deliveries: fake.deliveries,
         membership: {
           async readCurrentRoots() {
@@ -254,6 +256,7 @@ describe("session_delivery_get authorization", () => {
     const fake = lookupFixture();
     const result = await getSessionDelivery(
       {
+        readiness: { assertReady: () => undefined },
         deliveries: fake.deliveries,
         membership: {
           async readCurrentRoots() {

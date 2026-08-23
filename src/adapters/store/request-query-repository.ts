@@ -1,5 +1,8 @@
-import type { StartupRecoveryBarrier } from "../../application/delivery-ports";
-import type { NextPendingRequestDeadline } from "../../application/request-ports";
+import type {
+  NextPendingRequestDeadline,
+  RequestRecoveryPersistencePort,
+} from "../../application/request-ports";
+import { validateRequestId } from "../../domain/generated-ids";
 import type { FencingToken } from "../../domain/ownership";
 import { OwnershipLostFault } from "../../domain/ownership";
 import type { RequestMetadata } from "../../domain/request-types";
@@ -12,6 +15,18 @@ export const requestNextPendingDeadlineSql = `SELECT deadline_at_ms AS deadlineA
   FROM requests INDEXED BY requests_deadline
   WHERE workspace_key = ? AND resolution_state = 'pending'
   ORDER BY deadline_at_ms, id LIMIT 1`;
+
+export const requestPreparedRecoveryFirstPageSql = `SELECT ${requestMetadataColumns}
+  FROM requests INDEXED BY requests_prepared_recovery
+  WHERE workspace_key = ? AND resolution_state = 'pending' AND delivery_state = 'prepared'
+    AND deadline_at_ms > ?
+  ORDER BY created_at_ms, id LIMIT ?`;
+
+export const requestPreparedRecoveryAfterSql = `SELECT ${requestMetadataColumns}
+  FROM requests INDEXED BY requests_prepared_recovery
+  WHERE workspace_key = ? AND resolution_state = 'pending' AND delivery_state = 'prepared'
+    AND deadline_at_ms > ? AND (created_at_ms, id) > (?, ?)
+  ORDER BY created_at_ms, id LIMIT ?`;
 
 export class RequestQueryRepository {
   constructor(
@@ -50,14 +65,9 @@ export class RequestQueryRepository {
     return read.immediate();
   }
 
-  listRecoverable(input: {
-    readonly fencingToken: FencingToken;
-    readonly workspaceKey: string;
-    readonly state: "prepared" | "submitting";
-    readonly limit: number;
-    readonly excludeClaimedByToken?: FencingToken;
-    readonly startupBarrier?: StartupRecoveryBarrier;
-  }): readonly RequestMetadata[] {
+  listRecoverable(
+    input: Parameters<RequestRecoveryPersistencePort["listRecoverableRequests"]>[0],
+  ): readonly RequestMetadata[] {
     this.ownership.assertCurrent(input.fencingToken);
     if (input.workspaceKey !== this.context.workspaceKey) {
       throw new StoreIntegrityError(
@@ -86,14 +96,30 @@ export class RequestQueryRepository {
     } else {
       this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
       const storeNowMs = requestStoreNowMs(this.context);
-      rows = this.context.database
-        .query<RequestRow, [string, number, number]>(
-          `SELECT ${requestMetadataColumns} FROM requests INDEXED BY requests_prepared_recovery
-           WHERE workspace_key = ? AND resolution_state = 'pending' AND delivery_state = 'prepared'
-             AND deadline_at_ms > ?
-           ORDER BY created_at_ms, id LIMIT ?`,
-        )
-        .all(input.workspaceKey, storeNowMs, input.limit);
+      if (input.cursor === undefined) {
+        rows = this.context.database
+          .query<RequestRow, [string, number, number]>(requestPreparedRecoveryFirstPageSql)
+          .all(input.workspaceKey, storeNowMs, input.limit);
+      } else {
+        if (
+          !Number.isSafeInteger(input.cursor.createdAtMs) ||
+          input.cursor.createdAtMs < 0 ||
+          !validateRequestId(input.cursor.id).ok
+        ) {
+          throw new StoreIntegrityError("The request recovery cursor is malformed.");
+        }
+        rows = this.context.database
+          .query<RequestRow, [string, number, number, string, number]>(
+            requestPreparedRecoveryAfterSql,
+          )
+          .all(
+            input.workspaceKey,
+            storeNowMs,
+            input.cursor.createdAtMs,
+            input.cursor.id,
+            input.limit,
+          );
+      }
     }
     return rows.map(hydrateRequest);
   }

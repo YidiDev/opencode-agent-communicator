@@ -5,6 +5,10 @@ import {
 } from "../domain/request-content";
 import { isCoherentRequestMetadata } from "../domain/request-metadata";
 import { type DomainResult, domainFailure } from "../domain/results";
+import {
+  assertCommunicatorReady,
+  type CommunicatorReadinessPort,
+} from "./communicator-readiness-port";
 import type { ClockPort, CurrentWorkspaceMembershipPort } from "./delivery-ports";
 import type { CommittedRequestNotificationPort } from "./request-notification-port";
 import type { RequestTerminalPersistencePort } from "./request-ports";
@@ -37,6 +41,7 @@ export interface SessionRespondResult {
 }
 
 export interface SessionRespondPorts {
+  readonly readiness: CommunicatorReadinessPort;
   readonly membership: CurrentWorkspaceMembershipPort;
   readonly clock: ClockPort;
   readonly digest: Sha256DigestPort;
@@ -65,6 +70,7 @@ export async function respondToSessionRequest(
   context: SessionRequestMutationContext,
   args: SessionRespondArguments,
 ): Promise<DomainResult<SessionRespondResult>> {
+  assertCommunicatorReady(ports.readiness);
   const identity = validateRequestMutation(context, args.request_id);
   if (!identity.ok) return identity;
   const answers = validateRetainedAskRequestResult({ kind: "ask", answers: args.answers });
