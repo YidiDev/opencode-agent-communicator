@@ -343,17 +343,19 @@ generated schemas. At minimum they cover:
 | `session_send` | `admission_failed`, `admission_unknown` |
 | `session_delivery_get` | `not_found_or_unauthorized` |
 | `session_ask`, `session_wait` | `target_idle`, `target_status_unknown`, `deadlock_detected`, `delivery_failed`, `deadline_expired`, `request_cancelled`, `target_stopped`, `source_stopped`, `target_deleted`, `source_deleted` |
-| `session_respond`, `session_signal` | `request_not_pending`, `request_cancelled`, `delivery_failed`, `deadline_expired`, `target_stopped`, `source_stopped`, `target_deleted`, `source_deleted` |
+| `session_respond`, `session_signal` | `state_conflict` for an authorized pending wrong-kind request, response-validation rejection, or provisional persistence conflict without an authoritative winner; `request_not_pending`, `request_cancelled`, `delivery_failed`, `deadline_expired`, `target_stopped`, `source_stopped`, `target_deleted`, `source_deleted` |
 | `session_request_list` | no additional codes |
 | `session_request_get` | `result_expired` |
 | `session_request_ack` | `state_conflict` |
-| `session_request_cancel` | `request_not_pending`, `delivery_failed`, `deadline_expired`, `target_stopped`, `source_stopped`, `target_deleted`, `source_deleted`; repeated `cancelled` is success |
+| `session_request_cancel` | provisional `state_conflict` for a persistence conflict without an authoritative winner; `request_not_pending`, `delivery_failed`, `deadline_expired`, `target_stopped`, `source_stopped`, `target_deleted`, `source_deleted`; repeated `cancelled` is success |
 | `session_stop` | `approval_rejected`, `native_unavailable`, `native_outcome_unknown` |
 | `session_start` | `approval_rejected`, `idempotency_conflict`, `admission_failed`, `admission_unknown`, `native_outcome_unknown`, `native_unavailable` |
 | `session_export` | `approval_rejected`, `export_unavailable`, `unsafe_path`, `destination_exists`, `export_limit_exceeded`, `native_outcome_unknown` |
 
-Before schema freeze, implementation and tests must refine this table into an
-exhaustive generated mapping; tools may not return undeclared domain codes.
+Before schema freeze, implementation and tests must refine this provisional table into an
+exhaustive generated mapping; tools may not return undeclared domain codes. Contract-violating or
+malformed persistence adapter results fail closed as `storage_unavailable`, rather than expanding
+the tool-specific state-conflict surface.
 
 ### 7.3 Authorization and Approval
 

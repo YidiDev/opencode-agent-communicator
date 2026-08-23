@@ -32,6 +32,13 @@ describe("session domain boundaries", () => {
     expect(validateSessionId(12).ok).toBe(false);
   });
 
+  test("rejects a huge session ID before pattern validation", () => {
+    expect(validateSessionId(`ses_${"a".repeat(10_000_000)}`)).toEqual({
+      ok: false,
+      message: "Session ID is malformed.",
+    });
+  });
+
   test("strips ANSI, terminal string, C0/C1, and bidi controls from titles", () => {
     const unsafe = [
       "safe",
