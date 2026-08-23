@@ -583,8 +583,14 @@ async function proveProductionAdapterParsingAndMergedActivity(fixture: LiveFixtu
   );
   const validatedSessionID = validateSessionId(sessionID);
   const nativeMessageID = validateNativeMessageId(`msg_${"a".repeat(32)}`);
+  const nativeSteerMessageID = validateNativeMessageId(`msg_${"b".repeat(32)}`);
   const workspaceKey = validateWorkspaceKey("workspace:phase0");
-  if (!validatedSessionID.ok || !nativeMessageID.ok || !workspaceKey.ok) {
+  if (
+    !validatedSessionID.ok ||
+    !nativeMessageID.ok ||
+    !nativeSteerMessageID.ok ||
+    !workspaceKey.ok
+  ) {
     throw new Error("production adapter live fixture IDs are invalid");
   }
   const adapter = createOpenCode11821NativeAdapter({
@@ -607,7 +613,45 @@ async function proveProductionAdapterParsingAndMergedActivity(fixture: LiveFixtu
   const request = await fixture.provider.waitForText("production-adapter-live-proof");
   const observations = await adapter.readVisibleRoots(false);
   expect(observations.find((item) => item.id === validatedSessionID.value)?.status).toBe("busy");
+  const steerEnvelope = "production-adapter-steer-live-proof";
+  const steer = await adapter.steerRequest({
+    targetSessionId: validatedSessionID.value,
+    nativeMessageId: nativeSteerMessageID.value,
+    envelope: steerEnvelope,
+    abort: new AbortController().signal,
+  });
+  expect(steer.kind).toBe("admitted");
+  if (steer.kind !== "admitted") throw new Error("production adapter steer was not admitted");
+  expect(steer.admittedSeq).toBeGreaterThan(admission.admittedSeq);
+  expect(steer.observedAtMs).toBeGreaterThanOrEqual(0);
+  const admittedEvent = await waitForPromptEvent(
+    fixture,
+    "session.next.prompt.admitted",
+    sessionID,
+    nativeSteerMessageID.value,
+  );
+  expect(admittedEvent.data).toMatchObject({
+    sessionID,
+    messageID: nativeSteerMessageID.value,
+    prompt: { text: steerEnvelope },
+    delivery: "steer",
+  });
+  expect(admittedEvent.durable?.seq).toBe(steer.admittedSeq);
   request.release();
+  await waitForStepEnd(fixture, sessionID);
+  const promptedEvent = await waitForPromptEvent(
+    fixture,
+    "session.next.prompted",
+    sessionID,
+    nativeSteerMessageID.value,
+  );
+  if (promptedEvent.type !== "session.next.prompted") {
+    throw new Error("production adapter steer prompted event was malformed");
+  }
+  expect(promptedEvent.data.delivery).toBe("steer");
+  const steerRequest = await fixture.provider.waitForText(steerEnvelope, request.sequence);
+  expect(JSON.stringify(steerRequest.body)).toContain(steerEnvelope);
+  steerRequest.release();
   await waitForStepEnd(fixture, sessionID);
   await expectActivity(fixture, sessionID, false);
 }

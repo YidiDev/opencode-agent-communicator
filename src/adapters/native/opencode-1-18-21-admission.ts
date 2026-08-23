@@ -1,4 +1,5 @@
 import type { NativeQueueAdmission } from "../../application/delivery-ports";
+import type { NativeSteerAdmission } from "../../application/request-ports";
 import type { NativeMessageId } from "../../domain/generated-ids";
 import type { SessionId } from "../../domain/sessions";
 
@@ -7,6 +8,9 @@ interface AdmissionTarget {
   readonly nativeMessageId: NativeMessageId;
   readonly envelope: string;
 }
+
+type AdmissionDelivery = "queue" | "steer";
+type NativeAdmission = NativeQueueAdmission | NativeSteerAdmission;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -20,21 +24,21 @@ function observedTime(data: Record<string, unknown>, now: () => number): number 
   // 1.18.21's successful admission response makes timeCreated the authoritative observation.
   // The injected clock is used only when that field is absent, never when native evidence is invalid.
   if ("timeCreated" in data) {
-    return typeof data.timeCreated === "number" &&
-      Number.isFinite(data.timeCreated) &&
-      data.timeCreated >= 0
-      ? data.timeCreated
+    const timeCreated = data.timeCreated;
+    return Number.isSafeInteger(timeCreated) && (timeCreated as number) >= 0
+      ? (timeCreated as number)
       : undefined;
   }
   const fallback = now();
-  return Number.isFinite(fallback) && fallback >= 0 ? fallback : undefined;
+  return Number.isSafeInteger(fallback) && fallback >= 0 ? fallback : undefined;
 }
 
 export function parseAdmissionResponse(
   response: unknown,
   target: AdmissionTarget,
   now: () => number,
-): NativeQueueAdmission {
+  expectedDelivery: AdmissionDelivery = "queue",
+): NativeAdmission {
   if (!isRecord(response) || response.error !== undefined || !isRecord(response.data)) {
     return { kind: "unknown" };
   }
@@ -44,7 +48,7 @@ export function parseAdmissionResponse(
   if (
     data.sessionID !== target.targetSessionId ||
     data.id !== target.nativeMessageId ||
-    data.delivery !== "queue" ||
+    data.delivery !== expectedDelivery ||
     !isRecord(data.prompt) ||
     data.prompt.text !== target.envelope ||
     !safeSequence(data.admittedSeq)

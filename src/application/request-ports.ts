@@ -33,6 +33,28 @@ export type RequestStoreResult =
   | { readonly ok: true; readonly request: RequestMetadata }
   | { readonly ok: false; readonly code: RequestStoreFailureCode };
 
+export type NativeSteerAdmission =
+  | { readonly kind: "admitted"; readonly admittedSeq: number; readonly observedAtMs: number }
+  | {
+      readonly kind: "promoted";
+      readonly admittedSeq: number;
+      readonly promotedSeq: number;
+      readonly observedAtMs: number;
+    }
+  | { readonly kind: "definitive_rejection" }
+  | { readonly kind: "unknown" };
+
+export interface NativeSteerAdmissionPort {
+  /** Caller-aborted transport must return unknown, never definitive_rejection. */
+  steerRequest(input: {
+    readonly targetSessionId: SessionId;
+    readonly nativeMessageId: NativeMessageId;
+    /** Complete communicator-verified request envelope. */
+    readonly envelope: string;
+    readonly abort: AbortSignal;
+  }): Promise<NativeSteerAdmission>;
+}
+
 export interface PrepareRequestInput {
   readonly fencingToken: FencingToken;
   /** Must be coherent pending/prepared metadata for exactly the configured workspace. */
