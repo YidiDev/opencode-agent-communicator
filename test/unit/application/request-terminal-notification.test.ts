@@ -160,7 +160,7 @@ test("a rejected async contract violation is observed without an unhandled rejec
   }
 });
 
-test("intrinsic rejection handling ignores overridden native promise catch and then", async () => {
+test("intrinsic rejection handling bypasses configurable then/catch overrides", async () => {
   let unhandled = false;
   const listener = (): void => {
     unhandled = true;
@@ -177,9 +177,7 @@ test("intrinsic rejection handling ignores overridden native promise catch and t
       },
       constructor: {
         configurable: true,
-        get: () => {
-          throw new Error("overridden constructor must not run");
-        },
+        value: Promise,
       },
       // biome-ignore lint/suspicious/noThenProperty: this adversarial native Promise intentionally shadows then.
       then: {

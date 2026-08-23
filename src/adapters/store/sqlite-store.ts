@@ -19,6 +19,7 @@ import type {
   PrepareRequestInput,
   RequestAdmissionPersistencePort,
   RequestClaimResult,
+  RequestDeadlineSchedulePort,
   RequestParticipantQueryPort,
   RequestRecoveryPersistencePort,
   RequestResultRetentionPersistencePort,
@@ -75,6 +76,7 @@ export class LinuxBunSqliteStore
     DeliveryPersistencePort,
     RecoveryStartupBarrierPort,
     RequestAdmissionPersistencePort,
+    RequestDeadlineSchedulePort,
     RequestRecoveryPersistencePort,
     RequestRetentionPersistencePort,
     RequestTerminalPersistencePort,
@@ -300,6 +302,13 @@ export class LinuxBunSqliteStore
   ): Promise<ExpireDueRequestsResult> {
     this.assertOpen();
     return this.mutate(() => this.requestRepository.expireDueRequests(input));
+  }
+
+  async readNextPendingDeadline(
+    input: Parameters<RequestDeadlineSchedulePort["readNextPendingDeadline"]>[0],
+  ): ReturnType<RequestDeadlineSchedulePort["readNextPendingDeadline"]> {
+    this.assertOpen();
+    return this.inspect(() => this.requestQueryRepository.readNextPendingDeadline(input));
   }
 
   async listRecoverableRequests(

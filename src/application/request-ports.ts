@@ -104,6 +104,31 @@ export type ExpireDueRequestsResult =
   | { readonly ok: true; readonly requests: readonly RequestMetadata[] }
   | { readonly ok: false; readonly code: RequestStoreFailureCode };
 
+/** One fenced store-clock observation used to schedule pending request deadlines. */
+export type NextPendingRequestDeadline = Readonly<{
+  readonly storeObservedAtMs: number;
+  /** Exact positive store-provided lease renewal/recheck ceiling. */
+  readonly maximumSleepMs: number;
+  readonly nextDeadlineAtMs?: number;
+}>;
+
+export interface RequestDeadlineSchedulePort {
+  /**
+   * Reads the earliest pending deadline and store time under the same workspace/token fence.
+   * Caller time is deliberately absent: persistence time remains authoritative.
+   */
+  readNextPendingDeadline(input: {
+    readonly fencingToken: FencingToken;
+    readonly workspaceKey: WorkspaceKey;
+  }): Promise<NextPendingRequestDeadline>;
+}
+
+export interface RequestDeadlinePersistencePort extends RequestDeadlineSchedulePort {
+  expireDueRequests(
+    input: Parameters<RequestAdmissionPersistencePort["expireDueRequests"]>[0],
+  ): Promise<ExpireDueRequestsResult>;
+}
+
 export interface RequestAdmissionPersistencePort {
   /**
    * In one serialized transaction: fences ordinary work; validates metadata, canonical payload,
