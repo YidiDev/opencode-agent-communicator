@@ -5,7 +5,9 @@ import type {
   RequestStoreResult,
   RequestTransitionInput,
 } from "../../application/request-ports";
+import { validateRequestId } from "../../domain/generated-ids";
 import type { RequestMetadata } from "../../domain/request-types";
+import { validateWorkspaceKey } from "../../domain/workspaces";
 import type { OwnershipRepository } from "./ownership-repository";
 import {
   exactPreparedReplay,
@@ -14,6 +16,7 @@ import {
 } from "./request-persistence-validation";
 import { checkRequestCreateQuotas, checkRequestCycle } from "./request-quotas";
 import {
+  assertPendingWaitEdge,
   eraseRequestPrivateContent,
   requestFailure,
   requestPageLimitReached,
@@ -171,7 +174,11 @@ export class RequestRepository {
   }
 
   claimPrepared(input: RequestTransitionInput): RequestClaimResult {
-    if (input.workspaceKey !== this.context.workspaceKey)
+    if (
+      input.workspaceKey !== this.context.workspaceKey ||
+      !validateWorkspaceKey(input.workspaceKey).ok ||
+      !validateRequestId(input.requestId).ok
+    )
       return { ok: false, code: "state_conflict" };
     const atLimit = requestPageLimitReached(this.context);
     try {
@@ -193,16 +200,17 @@ export class RequestRepository {
       return { ok: true, request: before };
     }
     if (storeNowMs < before.updatedAtMs) return { ok: false, code: "state_conflict" };
-    const content = validatePreparedContent(before, row.payloadJson, row.envelopeJson);
-    if (!content || row.retainedContentBytes !== content.retainedContentBytes) {
-      throw new StoreIntegrityError("Stored request content failed trust validation.");
-    }
     if (storeNowMs >= before.deadlineAtMs) {
       this.expireOne(before, storeNowMs);
       const expired = selectRequest(this.context, input.workspaceKey, input.requestId);
       if (!expired) throw new StoreIntegrityError("The expired request was absent.");
       return { ok: true, request: expired };
     }
+    const content = validatePreparedContent(before, row.payloadJson, row.envelopeJson);
+    if (!content || row.retainedContentBytes !== content.retainedContentBytes) {
+      throw new StoreIntegrityError("Stored request content failed trust validation.");
+    }
+    assertPendingWaitEdge(this.context, before);
     const changed = this.context.database.run(
       `UPDATE requests SET delivery_state = 'submitting', submitted_at_ms = ?, updated_at_ms = ?,
          claimed_fencing_token = ?
@@ -258,6 +266,7 @@ export class RequestRepository {
   }
 
   private expireOne(before: RequestMetadata, nowMs: number): void {
+    eraseRequestPrivateContent(this.context, before.id);
     const changed = this.context.database.run(
       `UPDATE requests SET resolution_state = 'deadline_expired', resolved_at_ms = ?,
          updated_at_ms = MAX(updated_at_ms, ?), payload_sha256 = NULL,
@@ -266,6 +275,5 @@ export class RequestRepository {
       [nowMs, nowMs, before.workspaceKey, before.id, nowMs],
     );
     if (changed.changes !== 1) throw new StoreIntegrityError("The request expiry CAS failed.");
-    eraseRequestPrivateContent(this.context, before.id);
   }
 }

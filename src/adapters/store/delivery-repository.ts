@@ -236,26 +236,44 @@ export class DeliveryRepository {
         this.ownership.assertCurrent(input.fencingToken);
         const before = selectDelivery(this.context, input.workspaceKey, input.deliveryId);
         if (!before) throw new StoreIntegrityError("The delivery completion target was absent.");
-        if (this.context.startupBlockedToken === input.fencingToken) {
+        const classifyingStaleSubmission = this.context.startupBlockedToken === input.fencingToken;
+        if (classifyingStaleSubmission) {
           this.assertStaleClassification(input);
         }
         if (!this.isLegalCompletion(before.state, input.state)) {
-          return { ok: false as const, code: "state_conflict" as const };
+          return {
+            result: { ok: false as const, code: "state_conflict" as const },
+            staleClassificationComplete: undefined,
+          };
         }
         if (
           before.state === "admitted" &&
           input.state === "promoted" &&
           before.admissionEvidence?.admittedSeq !== input.admittedSeq
         ) {
-          return { ok: false as const, code: "state_conflict" as const };
+          return {
+            result: { ok: false as const, code: "state_conflict" as const },
+            staleClassificationComplete: undefined,
+          };
         }
         this.writeCompletion(input, before.state);
-        this.ownership.markStaleClassificationProgress(input.fencingToken);
         const delivery = selectDelivery(this.context, input.workspaceKey, input.deliveryId);
         if (!delivery) throw new StoreIntegrityError("The delivery completion result was absent.");
-        return { ok: true as const, delivery };
+        return {
+          result: { ok: true as const, delivery },
+          staleClassificationComplete: classifyingStaleSubmission
+            ? this.ownership.staleClassificationComplete(input.fencingToken)
+            : undefined,
+        };
       });
-      return transaction.immediate();
+      const committed = transaction.immediate();
+      if (committed.staleClassificationComplete !== undefined) {
+        this.ownership.applyCommittedStaleClassificationProgress(
+          input.fencingToken,
+          committed.staleClassificationComplete,
+        );
+      }
+      return committed.result;
     } catch (cause: unknown) {
       return failure(cause, pageLimitReached);
     }

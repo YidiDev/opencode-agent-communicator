@@ -462,7 +462,132 @@ describe("workspace-scoped startup recovery", () => {
       first.close();
     }
   });
+});
 
+describe("post-commit startup recovery barrier", () => {
+  test("keeps message startup recovery blocked when post-write validation rolls back", async () => {
+    const path = statePath();
+    const time = controlledClock();
+    const crashed = store(path, "message-rollback-old", time);
+    const staleToken = await crashed.acquire();
+    const stale = input(staleToken, 74, time.now());
+    await crashed.createPrepared(stale);
+    await crashed.claimPrepared({
+      fencingToken: staleToken,
+      workspaceKey: workspace,
+      deliveryId: stale.id,
+      nowMs: time.now(),
+    });
+
+    time.advance(1_101);
+    const recovering = store(path, "message-rollback-new", time);
+    const token = await recovering.acquire();
+    const barrier = await recovering.establish(token, {
+      abort: new AbortController().signal,
+    });
+    const fault = new Database(recovering.databasePath, { strict: true });
+    fault.exec(`CREATE TRIGGER delete_classified_delivery
+      AFTER UPDATE OF state ON deliveries
+      BEGIN DELETE FROM deliveries WHERE id = NEW.id; END;`);
+    fault.close(true);
+
+    const classify = () =>
+      recovering.completeSubmission({
+        fencingToken: token,
+        workspaceKey: workspace,
+        deliveryId: stale.id,
+        state: "admission_unknown",
+        nowMs: time.now(),
+      });
+    expect(await classify()).toEqual({ ok: false, code: "state_conflict" });
+    expect(
+      await recovering.listRecoverable({
+        fencingToken: token,
+        workspaceKey: workspace,
+        state: "submitting",
+        limit: 10,
+        excludeClaimedByToken: token,
+        startupBarrier: barrier,
+      }),
+    ).toMatchObject([{ id: stale.id, state: "submitting" }]);
+    const ordinary = input(token, 75, time.now());
+    expect(await recovering.createPrepared(ordinary)).toEqual({
+      ok: false,
+      code: "ownership_lost",
+    });
+
+    const repair = new Database(recovering.databasePath, { strict: true });
+    repair.exec("DROP TRIGGER delete_classified_delivery");
+    repair.close(true);
+    expect(await classify()).toMatchObject({ ok: true, delivery: { state: "admission_unknown" } });
+    expect(await recovering.createPrepared(ordinary)).toMatchObject({ ok: true });
+    recovering.close();
+    crashed.close();
+  });
+
+  test("keeps request startup recovery blocked when post-write validation rolls back", async () => {
+    const path = statePath();
+    const time = controlledClock();
+    const crashed = store(path, "request-rollback-old", time);
+    const staleToken = await crashed.acquire();
+    const stale = await requestFixture(staleToken, time.now(), sourceA, targetA, workspace);
+    await crashed.createPrepared(stale);
+    await crashed.claimPrepared({
+      fencingToken: staleToken,
+      workspaceKey: workspace,
+      requestId: stale.request.id,
+    });
+
+    time.advance(1_101);
+    const recovering = store(path, "request-rollback-new", time);
+    const token = await recovering.acquire();
+    const barrier = await recovering.establish(token, {
+      abort: new AbortController().signal,
+    });
+    const fault = new Database(recovering.databasePath, { strict: true });
+    fault.exec(`CREATE TRIGGER delete_classified_request
+      AFTER UPDATE OF delivery_state ON requests
+      BEGIN DELETE FROM requests WHERE id = NEW.id; END;`);
+    fault.close(true);
+
+    const classify = () =>
+      recovering.completeDelivery({
+        fencingToken: token,
+        workspaceKey: workspace,
+        requestId: stale.request.id,
+        outcome: "delivery_unknown",
+      });
+    expect(await classify()).toEqual({ ok: false, code: "state_conflict" });
+    expect(
+      await recovering.listRecoverableRequests({
+        fencingToken: token,
+        workspaceKey: workspace,
+        state: "submitting",
+        limit: 10,
+        excludeClaimedByToken: token,
+        startupBarrier: barrier,
+      }),
+    ).toMatchObject([{ id: stale.request.id, deliveryState: "submitting" }]);
+    const ordinary = await requestFixture(token, time.now(), sourceB, targetB, workspace);
+    expect(await recovering.createPrepared(ordinary)).toEqual({
+      ok: false,
+      code: "ownership_lost",
+    });
+
+    const repair = new Database(recovering.databasePath, { strict: true });
+    repair.exec("DROP TRIGGER delete_classified_request");
+    repair.close(true);
+    expect(await classify()).toMatchObject({
+      ok: true,
+      request: { deliveryState: "delivery_unknown" },
+    });
+    expect(await recovering.createPrepared(ordinary)).toMatchObject({ ok: true });
+    recovering.close();
+    crashed.close();
+  });
+});
+
+describe("workspace-scoped recovery queries", () => {
   test("lists prepared records and only stale-token submitting records behind the barrier", async () => {
     const path = statePath();
     const time = controlledClock();

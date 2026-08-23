@@ -51,4 +51,45 @@ export function requestFailure(
 export function eraseRequestPrivateContent(context: StoreContext, requestId: string): void {
   context.database.run("DELETE FROM request_payloads WHERE request_id = ?", [requestId]);
   context.database.run("DELETE FROM request_wait_edges WHERE request_id = ?", [requestId]);
+  assertTerminalPrivateState(context, requestId);
+}
+
+/** Terminal metadata is never a successful outcome while private pending state survives. */
+export function assertTerminalPrivateState(context: StoreContext, requestId: string): void {
+  const row = context.database
+    .query<{ readonly count: number }, [string]>(
+      `SELECT (SELECT count(*) FROM request_payloads WHERE request_id = ?1) +
+              (SELECT count(*) FROM request_wait_edges WHERE request_id = ?1) AS count`,
+    )
+    .get(requestId);
+  if (row?.count !== 0) {
+    throw new StoreIntegrityError("Terminal request private state was not erased.");
+  }
+}
+
+/** Pending graph state must exactly match the participant tuple bound by its parent request. */
+export function assertPendingWaitEdge(
+  context: StoreContext,
+  request: Pick<RequestMetadata, "id" | "workspaceKey" | "sourceSessionId" | "targetSessionId">,
+): void {
+  const edge = context.database
+    .query<{ readonly count: number }, [string, string, string, string]>(
+      `SELECT count(*) AS count FROM request_wait_edges
+       WHERE request_id = ? AND workspace_key = ?
+         AND source_session_id = ? AND target_session_id = ?`,
+    )
+    .get(request.id, request.workspaceKey, request.sourceSessionId, request.targetSessionId);
+  if (edge?.count !== 1) {
+    throw new StoreIntegrityError("Stored pending request edge was invalid.");
+  }
+}
+
+export function eraseStoredResult(context: StoreContext, requestId: string): void {
+  context.database.run("DELETE FROM request_results WHERE request_id = ?", [requestId]);
+  const row = context.database
+    .query<{ readonly count: number }, [string]>(
+      "SELECT count(*) AS count FROM request_results WHERE request_id = ?",
+    )
+    .get(requestId);
+  if (row?.count !== 0) throw new StoreIntegrityError("The request result was not erased.");
 }

@@ -20,9 +20,11 @@ import type {
   RequestAdmissionPersistencePort,
   RequestClaimResult,
   RequestRecoveryPersistencePort,
+  RequestResultRetentionPersistencePort,
   RequestRetentionPersistencePort,
   RequestRetentionResult,
   RequestStoreResult,
+  RequestTerminalPersistencePort,
   RequestTransitionInput,
 } from "../../application/request-ports";
 import type { DeliveryMetadata, DeliveryParticipantRole } from "../../domain/deliveries";
@@ -44,7 +46,9 @@ import { OwnershipRepository } from "./ownership-repository";
 import { RequestDeliveryRepository } from "./request-delivery-repository";
 import { RequestQueryRepository } from "./request-query-repository";
 import { RequestRepository } from "./request-repository";
+import { RequestResultRetentionRepository } from "./request-result-retention-repository";
 import { RequestRetentionRepository } from "./request-retention-repository";
+import { RequestTerminalRepository } from "./request-terminal-repository";
 import {
   StoreMaintenanceRepository,
   type StoreStorageDiagnostics,
@@ -70,7 +74,9 @@ export class LinuxBunSqliteStore
     RecoveryStartupBarrierPort,
     RequestAdmissionPersistencePort,
     RequestRecoveryPersistencePort,
-    RequestRetentionPersistencePort
+    RequestRetentionPersistencePort,
+    RequestTerminalPersistencePort,
+    RequestResultRetentionPersistencePort
 {
   readonly databasePath: string;
   readonly schemaVersion = sqliteStoreMigrations.length;
@@ -82,6 +88,8 @@ export class LinuxBunSqliteStore
   private readonly requestDeliveryRepository: RequestDeliveryRepository;
   private readonly requestQueryRepository: RequestQueryRepository;
   private readonly requestRetentionRepository: RequestRetentionRepository;
+  private readonly requestTerminalRepository: RequestTerminalRepository;
+  private readonly requestResultRetentionRepository: RequestResultRetentionRepository;
   private readonly maintenanceRepository: StoreMaintenanceRepository;
   private readonly privateState: PreparedPrivateState;
   private readonly maximumDatabaseBytes: number;
@@ -199,6 +207,14 @@ export class LinuxBunSqliteStore
       context,
       this.ownershipRepository,
     );
+    this.requestTerminalRepository = new RequestTerminalRepository(
+      context,
+      this.ownershipRepository,
+    );
+    this.requestResultRetentionRepository = new RequestResultRetentionRepository(
+      context,
+      this.ownershipRepository,
+    );
     this.maintenanceRepository = new StoreMaintenanceRepository(context, this.ownershipRepository);
   }
 
@@ -288,6 +304,41 @@ export class LinuxBunSqliteStore
   ): Promise<RequestRetentionResult> {
     this.assertOpen();
     return this.mutate(() => this.requestRetentionRepository.collect(input));
+  }
+
+  async answerAsk(
+    input: Parameters<RequestTerminalPersistencePort["answerAsk"]>[0],
+  ): ReturnType<RequestTerminalPersistencePort["answerAsk"]> {
+    this.assertOpen();
+    return this.mutate(() => this.requestTerminalRepository.answerAsk(input));
+  }
+
+  async signalWait(
+    input: Parameters<RequestTerminalPersistencePort["signalWait"]>[0],
+  ): ReturnType<RequestTerminalPersistencePort["signalWait"]> {
+    this.assertOpen();
+    return this.mutate(() => this.requestTerminalRepository.signalWait(input));
+  }
+
+  async cancelPending(
+    input: Parameters<RequestTerminalPersistencePort["cancelPending"]>[0],
+  ): ReturnType<RequestTerminalPersistencePort["cancelPending"]> {
+    this.assertOpen();
+    return this.mutate(() => this.requestTerminalRepository.cancelPending(input));
+  }
+
+  async acknowledgeResult(
+    input: Parameters<RequestTerminalPersistencePort["acknowledgeResult"]>[0],
+  ): ReturnType<RequestTerminalPersistencePort["acknowledgeResult"]> {
+    this.assertOpen();
+    return this.mutate(() => this.requestTerminalRepository.acknowledgeResult(input));
+  }
+
+  async expireAvailableResults(
+    input: Parameters<RequestResultRetentionPersistencePort["expireAvailableResults"]>[0],
+  ): ReturnType<RequestResultRetentionPersistencePort["expireAvailableResults"]> {
+    this.assertOpen();
+    return this.mutate(() => this.requestResultRetentionRepository.expireAvailable(input));
   }
 
   async completeSubmission(input: CompleteSubmissionInput): Promise<DeliveryStoreResult> {
