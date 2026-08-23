@@ -3,6 +3,7 @@ import type {
   CurrentWorkspaceMembershipPort,
   NativeQueueAdmissionPort,
 } from "../../application/delivery-ports";
+import type { NativeSteerAdmissionPort } from "../../application/request-ports";
 import type { HostHealthPort } from "../../domain/host";
 import type { RootSessionObservation, VisibleRootSessionPort } from "../../domain/sessions";
 import type { WorkspaceKey } from "../../domain/workspaces";
@@ -39,7 +40,7 @@ interface V2ClientSurface {
           readonly sessionID: string;
           readonly id: string;
           readonly prompt: { readonly text: string };
-          readonly delivery: "queue";
+          readonly delivery: "queue" | "steer";
           readonly resume: true;
         },
         options: { readonly signal: AbortSignal },
@@ -75,6 +76,7 @@ export interface OpenCodeNativeAdapterInput {
 export type OpenCodeNativeAdapter = HostHealthPort &
   VisibleRootSessionPort &
   NativeQueueAdmissionPort &
+  NativeSteerAdmissionPort &
   CurrentWorkspaceMembershipPort;
 
 class NativeAdapterFault extends Error {
@@ -233,6 +235,28 @@ export function createOpenCode11821NativeAdapter(
         return { kind: "definitive_rejection" };
       }
       return parseAdmissionResponse(response, message, now);
+    },
+    async steerRequest(request) {
+      if (request.abort.aborted) return { kind: "unknown" };
+      let response: unknown;
+      try {
+        response = await v2.v2.session.prompt(
+          {
+            sessionID: request.targetSessionId,
+            id: request.nativeMessageId,
+            prompt: { text: request.envelope },
+            delivery: "steer",
+            resume: true,
+          },
+          { signal: request.abort },
+        );
+      } catch (_cause: unknown) {
+        return { kind: "unknown" };
+      }
+      if (isAuthoritativeClientRejection(response, request.abort.aborted)) {
+        return { kind: "definitive_rejection" };
+      }
+      return parseAdmissionResponse(response, request, now, "steer");
     },
   };
 }
