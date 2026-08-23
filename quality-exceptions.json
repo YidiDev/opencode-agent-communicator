@@ -13,6 +13,12 @@
       "removalCondition": "Remove if the migration is moved to a generated, checksum-verified migration artifact format that remains reviewable as one immutable unit."
     },
     {
+      "path": "src/adapters/store/request-repository-shared.ts",
+      "rule": "coverage-functions",
+      "reason": "Bun counts the inline deterministic page-limit attribution callback as a function; request storage error paths and the shared structured SQLite FULL classifier are covered, but this wrapper callback is invoked only by a driver-level SQLITE_FULL fault.",
+      "removalCondition": "Remove when request-repository fault injection can deterministically produce SQLITE_FULL or Bun stops counting the attribution closure as an independent function."
+    },
+    {
       "path": "src/domain/ownership.ts",
       "rule": "coverage-functions",
       "reason": "Bun 1.4 reports the explicitly instantiated OwnershipLostFault class as an uncovered function even though ownership.ts has 100% line coverage and both the fault contract and fencing validator are directly tested.",

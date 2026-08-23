@@ -141,6 +141,7 @@ export interface DeliveryPersistencePort {
           readonly state: "submitting";
           readonly limit: number;
           readonly excludeClaimedByToken: FencingToken;
+          /** Must equal fencingToken; retained explicitly so SQL exclusion remains reviewable. */
           readonly startupBarrier: StartupRecoveryBarrier;
         },
   ): Promise<readonly DeliveryMetadata[]>;

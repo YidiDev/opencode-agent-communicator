@@ -40,8 +40,25 @@ export const sqliteStoreHardCeilings = {
   retainedEnvelopeBytesPerSource: 32 * 1024 * 1024,
   retainedEnvelopeBytesPerTarget: 64 * 1024 * 1024,
   retainedEnvelopeBytesPerWorkspace: 256 * 1024 * 1024,
+  pendingRequestsPerSource: 128,
+  pendingRequestsPerTarget: 256,
+  pendingRequestsPerWorkspace: 1_024,
+  pendingRequestBytesPerSource: 4 * 1024 * 1024,
+  pendingRequestBytesPerTarget: 8 * 1024 * 1024,
+  pendingRequestBytesPerWorkspace: 32 * 1024 * 1024,
+  requestsPerSourceWindow: 100,
+  requestsPerTargetWindow: 300,
+  requestsPerWorkspaceWindow: 1_000,
+  retainedResultBytesPerSource: 4 * 1024 * 1024,
+  retainedResultBytesPerTarget: 8 * 1024 * 1024,
+  retainedResultBytesPerWorkspace: 32 * 1024 * 1024,
+  requestTraversalNodes: 2_048,
   rateWindowMs: 60_000,
 } as const;
+
+// Request ceilings deliberately fit the entire wait graph within 1,024 workspace nodes. Defaults
+// reserve modest per-session memory, while hard byte/rate limits bound SQLite and recursive-edge
+// work even when an operator raises every configurable value.
 
 export interface SqliteStoreLimits {
   readonly databaseBytes: number;
@@ -54,6 +71,26 @@ export interface SqliteStoreLimits {
   readonly retainedEnvelopeBytesPerSource: number;
   readonly retainedEnvelopeBytesPerTarget: number;
   readonly retainedEnvelopeBytesPerWorkspace: number;
+  readonly pendingRequestsPerSource: number;
+  readonly pendingRequestsPerTarget: number;
+  readonly pendingRequestsPerWorkspace: number;
+  /** Retained canonical payload plus verified-envelope UTF-8 bytes for pending source requests. */
+  readonly pendingRequestBytesPerSource: number;
+  /** Retained canonical payload plus verified-envelope UTF-8 bytes for pending target requests. */
+  readonly pendingRequestBytesPerTarget: number;
+  /** Retained canonical payload plus verified-envelope UTF-8 bytes for all pending workspace requests. */
+  readonly pendingRequestBytesPerWorkspace: number;
+  readonly requestsPerSourceWindow: number;
+  readonly requestsPerTargetWindow: number;
+  readonly requestsPerWorkspaceWindow: number;
+  /** Configuration ceiling reserved for later result-write persistence; not yet enforced. */
+  readonly retainedResultBytesPerSource: number;
+  /** Configuration ceiling reserved for later result-write persistence; not yet enforced. */
+  readonly retainedResultBytesPerTarget: number;
+  /** Configuration ceiling reserved for later result-write persistence; not yet enforced. */
+  readonly retainedResultBytesPerWorkspace: number;
+  /** Maximum unique wait-graph nodes visited by one admission deadlock check. */
+  readonly requestTraversalNodes: number;
   readonly rateWindowMs: number;
 }
 
@@ -68,6 +105,19 @@ export const sqliteStoreDefaultLimits: SqliteStoreLimits = {
   retainedEnvelopeBytesPerSource: 1 * 1024 * 1024,
   retainedEnvelopeBytesPerTarget: 2 * 1024 * 1024,
   retainedEnvelopeBytesPerWorkspace: 8 * 1024 * 1024,
+  pendingRequestsPerSource: 16,
+  pendingRequestsPerTarget: 32,
+  pendingRequestsPerWorkspace: 128,
+  pendingRequestBytesPerSource: 256 * 1024,
+  pendingRequestBytesPerTarget: 512 * 1024,
+  pendingRequestBytesPerWorkspace: 4 * 1024 * 1024,
+  requestsPerSourceWindow: 10,
+  requestsPerTargetWindow: 30,
+  requestsPerWorkspaceWindow: 100,
+  retainedResultBytesPerSource: 256 * 1024,
+  retainedResultBytesPerTarget: 512 * 1024,
+  retainedResultBytesPerWorkspace: 4 * 1024 * 1024,
+  requestTraversalNodes: 512,
   rateWindowMs: 60_000,
 };
 
@@ -179,6 +229,71 @@ export function resolveStoreLimits(input: Partial<SqliteStoreLimits> = {}): Sqli
       "retainedEnvelopeBytesPerWorkspace",
       value.retainedEnvelopeBytesPerWorkspace,
       sqliteStoreHardCeilings.retainedEnvelopeBytesPerWorkspace,
+    ),
+    pendingRequestsPerSource: boundedInteger(
+      "pendingRequestsPerSource",
+      value.pendingRequestsPerSource,
+      sqliteStoreHardCeilings.pendingRequestsPerSource,
+    ),
+    pendingRequestsPerTarget: boundedInteger(
+      "pendingRequestsPerTarget",
+      value.pendingRequestsPerTarget,
+      sqliteStoreHardCeilings.pendingRequestsPerTarget,
+    ),
+    pendingRequestsPerWorkspace: boundedInteger(
+      "pendingRequestsPerWorkspace",
+      value.pendingRequestsPerWorkspace,
+      sqliteStoreHardCeilings.pendingRequestsPerWorkspace,
+    ),
+    pendingRequestBytesPerSource: boundedInteger(
+      "pendingRequestBytesPerSource",
+      value.pendingRequestBytesPerSource,
+      sqliteStoreHardCeilings.pendingRequestBytesPerSource,
+    ),
+    pendingRequestBytesPerTarget: boundedInteger(
+      "pendingRequestBytesPerTarget",
+      value.pendingRequestBytesPerTarget,
+      sqliteStoreHardCeilings.pendingRequestBytesPerTarget,
+    ),
+    pendingRequestBytesPerWorkspace: boundedInteger(
+      "pendingRequestBytesPerWorkspace",
+      value.pendingRequestBytesPerWorkspace,
+      sqliteStoreHardCeilings.pendingRequestBytesPerWorkspace,
+    ),
+    requestsPerSourceWindow: boundedInteger(
+      "requestsPerSourceWindow",
+      value.requestsPerSourceWindow,
+      sqliteStoreHardCeilings.requestsPerSourceWindow,
+    ),
+    requestsPerTargetWindow: boundedInteger(
+      "requestsPerTargetWindow",
+      value.requestsPerTargetWindow,
+      sqliteStoreHardCeilings.requestsPerTargetWindow,
+    ),
+    requestsPerWorkspaceWindow: boundedInteger(
+      "requestsPerWorkspaceWindow",
+      value.requestsPerWorkspaceWindow,
+      sqliteStoreHardCeilings.requestsPerWorkspaceWindow,
+    ),
+    retainedResultBytesPerSource: boundedInteger(
+      "retainedResultBytesPerSource",
+      value.retainedResultBytesPerSource,
+      sqliteStoreHardCeilings.retainedResultBytesPerSource,
+    ),
+    retainedResultBytesPerTarget: boundedInteger(
+      "retainedResultBytesPerTarget",
+      value.retainedResultBytesPerTarget,
+      sqliteStoreHardCeilings.retainedResultBytesPerTarget,
+    ),
+    retainedResultBytesPerWorkspace: boundedInteger(
+      "retainedResultBytesPerWorkspace",
+      value.retainedResultBytesPerWorkspace,
+      sqliteStoreHardCeilings.retainedResultBytesPerWorkspace,
+    ),
+    requestTraversalNodes: boundedInteger(
+      "requestTraversalNodes",
+      value.requestTraversalNodes,
+      sqliteStoreHardCeilings.requestTraversalNodes,
     ),
     rateWindowMs: boundedInteger(
       "rateWindowMs",

@@ -1,4 +1,4 @@
-import { Database, constants as sqliteConstants } from "bun:sqlite";
+import { type Database, constants as sqliteConstants } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 
 import type {
@@ -13,6 +13,18 @@ import type {
   RecoveryStartupBarrierPort,
   StartupRecoveryBarrier,
 } from "../../application/delivery-ports";
+import type {
+  CompleteRequestDeliveryInput,
+  ExpireDueRequestsResult,
+  PrepareRequestInput,
+  RequestAdmissionPersistencePort,
+  RequestClaimResult,
+  RequestRecoveryPersistencePort,
+  RequestRetentionPersistencePort,
+  RequestRetentionResult,
+  RequestStoreResult,
+  RequestTransitionInput,
+} from "../../application/request-ports";
 import type { DeliveryMetadata, DeliveryParticipantRole } from "../../domain/deliveries";
 import { type FencingToken, OwnershipLostFault } from "../../domain/ownership";
 import type { SessionId } from "../../domain/sessions";
@@ -29,30 +41,36 @@ import { DeliveryRepository } from "./delivery-repository";
 import { type PreparedPrivateState, preparePrivateStatePath } from "./linux-private-path";
 import { applyMigrations, sqliteStoreMigrations } from "./migrations";
 import { OwnershipRepository } from "./ownership-repository";
+import { RequestDeliveryRepository } from "./request-delivery-repository";
+import { RequestQueryRepository } from "./request-query-repository";
+import { RequestRepository } from "./request-repository";
+import { RequestRetentionRepository } from "./request-retention-repository";
+import {
+  StoreMaintenanceRepository,
+  type StoreStorageDiagnostics,
+} from "./store-maintenance-repository";
+import {
+  checkpointDatabase,
+  defaultDatabaseLifecycle,
+  integerStoreOption,
+  rethrowSanitizedStorageError,
+} from "./store-runtime-helpers";
 import {
   type LinuxBunSqliteStoreOptions,
   resolveStoreLimits,
   type SqliteDatabaseLifecycle,
   type StoreContext,
-  StoreIntegrityError,
   StoreSecurityError,
 } from "./store-types";
 
-const metadataRetentionMs = 30 * 24 * 60 * 60 * 1_000;
-const defaultDatabaseLifecycle: SqliteDatabaseLifecycle = {
-  open: (path, flags) => new Database(path, flags),
-  close: (database) => database.close(true),
-};
-
-function integerOption(name: string, value: number, minimum: number, maximum: number): number {
-  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
-    throw new StoreSecurityError(`${name} is outside its supported range.`);
-  }
-  return value;
-}
-
 export class LinuxBunSqliteStore
-  implements OwnershipPort, DeliveryPersistencePort, RecoveryStartupBarrierPort
+  implements
+    OwnershipPort,
+    DeliveryPersistencePort,
+    RecoveryStartupBarrierPort,
+    RequestAdmissionPersistencePort,
+    RequestRecoveryPersistencePort,
+    RequestRetentionPersistencePort
 {
   readonly databasePath: string;
   readonly schemaVersion = sqliteStoreMigrations.length;
@@ -60,6 +78,11 @@ export class LinuxBunSqliteStore
   private readonly ownershipRepository: OwnershipRepository;
   private readonly deliveryRepository: DeliveryRepository;
   private readonly deliveryQueryRepository: DeliveryQueryRepository;
+  private readonly requestRepository: RequestRepository;
+  private readonly requestDeliveryRepository: RequestDeliveryRepository;
+  private readonly requestQueryRepository: RequestQueryRepository;
+  private readonly requestRetentionRepository: RequestRetentionRepository;
+  private readonly maintenanceRepository: StoreMaintenanceRepository;
   private readonly privateState: PreparedPrivateState;
   private readonly maximumDatabaseBytes: number;
   private readonly databaseLifecycle: SqliteDatabaseLifecycle;
@@ -77,19 +100,24 @@ export class LinuxBunSqliteStore
       throw new StoreSecurityError("The backend owner identifier is malformed.");
     }
     const ownerGenerationId = randomUUID();
-    const leaseDurationMs = integerOption(
+    const leaseDurationMs = integerStoreOption(
       "leaseDurationMs",
       options.leaseDurationMs ?? 15_000,
       1_000,
       300_000,
     );
-    const takeoverGraceMs = integerOption(
+    const takeoverGraceMs = integerStoreOption(
       "takeoverGraceMs",
       options.takeoverGraceMs ?? 1_000,
       0,
       leaseDurationMs,
     );
-    const busyTimeoutMs = integerOption("busyTimeoutMs", options.busyTimeoutMs ?? 2_000, 1, 30_000);
+    const busyTimeoutMs = integerStoreOption(
+      "busyTimeoutMs",
+      options.busyTimeoutMs ?? 2_000,
+      1,
+      30_000,
+    );
     this.privateState = preparePrivateStatePath(
       options.stateDirectory,
       options.databaseFileName ?? "communicator.sqlite3",
@@ -139,7 +167,7 @@ export class LinuxBunSqliteStore
         this.privateState.close();
         this.isClosed = true;
       }
-      this.rethrowSanitized(cause, "SQLite state initialization failed.");
+      rethrowSanitizedStorageError(cause, "SQLite state initialization failed.");
     }
     const context: StoreContext = {
       database: this.database,
@@ -161,6 +189,17 @@ export class LinuxBunSqliteStore
     this.ownershipRepository = new OwnershipRepository(context);
     this.deliveryRepository = new DeliveryRepository(context, this.ownershipRepository);
     this.deliveryQueryRepository = new DeliveryQueryRepository(context, this.ownershipRepository);
+    this.requestRepository = new RequestRepository(context, this.ownershipRepository);
+    this.requestDeliveryRepository = new RequestDeliveryRepository(
+      context,
+      this.ownershipRepository,
+    );
+    this.requestQueryRepository = new RequestQueryRepository(context, this.ownershipRepository);
+    this.requestRetentionRepository = new RequestRetentionRepository(
+      context,
+      this.ownershipRepository,
+    );
+    this.maintenanceRepository = new StoreMaintenanceRepository(context, this.ownershipRepository);
   }
 
   async acquire(): Promise<FencingToken> {
@@ -171,7 +210,7 @@ export class LinuxBunSqliteStore
         // These settings affect the database file or other connections. They are deliberately
         // delayed until after the serialized lease acquisition.
         this.privateState.assertMutationCapacity(this.maximumDatabaseBytes, () =>
-          this.checkpoint(),
+          checkpointDatabase(this.database),
         );
         const maximumPages = configureOwnedDatabase(this.database, this.maximumDatabaseBytes);
         this.ownershipRepository.assertCurrent(token);
@@ -184,7 +223,7 @@ export class LinuxBunSqliteStore
         throw cause;
       }
     } catch (cause: unknown) {
-      this.rethrowSanitized(cause, "SQLite ownership acquisition failed.");
+      rethrowSanitizedStorageError(cause, "SQLite ownership acquisition failed.");
     }
   }
 
@@ -198,9 +237,15 @@ export class LinuxBunSqliteStore
     return this.inspect(() => this.ownershipRepository.establish(token, control));
   }
 
-  async createPrepared(input: PrepareDeliveryInput): Promise<DeliveryStoreResult> {
+  async createPrepared(input: PrepareDeliveryInput): Promise<DeliveryStoreResult>;
+  async createPrepared(input: PrepareRequestInput): Promise<RequestStoreResult>;
+  async createPrepared(
+    input: PrepareDeliveryInput | PrepareRequestInput,
+  ): Promise<DeliveryStoreResult | RequestStoreResult> {
     this.assertOpen();
-    return this.mutate(() => this.deliveryRepository.createPrepared(input));
+    return "request" in input
+      ? this.mutate(() => this.requestRepository.createPrepared(input))
+      : this.mutate(() => this.deliveryRepository.createPrepared(input));
   }
 
   async cancelPrepared(input: DeliveryTransitionInput): Promise<DeliveryStoreResult> {
@@ -208,9 +253,41 @@ export class LinuxBunSqliteStore
     return this.mutate(() => this.deliveryRepository.cancelPrepared(input));
   }
 
-  async claimPrepared(input: DeliveryTransitionInput): Promise<DeliveryClaimResult> {
+  async claimPrepared(input: DeliveryTransitionInput): Promise<DeliveryClaimResult>;
+  async claimPrepared(input: RequestTransitionInput): Promise<RequestClaimResult>;
+  async claimPrepared(
+    input: DeliveryTransitionInput | RequestTransitionInput,
+  ): Promise<DeliveryClaimResult | RequestClaimResult> {
     this.assertOpen();
-    return this.mutate(() => this.deliveryRepository.claimPrepared(input));
+    return "requestId" in input
+      ? this.mutate(() => this.requestRepository.claimPrepared(input))
+      : this.mutate(() => this.deliveryRepository.claimPrepared(input));
+  }
+
+  async completeDelivery(input: CompleteRequestDeliveryInput): Promise<RequestStoreResult> {
+    this.assertOpen();
+    return this.mutate(() => this.requestDeliveryRepository.completeDelivery(input));
+  }
+
+  async expireDueRequests(
+    input: Parameters<RequestAdmissionPersistencePort["expireDueRequests"]>[0],
+  ): Promise<ExpireDueRequestsResult> {
+    this.assertOpen();
+    return this.mutate(() => this.requestRepository.expireDueRequests(input));
+  }
+
+  async listRecoverableRequests(
+    input: Parameters<RequestRecoveryPersistencePort["listRecoverableRequests"]>[0],
+  ): Promise<readonly import("../../domain/request-types").RequestMetadata[]> {
+    this.assertOpen();
+    return this.inspect(() => this.requestQueryRepository.listRecoverable(input));
+  }
+
+  async collectRequestRetention(
+    input: Parameters<RequestRetentionPersistencePort["collectRequestRetention"]>[0],
+  ): Promise<RequestRetentionResult> {
+    this.assertOpen();
+    return this.mutate(() => this.requestRetentionRepository.collect(input));
   }
 
   async completeSubmission(input: CompleteSubmissionInput): Promise<DeliveryStoreResult> {
@@ -242,72 +319,12 @@ export class LinuxBunSqliteStore
     readonly limit: number;
   }): Promise<number> {
     this.assertOpen();
-    if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 1_000) {
-      throw new StoreIntegrityError("The metadata GC batch limit is invalid.");
-    }
-    const collect = this.database.transaction(() => {
-      this.ownershipRepository.assertOrdinaryWorkAllowed(input.fencingToken);
-      const deleted = this.database.run(
-        `DELETE FROM deliveries WHERE id IN (
-           SELECT id FROM deliveries
-           WHERE state IN ('admission_unknown','admitted','promoted','failed','cancelled')
-             AND workspace_key = ? AND updated_at_ms <= ? ORDER BY updated_at_ms, id LIMIT ?
-         )`,
-        [this.workspaceKey, Math.max(0, input.nowMs - metadataRetentionMs), input.limit],
-      );
-      this.database.run(
-        `DELETE FROM delivery_rate_events WHERE sequence IN (
-              SELECT sequence FROM delivery_rate_events
-              WHERE workspace_key = ? AND occurred_at_ms <= ?
-             ORDER BY occurred_at_ms, sequence LIMIT ?
-           )`,
-        [this.workspaceKey, Math.max(0, input.nowMs - metadataRetentionMs), input.limit],
-      );
-      return deleted.changes;
-    });
-    return this.mutate(() => collect.immediate());
+    return this.mutate(() => this.maintenanceRepository.garbageCollectDeliveryMetadata(input));
   }
 
-  async readStorageDiagnostics(): Promise<{
-    readonly journalMode: string;
-    readonly foreignKeys: number;
-    readonly busyTimeoutMs: number;
-    readonly synchronous: number;
-    readonly tempStore: number;
-    readonly secureDelete: number;
-    readonly trustedSchema: number;
-    readonly walAutocheckpointPages: number;
-    readonly cacheSize: number;
-    readonly mmapBytes: number;
-    readonly pageSize: number;
-    readonly maxPageCount: number;
-    readonly journalSizeLimit: number;
-  }> {
+  async readStorageDiagnostics(): Promise<StoreStorageDiagnostics> {
     this.assertOpen();
-    return this.mutate(() => {
-      const token = this.ownershipRepository.assertImplicitCurrent();
-      this.ownershipRepository.assertOrdinaryWorkAllowed(token);
-      const journal = this.database.query<Record<string, unknown>, []>("PRAGMA journal_mode").get();
-      const journalMode = Object.values(journal ?? {})[0];
-      if (typeof journalMode !== "string") {
-        throw new StoreIntegrityError("SQLite journal mode diagnostics were malformed.");
-      }
-      return {
-        journalMode,
-        foreignKeys: readNumericPragma(this.database, "foreign_keys"),
-        busyTimeoutMs: readNumericPragma(this.database, "busy_timeout"),
-        synchronous: readNumericPragma(this.database, "synchronous"),
-        tempStore: readNumericPragma(this.database, "temp_store"),
-        secureDelete: readNumericPragma(this.database, "secure_delete"),
-        trustedSchema: readNumericPragma(this.database, "trusted_schema"),
-        walAutocheckpointPages: readNumericPragma(this.database, "wal_autocheckpoint"),
-        cacheSize: readNumericPragma(this.database, "cache_size"),
-        mmapBytes: readNumericPragma(this.database, "mmap_size"),
-        pageSize: readNumericPragma(this.database, "page_size"),
-        maxPageCount: readNumericPragma(this.database, "max_page_count"),
-        journalSizeLimit: readNumericPragma(this.database, "journal_size_limit"),
-      };
-    });
+    return this.mutate(() => this.maintenanceRepository.readStorageDiagnostics());
   }
 
   close(): void {
@@ -323,9 +340,9 @@ export class LinuxBunSqliteStore
     if (hasCurrentLease) {
       try {
         this.privateState.assertMutationCapacity(this.maximumDatabaseBytes, () =>
-          this.checkpoint(),
+          checkpointDatabase(this.database),
         );
-        this.checkpoint();
+        checkpointDatabase(this.database);
       } catch (cause: unknown) {
         if (!(cause instanceof OwnershipLostFault)) pendingError = cause;
       }
@@ -344,7 +361,7 @@ export class LinuxBunSqliteStore
       this.privateState.close();
     }
     if (pendingError !== undefined) {
-      this.rethrowSanitized(pendingError, "The SQLite store could not be closed safely.");
+      rethrowSanitizedStorageError(pendingError, "The SQLite store could not be closed safely.");
     }
   }
 
@@ -354,49 +371,28 @@ export class LinuxBunSqliteStore
 
   private mutate<Value>(operation: () => Value): Value {
     try {
-      this.privateState.assertMutationCapacity(this.maximumDatabaseBytes, () => this.checkpoint());
+      this.privateState.assertMutationCapacity(this.maximumDatabaseBytes, () =>
+        checkpointDatabase(this.database),
+      );
       const result = operation();
       this.privateState.verifySqliteFiles();
       return result;
     } catch (cause: unknown) {
-      this.rethrowSanitized(cause, "SQLite storage operation failed.");
+      rethrowSanitizedStorageError(cause, "SQLite storage operation failed.");
     }
   }
 
   private inspect<Value>(operation: () => Value): Value {
     try {
       // Reads fence through isCurrent(), which may renew and therefore mutate ownership.
-      this.privateState.assertMutationCapacity(this.maximumDatabaseBytes, () => this.checkpoint());
+      this.privateState.assertMutationCapacity(this.maximumDatabaseBytes, () =>
+        checkpointDatabase(this.database),
+      );
       const result = operation();
       this.privateState.verifySqliteFiles();
       return result;
     } catch (cause: unknown) {
-      this.rethrowSanitized(cause, "SQLite storage operation failed.");
+      rethrowSanitizedStorageError(cause, "SQLite storage operation failed.");
     }
-  }
-
-  private checkpoint(): void {
-    const row = this.database
-      .query<Record<string, unknown>, []>("PRAGMA wal_checkpoint(TRUNCATE)")
-      .get();
-    const values = Object.values(row ?? {});
-    if (
-      values.length !== 3 ||
-      values.some((value) => typeof value !== "number" || !Number.isSafeInteger(value)) ||
-      values[0] !== 0
-    ) {
-      throw new StoreSecurityError("SQLite WAL checkpointing is blocked.");
-    }
-  }
-
-  private rethrowSanitized(cause: unknown, message: string): never {
-    if (
-      cause instanceof StoreSecurityError ||
-      cause instanceof StoreIntegrityError ||
-      cause instanceof OwnershipLostFault
-    ) {
-      throw cause;
-    }
-    throw new StoreIntegrityError(message);
   }
 }

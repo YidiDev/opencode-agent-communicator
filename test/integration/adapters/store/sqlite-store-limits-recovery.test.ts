@@ -11,6 +11,7 @@ import type { Sha256Digest } from "../../../../src/domain/message-payload";
 import { OwnershipLostFault } from "../../../../src/domain/ownership";
 import { validateSessionId } from "../../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../../src/domain/workspaces";
+import { requestFixture } from "../../../support/request-store";
 
 const roots: string[] = [];
 
@@ -409,6 +410,59 @@ describe("ownership epochs and startup recovery", () => {
 });
 
 describe("workspace-scoped startup recovery", () => {
+  test("keeps mixed message and request stale work blocked in either classification order", async () => {
+    for (const requestFirst of [true, false]) {
+      const path = statePath();
+      const time = controlledClock();
+      const first = store(path, `mixed-old-${requestFirst}`, time);
+      const tokenOne = await first.acquire();
+      const delivery = input(tokenOne, requestFirst ? 70 : 71, time.now());
+      const request = await requestFixture(tokenOne, time.now(), sourceA, targetA, workspace);
+      await first.createPrepared(delivery);
+      await first.claimPrepared({
+        fencingToken: tokenOne,
+        workspaceKey: workspace,
+        deliveryId: delivery.id,
+        nowMs: time.now(),
+      });
+      await first.createPrepared(request);
+      await first.claimPrepared({
+        fencingToken: tokenOne,
+        workspaceKey: workspace,
+        requestId: request.request.id,
+      });
+      time.advance(1_101);
+      const second = store(path, `mixed-new-${requestFirst}`, time);
+      const tokenTwo = await second.acquire();
+      await second.establish(tokenTwo, { abort: new AbortController().signal });
+      const classifyRequest = () =>
+        second.completeDelivery({
+          fencingToken: tokenTwo,
+          workspaceKey: workspace,
+          requestId: request.request.id,
+          outcome: "delivery_unknown",
+        });
+      const classifyDelivery = () =>
+        second.completeSubmission({
+          fencingToken: tokenTwo,
+          workspaceKey: workspace,
+          deliveryId: delivery.id,
+          nowMs: time.now(),
+          state: "admission_unknown",
+        });
+      await (requestFirst ? classifyRequest() : classifyDelivery());
+      expect(
+        await second.createPrepared(input(tokenTwo, requestFirst ? 72 : 73, time.now())),
+      ).toEqual({ ok: false, code: "ownership_lost" });
+      await (requestFirst ? classifyDelivery() : classifyRequest());
+      expect(
+        await second.createPrepared(input(tokenTwo, requestFirst ? 72 : 73, time.now())),
+      ).toMatchObject({ ok: true });
+      second.close();
+      first.close();
+    }
+  });
+
   test("lists prepared records and only stale-token submitting records behind the barrier", async () => {
     const path = statePath();
     const time = controlledClock();
@@ -445,6 +499,16 @@ describe("workspace-scoped startup recovery", () => {
       }),
     ).rejects.toThrow(OwnershipLostFault);
     const barrier = await second.establish(tokenTwo, { abort: new AbortController().signal });
+    await expect(
+      second.listRecoverable({
+        fencingToken: tokenTwo,
+        workspaceKey: workspace,
+        state: "submitting",
+        limit: 10,
+        excludeClaimedByToken: tokenOne,
+        startupBarrier: barrier,
+      }),
+    ).rejects.toThrow(OwnershipLostFault);
     const submitting = await second.listRecoverable({
       fencingToken: tokenTwo,
       workspaceKey: workspace,

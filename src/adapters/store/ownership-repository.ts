@@ -111,8 +111,13 @@ export class OwnershipRepository {
     this.context.nextRenewMonotonicMs = monotonic + Math.floor(this.context.leaseDurationMs / 3);
     const stale = this.context.database
       .query<CountRow, [string, number]>(
-        `SELECT count(*) AS count FROM deliveries
-         WHERE workspace_key = ? AND state = 'submitting' AND claimed_fencing_token != ?`,
+        `SELECT (
+           (SELECT count(*) FROM deliveries
+           WHERE workspace_key = ?1 AND state = 'submitting' AND claimed_fencing_token != ?2) +
+           (SELECT count(*) FROM requests
+            WHERE workspace_key = ?1 AND delivery_state = 'submitting'
+              AND claimed_fencing_token != ?2)
+         ) AS count`,
       )
       .get(this.context.workspaceKey, token);
     if (!stale || !Number.isSafeInteger(stale.count) || stale.count < 0) {
@@ -188,8 +193,13 @@ export class OwnershipRepository {
     if (this.context.startupBlockedToken !== token) return;
     const stale = this.context.database
       .query<CountRow, [string, number]>(
-        `SELECT count(*) AS count FROM deliveries
-         WHERE workspace_key = ? AND state = 'submitting' AND claimed_fencing_token != ?`,
+        `SELECT (
+           (SELECT count(*) FROM deliveries
+           WHERE workspace_key = ?1 AND state = 'submitting' AND claimed_fencing_token != ?2) +
+           (SELECT count(*) FROM requests
+            WHERE workspace_key = ?1 AND delivery_state = 'submitting'
+              AND claimed_fencing_token != ?2)
+         ) AS count`,
       )
       .get(this.context.workspaceKey, token);
     if (!stale || !Number.isSafeInteger(stale.count)) {
