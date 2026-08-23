@@ -3,9 +3,16 @@ import type {
   CurrentWorkspaceMembershipPort,
   NativeQueueAdmissionPort,
 } from "../../application/delivery-ports";
-import type { NativeSteerAdmissionPort } from "../../application/request-ports";
+import type {
+  NativeSteerAdmissionPort,
+  RequestParticipantActivityPort,
+} from "../../application/request-ports";
 import type { HostHealthPort } from "../../domain/host";
-import type { RootSessionObservation, VisibleRootSessionPort } from "../../domain/sessions";
+import {
+  type RootSessionObservation,
+  type VisibleRootSessionPort,
+  validateSessionId,
+} from "../../domain/sessions";
 import type { WorkspaceKey } from "../../domain/workspaces";
 import { validateWorkspaceKey } from "../../domain/workspaces";
 import {
@@ -16,20 +23,17 @@ import {
   combineRootSets,
   mergedActivityStatus,
   parseActiveMap,
+  parseActivityMap,
   parseSessionArray,
   parseV2SessionArray,
+  snapshotEnvelopeData,
 } from "./opencode-1-18-21-sessions";
-
-interface NativeEnvelope {
-  readonly data?: unknown;
-  readonly error?: unknown;
-}
 
 interface V2ClientSurface {
   readonly global: { health(): Promise<unknown> };
   readonly v2: {
     readonly session: {
-      active(): Promise<unknown>;
+      active(options?: { readonly signal?: AbortSignal }): Promise<unknown>;
       list(parameters: {
         readonly directory: string;
         readonly limit: number;
@@ -50,12 +54,18 @@ interface V2ClientSurface {
 }
 
 interface LegacyClientSurface {
-  listRoots(parameters: {
-    readonly roots: true;
-    readonly archived: boolean;
-    readonly directory: string;
-  }): Promise<unknown>;
-  readStatus(parameters: { readonly directory: string }): Promise<unknown>;
+  listRoots(
+    parameters: {
+      readonly roots: true;
+      readonly archived: boolean;
+      readonly directory: string;
+    },
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<unknown>;
+  readStatus(
+    parameters: { readonly directory: string },
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<unknown>;
 }
 
 export interface OpenCodeNativeAdapterDependencies {
@@ -77,6 +87,7 @@ export type OpenCodeNativeAdapter = HostHealthPort &
   VisibleRootSessionPort &
   NativeQueueAdmissionPort &
   NativeSteerAdmissionPort &
+  RequestParticipantActivityPort &
   CurrentWorkspaceMembershipPort;
 
 class NativeAdapterFault extends Error {
@@ -91,12 +102,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function envelopeData(value: unknown, label: string): unknown {
-  if (!isRecord(value)) throw new NativeAdapterFault(`${label} returned no response envelope.`);
-  const envelope: NativeEnvelope = value;
-  if (envelope.error !== undefined)
-    throw new NativeAdapterFault(`${label} failed.`, envelope.error);
-  if (!("data" in envelope)) throw new NativeAdapterFault(`${label} returned no data.`);
-  return envelope.data;
+  try {
+    return snapshotEnvelopeData(value, label);
+  } catch (cause: unknown) {
+    throw new NativeAdapterFault(`${label} returned malformed data.`, cause);
+  }
 }
 
 function method(
@@ -117,11 +127,11 @@ function legacySurface(client: unknown): LegacyClientSurface {
   const list = method(experimental, "list", "Legacy root/archive listing");
   const status = method(session, "status", "Legacy session status");
   return {
-    async listRoots(parameters): Promise<unknown> {
-      return list(parameters);
+    async listRoots(parameters, options): Promise<unknown> {
+      return list(parameters, options);
     },
-    async readStatus(parameters): Promise<unknown> {
-      return status(parameters);
+    async readStatus(parameters, options): Promise<unknown> {
+      return status(parameters, options);
     },
   };
 }
@@ -171,8 +181,10 @@ export function createOpenCode11821NativeAdapter(
               "Archived root listing",
             );
       const roots = combineRootSets(visibleRoots, archivedRoots);
-      const statusData = envelopeData(statusResult, "Legacy status");
-      if (!isRecord(statusData)) throw new NativeAdapterFault("Legacy status map is malformed.");
+      const statusData = parseActivityMap(
+        envelopeData(statusResult, "Legacy status"),
+        "Legacy status",
+      );
       const activeData = parseActiveMap(activeResult);
       const listedById = new Map(listed.map((session) => [session.id, session]));
       const observedAtMs = now();
@@ -213,6 +225,42 @@ export function createOpenCode11821NativeAdapter(
         targetVisible: byId.has(targetSessionId),
         sourceTitle: byId.get(sourceSessionId)?.title,
       };
+    },
+    async observeRequestParticipants(workspaceKey, sourceSessionId, targetSessionId, abort) {
+      const suppliedWorkspace = validateWorkspaceKey(workspaceKey);
+      if (!suppliedWorkspace.ok || suppliedWorkspace.value !== configuredWorkspace.value) {
+        throw new NativeAdapterFault("Workspace binding does not match this native adapter.");
+      }
+      if (!validateSessionId(sourceSessionId).ok || !validateSessionId(targetSessionId).ok) {
+        throw new NativeAdapterFault("Request participant identity is malformed.");
+      }
+      if (abort.aborted)
+        throw new NativeAdapterFault("Request participant observation was aborted.");
+      const [rootsResult, statusResult, activeResult] = await Promise.all([
+        legacy.listRoots(
+          { roots: true, archived: false, directory: input.directory },
+          { signal: abort },
+        ),
+        legacy.readStatus({ directory: input.directory }, { signal: abort }),
+        v2.v2.session.active({ signal: abort }),
+      ]);
+      const roots = parseSessionArray(
+        envelopeData(rootsResult, "Legacy current root listing"),
+        "Current root listing",
+      );
+      if (abort.aborted)
+        throw new NativeAdapterFault("Request participant observation was aborted.");
+      const statuses = parseActivityMap(
+        envelopeData(statusResult, "Legacy status"),
+        "Legacy status",
+      );
+      const active = parseActiveMap(activeResult);
+      const visible = new Set(roots.map((root) => root.id));
+      return Object.freeze({
+        sourceVisible: visible.has(sourceSessionId),
+        targetVisible: visible.has(targetSessionId),
+        targetStatus: mergedActivityStatus(statuses, active, targetSessionId),
+      });
     },
     async queueMessage(message) {
       if (message.abort.aborted) return { kind: "unknown" };

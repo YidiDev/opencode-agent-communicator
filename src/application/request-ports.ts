@@ -15,9 +15,15 @@ import type {
   WaitRequestPayload,
   WaitRequestResult,
 } from "../domain/request-types";
-import type { SessionId } from "../domain/sessions";
+import type { ActivityStatus, SessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
-import type { OperationControl, StartupRecoveryBarrier } from "./delivery-ports";
+import type {
+  ClockPort,
+  OperationControl,
+  OwnershipPort,
+  StartupRecoveryBarrier,
+} from "./delivery-ports";
+import type { CommittedRequestNotificationPort } from "./request-notification-port";
 
 export const requestStoreFailureCodes = [
   "deadlock_detected",
@@ -53,6 +59,48 @@ export interface NativeSteerAdmissionPort {
     readonly envelope: string;
     readonly abort: AbortSignal;
   }): Promise<NativeSteerAdmission>;
+}
+
+/** Minimal live observation needed to decide whether recovery may perform a request's first steer. */
+export interface RequestParticipantActivityObservation {
+  readonly sourceVisible: boolean;
+  readonly targetVisible: boolean;
+  readonly targetStatus: ActivityStatus;
+}
+
+export interface RequestParticipantActivityPort {
+  observeRequestParticipants(
+    workspaceKey: WorkspaceKey,
+    sourceSessionId: SessionId,
+    targetSessionId: SessionId,
+    abort: AbortSignal,
+  ): Promise<RequestParticipantActivityObservation>;
+}
+
+export interface SessionRequestRecoveryPorts {
+  readonly requests: RequestRecoveryPersistencePort &
+    RequestAdmissionPersistencePort &
+    RequestDeadlineSchedulePort;
+  readonly activity: RequestParticipantActivityPort;
+  readonly nativeSteer: NativeSteerAdmissionPort;
+  readonly ownership: OwnershipPort;
+  readonly notifications: CommittedRequestNotificationPort;
+  readonly clock: ClockPort;
+}
+
+export interface SessionRequestRecoveryPhaseInput extends OperationControl {
+  readonly workspaceKey: WorkspaceKey;
+  readonly fencingToken: FencingToken;
+  readonly startupBarrier: StartupRecoveryBarrier;
+  readonly limit: number;
+  readonly effectSignal: AbortSignal;
+}
+
+export interface PreparedSessionRequestRecoverySummary {
+  readonly observed: number;
+  readonly submitted: number;
+  readonly skipped: number;
+  readonly terminalizedAtClaim: number;
 }
 
 export interface PrepareRequestInput {
@@ -168,6 +216,8 @@ export interface RequestRecoveryPersistencePort {
           readonly workspaceKey: WorkspaceKey;
           readonly state: "prepared";
           readonly limit: number;
+          /** Immutable exclusive keyset boundary. Absence starts at the first prepared request. */
+          readonly cursor?: Readonly<{ readonly createdAtMs: number; readonly id: RequestId }>;
         }
       | {
           readonly fencingToken: FencingToken;

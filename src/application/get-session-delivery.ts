@@ -4,6 +4,10 @@ import { OwnershipLostFault } from "../domain/ownership";
 import { type DomainResult, domainFailure } from "../domain/results";
 import type { SessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
+import {
+  assertCommunicatorReady,
+  type CommunicatorReadinessPort,
+} from "./communicator-readiness-port";
 import type { CurrentWorkspaceMembershipPort, DeliveryPersistencePort } from "./delivery-ports";
 
 export interface SessionDeliveryGetContext {
@@ -12,6 +16,7 @@ export interface SessionDeliveryGetContext {
 }
 
 export interface SessionDeliveryGetPorts {
+  readonly readiness: CommunicatorReadinessPort;
   readonly membership: CurrentWorkspaceMembershipPort;
   readonly deliveries: DeliveryPersistencePort;
 }
@@ -28,6 +33,7 @@ export async function getSessionDelivery(
   context: SessionDeliveryGetContext,
   args: { readonly delivery_id: unknown },
 ): Promise<DomainResult<ParticipantDelivery>> {
+  assertCommunicatorReady(ports.readiness);
   const deliveryId = validateDeliveryId(args.delivery_id);
   if (!deliveryId.ok) return domainFailure("invalid_arguments", deliveryId.message, false);
 

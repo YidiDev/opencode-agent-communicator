@@ -12,6 +12,10 @@ import { sanitizeDisplayTitle } from "../domain/sanitize-display";
 import { type SessionId, validateSessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
 import { admitClaimedMessage, deliveryStoreFailure } from "./admit-message-delivery";
+import {
+  assertCommunicatorReady,
+  type CommunicatorReadinessPort,
+} from "./communicator-readiness-port";
 import type {
   ClockPort,
   CurrentRootMembership,
@@ -36,6 +40,7 @@ export interface SessionSendContext {
 }
 
 export interface SessionSendPorts {
+  readonly readiness: CommunicatorReadinessPort;
   readonly membership: CurrentWorkspaceMembershipPort;
   readonly authorization: MessageAuthorizationPort;
   readonly deliveries: DeliveryPersistencePort;
@@ -185,6 +190,7 @@ export async function sendSessionMessage(
   context: SessionSendContext,
   args: SessionSendArguments,
 ): Promise<DomainResult<DeliveryMetadata>> {
+  assertCommunicatorReady(ports.readiness);
   const input = validateSendArguments(args);
   if (!input.ok) return input;
   const initialMembership = await readMembership(ports, context, input.value.target);

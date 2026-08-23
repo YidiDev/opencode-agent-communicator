@@ -1,8 +1,9 @@
 import { type DeliveryMetadata, isCoherentDeliveryMetadata } from "../domain/deliveries";
 import type { DeliveryId } from "../domain/generated-ids";
-import type { FencingToken } from "../domain/ownership";
+import { type FencingToken, OwnershipLostFault } from "../domain/ownership";
 import { type DomainResult, domainFailure } from "../domain/results";
 import type { WorkspaceKey } from "../domain/workspaces";
+import { runUntilAborted } from "./abortable-operation";
 import type {
   ClockPort,
   DeliveryPersistencePort,
@@ -12,6 +13,8 @@ import type {
   NativeQueueAdmissionPort,
   OwnershipPort,
 } from "./delivery-ports";
+import { inspectDeliveryMutation } from "./message-recovery-boundaries";
+import { operationControlStopped, readSafeClockMs } from "./safe-clock";
 
 export interface MessageAdmissionPorts {
   readonly deliveries: DeliveryPersistencePort;
@@ -83,46 +86,65 @@ async function recordOutcome(
   fencingToken: FencingToken,
   deliveryId: DeliveryMetadata["id"],
   outcome: NativeQueueAdmission,
+  abort: AbortSignal,
+  deadlineMs: number | undefined,
 ): Promise<DomainResult<DeliveryMetadata>> {
   if (!isCoherent(outcome)) outcome = { kind: "unknown" };
-  if (outcome.kind === "promoted") {
-    const promoted = await ports.deliveries.completeSubmission({
-      fencingToken,
-      workspaceKey,
-      deliveryId,
-      state: "promoted",
-      nowMs: ports.clock.nowMs(),
-      admittedSeq: outcome.admittedSeq,
-      promotedSeq: outcome.promotedSeq,
-      evidenceObservedAtMs: outcome.observedAtMs,
-    });
-    return promoted.ok
-      ? admissionResult(outcome, promoted)
-      : deliveryStoreFailure(promoted.code, deliveryId);
+  const nowMs = readSafeClockMs(ports.clock);
+  if (nowMs === undefined || operationControlStopped(ports.clock, abort, deadlineMs)) {
+    return deliveryStoreFailure("ownership_lost", deliveryId);
   }
-  const result =
-    outcome.kind === "admitted"
-      ? await ports.deliveries.completeSubmission({
-          workspaceKey,
-          fencingToken,
-          deliveryId,
-          state: "admitted",
-          nowMs: ports.clock.nowMs(),
-          admittedSeq: outcome.admittedSeq,
-          evidenceObservedAtMs: outcome.observedAtMs,
-        })
-      : await ports.deliveries.completeSubmission({
-          workspaceKey,
-          fencingToken,
-          deliveryId,
-          state: outcome.kind === "definitive_rejection" ? "failed" : "admission_unknown",
-          nowMs: ports.clock.nowMs(),
-        });
+  let write: () => Promise<DeliveryStoreResult>;
+  if (outcome.kind === "promoted") {
+    write = () =>
+      ports.deliveries.completeSubmission({
+        fencingToken,
+        workspaceKey,
+        deliveryId,
+        state: "promoted",
+        nowMs,
+        admittedSeq: outcome.admittedSeq,
+        promotedSeq: outcome.promotedSeq,
+        evidenceObservedAtMs: outcome.observedAtMs,
+      });
+  } else {
+    write =
+      outcome.kind === "admitted"
+        ? () =>
+            ports.deliveries.completeSubmission({
+              workspaceKey,
+              fencingToken,
+              deliveryId,
+              state: "admitted",
+              nowMs,
+              admittedSeq: outcome.admittedSeq,
+              evidenceObservedAtMs: outcome.observedAtMs,
+            })
+        : () =>
+            ports.deliveries.completeSubmission({
+              workspaceKey,
+              fencingToken,
+              deliveryId,
+              state: outcome.kind === "definitive_rejection" ? "failed" : "admission_unknown",
+              nowMs,
+            });
+  }
+  const settlement = await runUntilAborted(abort, write);
+  if (settlement.kind === "aborted") return deliveryStoreFailure("ownership_lost", deliveryId);
+  if (settlement.kind === "rejected") {
+    return deliveryStoreFailure(
+      settlement.cause instanceof OwnershipLostFault ? "ownership_lost" : "storage_unavailable",
+      deliveryId,
+    );
+  }
+  const result = inspectDeliveryMutation(settlement.value);
+  if (!result) return deliveryStoreFailure("state_conflict", deliveryId);
   return result.ok
     ? admissionResult(outcome, result)
     : deliveryStoreFailure(result.code, deliveryId);
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one linear claimed-effect boundary preserves exact interruption and ownership-fault mappings.
 export async function admitClaimedMessage(
   ports: MessageAdmissionPorts,
   input: {
@@ -136,33 +158,80 @@ export async function admitClaimedMessage(
     readonly interruptionMeansOwnershipLoss?: true;
   },
 ): Promise<DomainResult<DeliveryMetadata>> {
+  const durableOperationSignal =
+    input.interruptionMeansOwnershipLoss === true ? input.abort : new AbortController().signal;
   const stopped = (): boolean =>
     input.interruptionMeansOwnershipLoss === true &&
-    (input.abort.aborted ||
-      (input.deadlineMs !== undefined && ports.clock.nowMs() >= input.deadlineMs));
+    operationControlStopped(ports.clock, input.abort, input.deadlineMs);
   if (stopped()) return deliveryStoreFailure("ownership_lost", input.delivery.id);
-  if (!(await ports.ownership.isCurrent(input.fencingToken))) {
+  const current = await runUntilAborted(durableOperationSignal, () =>
+    ports.ownership.isCurrent(input.fencingToken),
+  );
+  if (current.kind === "aborted" || (current.kind === "settled" && current.value !== true)) {
     return deliveryStoreFailure("ownership_lost", input.delivery.id);
+  }
+  if (current.kind === "rejected") {
+    return deliveryStoreFailure(
+      current.cause instanceof OwnershipLostFault ? "ownership_lost" : "storage_unavailable",
+      input.delivery.id,
+    );
   }
   // No awaited work is allowed between this final control check and the native effect.
   if (stopped()) return deliveryStoreFailure("ownership_lost", input.delivery.id);
   let outcome: NativeQueueAdmission;
   try {
-    outcome = await ports.nativeQueue.queueMessage({
+    const promise = ports.nativeQueue.queueMessage({
       targetSessionId: input.delivery.targetSessionId,
       nativeMessageId: input.delivery.nativeMessageId,
       envelope: input.envelope,
       abort: input.abort,
     });
-  } catch (_cause: unknown) {
+    if (input.interruptionMeansOwnershipLoss === true) {
+      const settlement = await runUntilAborted(input.abort, () => promise);
+      if (settlement.kind === "aborted") {
+        return deliveryStoreFailure("ownership_lost", input.delivery.id);
+      }
+      if (settlement.kind === "rejected" && settlement.cause instanceof OwnershipLostFault) {
+        return deliveryStoreFailure("ownership_lost", input.delivery.id);
+      }
+      outcome = settlement.kind === "settled" ? settlement.value : { kind: "unknown" };
+    } else {
+      outcome = await promise;
+    }
+  } catch (cause: unknown) {
+    if (cause instanceof OwnershipLostFault) {
+      return deliveryStoreFailure("ownership_lost", input.delivery.id);
+    }
     outcome = { kind: "unknown" };
   }
   if (stopped()) return deliveryStoreFailure("ownership_lost", input.delivery.id);
   if (input.abort.aborted && outcome.kind === "definitive_rejection") {
     outcome = { kind: "unknown" };
   }
-  if (!(await ports.ownership.isCurrent(input.fencingToken))) {
+  const currentAfterEffect = await runUntilAborted(durableOperationSignal, () =>
+    ports.ownership.isCurrent(input.fencingToken),
+  );
+  if (
+    currentAfterEffect.kind === "aborted" ||
+    (currentAfterEffect.kind === "settled" && currentAfterEffect.value !== true)
+  ) {
     return deliveryStoreFailure("ownership_lost", input.delivery.id);
   }
-  return recordOutcome(ports, input.workspaceKey, input.fencingToken, input.delivery.id, outcome);
+  if (currentAfterEffect.kind === "rejected") {
+    return deliveryStoreFailure(
+      currentAfterEffect.cause instanceof OwnershipLostFault
+        ? "ownership_lost"
+        : "storage_unavailable",
+      input.delivery.id,
+    );
+  }
+  return recordOutcome(
+    ports,
+    input.workspaceKey,
+    input.fencingToken,
+    input.delivery.id,
+    outcome,
+    durableOperationSignal,
+    input.interruptionMeansOwnershipLoss === true ? input.deadlineMs : undefined,
+  );
 }

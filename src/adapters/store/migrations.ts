@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 
+import { submittingRequestsPerWorkspaceHardCeiling } from "../../domain/safety-ceilings";
 import { StoreIntegrityError, StoreSecurityError } from "./store-types";
 
 interface Migration {
@@ -653,6 +654,43 @@ DROP INDEX requests_participant_outbox;
 DROP INDEX requests_participant_inbox;
 `,
   },
+  {
+    version: 7,
+    checksum: "sha256:8543d47872200c45c03a5c201ef943bf6e9f1b25799078e4eb618f005b5882c9",
+    sql: `
+CREATE INDEX deliveries_prepared_startup_v7
+  ON deliveries(workspace_key, created_at_ms, id) WHERE state = 'prepared';
+CREATE INDEX deliveries_submitting_startup_v7
+  ON deliveries(workspace_key, created_at_ms, id, claimed_fencing_token)
+  WHERE state = 'submitting';
+CREATE TRIGGER requests_submitting_ceiling_insert_v7
+BEFORE INSERT ON requests
+WHEN NEW.delivery_state = 'submitting' AND (
+  SELECT count(*) FROM requests INDEXED BY requests_submitting_recovery
+  WHERE workspace_key = NEW.workspace_key AND delivery_state = 'submitting'
+) >= ${submittingRequestsPerWorkspaceHardCeiling}
+BEGIN
+  SELECT RAISE(ABORT, 'workspace submitting request ceiling exceeded');
+END;
+CREATE TRIGGER requests_submitting_ceiling_update_v7
+BEFORE UPDATE OF delivery_state, workspace_key ON requests
+WHEN NEW.delivery_state = 'submitting' AND (
+  OLD.delivery_state <> 'submitting' OR OLD.workspace_key <> NEW.workspace_key
+) AND (
+  SELECT count(*) FROM requests INDEXED BY requests_submitting_recovery
+  WHERE workspace_key = NEW.workspace_key AND delivery_state = 'submitting'
+) >= ${submittingRequestsPerWorkspaceHardCeiling}
+BEGIN
+  SELECT RAISE(ABORT, 'workspace submitting request ceiling exceeded');
+END;
+`,
+    downSql: `
+DROP TRIGGER requests_submitting_ceiling_update_v7;
+DROP TRIGGER requests_submitting_ceiling_insert_v7;
+DROP INDEX deliveries_submitting_startup_v7;
+DROP INDEX deliveries_prepared_startup_v7;
+`,
+  },
 ] as const;
 
 interface VersionRow {
@@ -799,6 +837,21 @@ function auditRequestLifecycleInvariants(database: Database): void {
   }
 }
 
+function auditRequestSubmittingCeiling(database: Database): void {
+  const exceeded = database
+    .query<{ readonly exceeded: number }, []>(
+      `SELECT EXISTS (
+         SELECT workspace_key FROM requests INDEXED BY requests_submitting_recovery
+         WHERE delivery_state = 'submitting' GROUP BY workspace_key
+         HAVING count(*) > ${submittingRequestsPerWorkspaceHardCeiling}
+       ) AS exceeded`,
+    )
+    .get()?.exceeded;
+  if (exceeded !== 0) {
+    throw new StoreIntegrityError("Legacy submitting request state exceeds its hard ceiling.");
+  }
+}
+
 export function applyMigrations(database: Database, nowMs: number, takeoverGraceMs: number): void {
   validateMigrationChecksums();
   const bootstrap = database.transaction(() => {
@@ -823,6 +876,7 @@ export function applyMigrations(database: Database, nowMs: number, takeoverGrace
     for (const migration of sqliteStoreMigrations) {
       if (migration.version <= current) continue;
       if (migration.version === 5) auditRequestLifecycleInvariants(database);
+      if (migration.version === 7) auditRequestSubmittingCeiling(database);
       database.exec(migration.sql);
       database.run(
         "INSERT INTO schema_migrations(version, checksum, applied_at_ms) VALUES (?, ?, ?)",

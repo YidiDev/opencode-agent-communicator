@@ -8,6 +8,10 @@ import {
 import { type DomainResult, domainFailure } from "../domain/results";
 import { validateSessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
+import {
+  assertCommunicatorReady,
+  type CommunicatorReadinessPort,
+} from "./communicator-readiness-port";
 import type { CurrentWorkspaceMembershipPort } from "./delivery-ports";
 import type { ParticipantRequestGet, RequestParticipantQueryPort } from "./request-ports";
 
@@ -17,6 +21,12 @@ const hiddenFailure = (): DomainResult<never> =>
     "Request was not found or the caller is not authorized.",
     false,
   );
+
+export interface SessionRequestGetPorts {
+  readonly readiness: CommunicatorReadinessPort;
+  readonly membership: CurrentWorkspaceMembershipPort;
+  readonly requests: RequestParticipantQueryPort;
+}
 
 function validMetadataView(
   found: Extract<ParticipantRequestGet, { outcome: "metadata" }>,
@@ -90,10 +100,7 @@ function validParticipantBinding(
 }
 
 export async function getSessionRequest(
-  ports: {
-    readonly membership: CurrentWorkspaceMembershipPort;
-    readonly requests: RequestParticipantQueryPort;
-  },
+  ports: SessionRequestGetPorts,
   context: {
     readonly workspaceKey: WorkspaceKey;
     readonly callerSessionId: unknown;
@@ -101,6 +108,7 @@ export async function getSessionRequest(
   },
   args: { readonly request_id: unknown },
 ): Promise<DomainResult<ParticipantRequestGet>> {
+  assertCommunicatorReady(ports.readiness);
   const caller = validateSessionId(context.callerSessionId);
   if (!caller.ok) return domainFailure("invalid_arguments", caller.message, false);
   const requestId = validateRequestId(args.request_id);

@@ -46,6 +46,7 @@ function ports(
       return membershipCalls;
     },
     value: {
+      readiness: { assertReady: () => undefined },
       membership: {
         readCurrentRoots: async () => {
           membershipCalls++;

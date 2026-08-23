@@ -89,6 +89,12 @@ recovery scans for another workspace fail closed; participant lookup for another
 workspace keeps the constant-shape `undefined` result. A stale submission in a
 different workspace therefore cannot block startup for this store. Deployments
 must construct and recover one store instance per workspace they intend to serve.
+Schema v7 caps all request rows with `delivery_state = submitting` at 4096 per
+workspace, regardless of pending or terminal resolution. Its insert/update triggers
+and pre-install audit use `requests_submitting_recovery`; request claim checks the same
+indexed count in its immediate transaction. Stale-submitting startup recovery uses
+that exact 4096 bound and a residual probe, while pending prepared and expiry work
+remain bounded at 1024.
 
 An administrator owner label is diagnostic only. Every store construction creates
 a fresh random process-generation identity. Repeated acquisition by one live

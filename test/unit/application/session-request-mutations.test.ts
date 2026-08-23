@@ -163,6 +163,7 @@ function harness(
   return {
     effects,
     ports: {
+      readiness: { assertReady: () => undefined },
       clock: { nowMs: () => 0 },
       digest: { sha256: async () => new Uint8Array(32).fill(0xcc) },
       membership: {

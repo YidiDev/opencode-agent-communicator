@@ -3,7 +3,10 @@ import { OwnershipLostFault } from "../domain/ownership";
 import { isCoherentRequestMetadata } from "../domain/request-metadata";
 import type { RequestMetadata } from "../domain/request-types";
 import type { WorkspaceKey } from "../domain/workspaces";
+import { runUntilAborted } from "./abortable-operation";
 import { observeNativePromiseRejection } from "./native-promise-observation";
+import { inspectPendingDeadlineSchedule } from "./request-deadline-boundaries";
+import { drainRequestMaintenance, type RequestMaintenancePorts } from "./request-maintenance";
 import type { CommittedRequestNotificationPort } from "./request-notification-port";
 import type {
   NextPendingRequestDeadline,
@@ -11,10 +14,12 @@ import type {
   RequestStoreFailureCode,
 } from "./request-ports";
 import { requestStoreFailureCodes } from "./request-ports";
+import { inspectRequestMetadata } from "./request-recovery-boundaries";
 import {
   createTerminalNotificationEvent,
   notifyTerminalSafely,
 } from "./request-terminal-notification";
+import { snapshotDataRecord, snapshotDenseArray } from "./strict-port-boundaries";
 
 export const requestDeadlineBatchLimit = 100;
 export const requestDeadlineMaximumTimerDelayMs = 2_147_483_647;
@@ -52,8 +57,14 @@ export interface RequestDeadlineSchedulerOptions {
   readonly workspaceKey: WorkspaceKey;
   readonly timers?: RequestDeadlineTimerPort;
   readonly nowMonotonicMs?: () => number;
+  readonly maintenance?: RequestMaintenancePorts;
   readonly onFault?: (fault: RequestDeadlineSchedulerFault) => undefined;
 }
+
+export type RequestDeadlineSchedulerStatus = "idle" | "starting" | "ready" | "stopped" | "faulted";
+export type RequestDeadlineSchedulerReadiness =
+  | Readonly<{ readonly ok: true }>
+  | Readonly<{ readonly ok: false; readonly fault: RequestDeadlineSchedulerFault }>;
 
 interface PumpBudget {
   readonly seen: Set<string>;
@@ -69,8 +80,6 @@ type TimedSchedule = Readonly<{
   elapsedMs: number;
 }>;
 
-const requestDeadlineMaximumMetadataKeys = 27;
-
 function defaultMonotonicNowMs(): number {
   if (typeof performance !== "undefined" && typeof performance.now === "function") {
     return performance.now();
@@ -78,103 +87,22 @@ function defaultMonotonicNowMs(): number {
   return Number(process.hrtime.bigint()) / 1_000_000;
 }
 
-function dataRecord(value: unknown, maximumKeys: number): Record<string, unknown> | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const keys = Reflect.ownKeys(value);
-  if (keys.length > maximumKeys || keys.some((key) => typeof key !== "string")) return undefined;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return undefined;
-  const snapshot: Record<string, unknown> = {};
-  for (const key of keys as string[]) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return undefined;
-    snapshot[key] = descriptor.value;
-  }
-  return snapshot;
-}
-
-function denseArray(value: unknown, maximumLength: number): unknown[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const keys = Reflect.ownKeys(value);
-  if (keys.length > maximumLength + 1) return undefined;
-  if (Object.getPrototypeOf(value) !== Array.prototype) return undefined;
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
-  const rawLength: unknown = lengthDescriptor?.value;
-  if (
-    typeof rawLength !== "number" ||
-    !Number.isSafeInteger(rawLength) ||
-    rawLength < 0 ||
-    rawLength > maximumLength
-  ) {
-    return undefined;
-  }
-  const length = rawLength;
-  if (
-    keys.length !== length + 1 ||
-    keys.some((key) => typeof key !== "string" || (key !== "length" && !/^(0|[1-9]\d*)$/.test(key)))
-  ) {
-    return undefined;
-  }
-  const snapshot: unknown[] = [];
-  for (let index = 0; index < length; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return undefined;
-    snapshot.push(descriptor.value);
-  }
-  return snapshot;
-}
-
-function inspectSchedule(value: unknown): NextPendingRequestDeadline | undefined {
-  try {
-    const row = dataRecord(value, 3);
-    if (!row) return undefined;
-    const keys = Object.keys(row);
-    if (
-      keys.length < 2 ||
-      keys.length > 3 ||
-      !keys.includes("storeObservedAtMs") ||
-      !keys.includes("maximumSleepMs") ||
-      !keys.every((key) =>
-        ["storeObservedAtMs", "maximumSleepMs", "nextDeadlineAtMs"].includes(key),
-      ) ||
-      !Number.isSafeInteger(row.storeObservedAtMs) ||
-      (row.storeObservedAtMs as number) < 0 ||
-      !Number.isSafeInteger(row.maximumSleepMs) ||
-      (row.maximumSleepMs as number) < 1
-    ) {
-      return undefined;
-    }
-    if (
-      Object.hasOwn(row, "nextDeadlineAtMs") &&
-      (!Number.isSafeInteger(row.nextDeadlineAtMs) || (row.nextDeadlineAtMs as number) < 0)
-    ) {
-      return undefined;
-    }
-    return Object.freeze({
-      storeObservedAtMs: row.storeObservedAtMs as number,
-      maximumSleepMs: row.maximumSleepMs as number,
-      ...(Object.hasOwn(row, "nextDeadlineAtMs")
-        ? { nextDeadlineAtMs: row.nextDeadlineAtMs as number }
-        : {}),
-    });
-  } catch {
-    return undefined;
-  }
-}
-
 function classifyFailure(code: RequestStoreFailureCode): RequestDeadlineSchedulerFaultCode {
   return code === "ownership_lost" ? "ownership_lost" : "storage_failure";
 }
 
-/** A serialized, bounded, single-timer scheduler; every expiry decision is delegated to the store. */
 export class RequestDeadlineScheduler {
   private readonly timers: RequestDeadlineTimerPort;
   private readonly nowMonotonicMs: () => number;
   private readonly stopLatch: Promise<void>;
+  private readonly effectController = new AbortController();
   private releaseStopLatch!: () => void;
   private active = false;
   private stopped = false;
   private faultReported = false;
+  private ready = false;
+  private faultValue: RequestDeadlineSchedulerFault | undefined;
+  private readonly readinessWaiters: Array<(value: RequestDeadlineSchedulerReadiness) => void> = [];
   private dirty = false;
   private pumping = false;
   private timerHandle: unknown;
@@ -196,6 +124,37 @@ export class RequestDeadlineScheduler {
     this.wake();
   }
 
+  startAndWaitReady(): Promise<RequestDeadlineSchedulerReadiness> {
+    if (this.faultValue) {
+      return Promise.resolve(Object.freeze({ ok: false, fault: this.faultValue }));
+    }
+    if (this.stopped) {
+      return Promise.resolve(
+        Object.freeze({
+          ok: false,
+          fault: new RequestDeadlineSchedulerFault("port_contract_violation"),
+        }),
+      );
+    }
+    if (this.ready) return Promise.resolve(Object.freeze({ ok: true }));
+    const readiness = new Promise<RequestDeadlineSchedulerReadiness>((resolve) => {
+      this.readinessWaiters.push(resolve);
+    });
+    this.start();
+    return readiness;
+  }
+
+  get status(): RequestDeadlineSchedulerStatus {
+    if (this.faultValue) return "faulted";
+    if (this.stopped) return "stopped";
+    if (this.ready) return "ready";
+    return this.active ? "starting" : "idle";
+  }
+
+  get fault(): RequestDeadlineSchedulerFault | undefined {
+    return this.faultValue;
+  }
+
   wake(): void {
     if (!this.active) return;
     this.dirty = true;
@@ -210,11 +169,16 @@ export class RequestDeadlineScheduler {
     this.stopped = true;
     this.active = false;
     this.dirty = false;
+    this.effectController.abort("scheduler_stopped");
     this.releaseStopLatch();
-    if (!this.clearTimerHandle()) this.reportFault("port_contract_violation");
+    const stoppedFault = new RequestDeadlineSchedulerFault("port_contract_violation");
+    this.resolveReadiness(Object.freeze({ ok: false, fault: stoppedFault }));
+    if (!this.clearTimerHandle()) {
+      this.faultValue = stoppedFault;
+      this.reportFault(stoppedFault);
+    }
   }
 
-  /** Deterministic test hook. A stop releases it even if an adapter Promise never settles. */
   async drain(): Promise<void> {
     while (!this.stopped) {
       const observed = this.completion;
@@ -257,17 +221,44 @@ export class RequestDeadlineScheduler {
       if (decision === "stopped") return undefined;
       if (decision === "done") break;
     }
+    if (!(await this.runMaintenance())) return undefined;
     return this.readSchedule();
+  }
+
+  private async runMaintenance(): Promise<boolean> {
+    if (!this.options.maintenance) return this.active;
+    const result = await drainRequestMaintenance({
+      ports: this.options.maintenance,
+      fencingToken: this.options.fencingToken,
+      workspaceKey: this.options.workspaceKey,
+      shouldStop: () => !this.active,
+      abort: this.effectController.signal,
+    });
+    if (!this.active) return false;
+    if (result.ok) return true;
+    this.fail(
+      result.code === "ownership_lost"
+        ? "ownership_lost"
+        : result.code === "contract"
+          ? "port_contract_violation"
+          : "storage_failure",
+    );
+    return false;
   }
 
   private async expireBatch(budget: PumpBudget): Promise<BatchDecision> {
     let returned: unknown;
     try {
-      returned = await this.options.requests.expireDueRequests({
-        fencingToken: this.options.fencingToken,
-        workspaceKey: this.options.workspaceKey,
-        limit: requestDeadlineBatchLimit,
-      });
+      const settlement = await runUntilAborted(this.effectController.signal, () =>
+        this.options.requests.expireDueRequests({
+          fencingToken: this.options.fencingToken,
+          workspaceKey: this.options.workspaceKey,
+          limit: requestDeadlineBatchLimit,
+        }),
+      );
+      if (settlement.kind === "aborted") return "stopped";
+      if (settlement.kind === "rejected") throw settlement.cause;
+      returned = settlement.value;
     } catch (cause: unknown) {
       this.fail(cause instanceof OwnershipLostFault ? "ownership_lost" : "storage_failure");
       return "stopped";
@@ -299,10 +290,15 @@ export class RequestDeadlineScheduler {
     if (before === undefined) return undefined;
     let returned: unknown;
     try {
-      returned = await this.options.requests.readNextPendingDeadline({
-        fencingToken: this.options.fencingToken,
-        workspaceKey: this.options.workspaceKey,
-      });
+      const settlement = await runUntilAborted(this.effectController.signal, () =>
+        this.options.requests.readNextPendingDeadline({
+          fencingToken: this.options.fencingToken,
+          workspaceKey: this.options.workspaceKey,
+        }),
+      );
+      if (settlement.kind === "aborted") return undefined;
+      if (settlement.kind === "rejected") throw settlement.cause;
+      returned = settlement.value;
     } catch (cause: unknown) {
       this.fail(cause instanceof OwnershipLostFault ? "ownership_lost" : "storage_failure");
       return undefined;
@@ -314,7 +310,7 @@ export class RequestDeadlineScheduler {
       this.fail("port_contract_violation");
       return undefined;
     }
-    const schedule = inspectSchedule(returned);
+    const schedule = inspectPendingDeadlineSchedule(returned);
     if (schedule) return { schedule, elapsedMs: after - before };
     this.fail("port_contract_violation");
     return undefined;
@@ -328,7 +324,7 @@ export class RequestDeadlineScheduler {
     | { readonly failure: RequestDeadlineSchedulerFaultCode }
     | undefined {
     try {
-      const result = dataRecord(value, 2);
+      const result = snapshotDataRecord(value, 2);
       if (!result) throw new TypeError();
       const keys = Object.keys(result);
       if (result.ok === false) {
@@ -344,14 +340,14 @@ export class RequestDeadlineScheduler {
       if (result.ok !== true || keys.length !== 2 || !keys.includes("requests")) {
         throw new TypeError();
       }
-      const rawRequests = denseArray(result.requests, requestDeadlineBatchLimit);
+      const rawRequests = snapshotDenseArray(result.requests, requestDeadlineBatchLimit);
       if (!rawRequests) throw new TypeError();
       if (budget.expiredRows + rawRequests.length > requestDeadlineMaximumExpiredRowsPerPump) {
         throw new TypeError();
       }
       const requests: RequestMetadata[] = [];
       for (const raw of rawRequests) {
-        const request = dataRecord(raw, requestDeadlineMaximumMetadataKeys);
+        const request = inspectRequestMetadata(raw);
         if (
           !request ||
           !isCoherentRequestMetadata(request) ||
@@ -425,7 +421,19 @@ export class RequestDeadlineScheduler {
       return true;
     }
     if (this.dirty) return this.clearTimer();
+    if (this.timerArmed) this.markReady();
     return true;
+  }
+
+  private markReady(): void {
+    if (this.ready || this.stopped) return;
+    this.ready = true;
+    this.resolveReadiness(Object.freeze({ ok: true }));
+  }
+
+  private resolveReadiness(value: RequestDeadlineSchedulerReadiness): void {
+    const waiters = this.readinessWaiters.splice(0);
+    for (const resolve of waiters) resolve(value);
   }
 
   private clearTimer(): boolean {
@@ -468,22 +476,24 @@ export class RequestDeadlineScheduler {
     this.stopped = true;
     this.active = false;
     this.dirty = false;
+    this.effectController.abort("scheduler_faulted");
     this.releaseStopLatch();
     this.timerVersion += 1;
     this.clearTimerHandle();
-    this.reportFault(code);
+    const fault = new RequestDeadlineSchedulerFault(code);
+    this.faultValue = fault;
+    this.resolveReadiness(Object.freeze({ ok: false, fault }));
+    this.reportFault(fault);
   }
 
-  private reportFault(code: RequestDeadlineSchedulerFaultCode): void {
+  private reportFault(fault: RequestDeadlineSchedulerFault): void {
     if (this.faultReported) return;
     this.faultReported = true;
     const callback = this.options.onFault;
     if (!callback) return;
     try {
-      const returned: unknown = callback(new RequestDeadlineSchedulerFault(code));
+      const returned: unknown = callback(fault);
       if (returned !== undefined) observeNativePromiseRejection(returned);
-    } catch {
-      // Fault reporting cannot revive or reject the stopped scheduler pump.
-    }
+    } catch {}
   }
 }

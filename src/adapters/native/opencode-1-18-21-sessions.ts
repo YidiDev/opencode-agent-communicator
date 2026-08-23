@@ -8,24 +8,47 @@ export interface NativeSession {
   readonly isArchived: boolean;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+const nativeSessionListHardCeiling = 1_000;
+
+function snapshotDictionary(
+  value: unknown,
+  maximumKeys = 10_000,
+): Record<string, unknown> | undefined {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length > maximumKeys || keys.some((key) => typeof key !== "string")) return undefined;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const snapshot: Record<string, unknown> = Object.create(null);
+    for (const key of keys as string[]) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor?.enumerable || !("value" in descriptor)) return undefined;
+      snapshot[key] = descriptor.value;
+    }
+    return snapshot;
+  } catch {
+    return undefined;
+  }
 }
 
-function data(value: unknown, label: string): unknown {
-  if (!isRecord(value) || value.error !== undefined || !("data" in value)) {
+export function snapshotEnvelopeData(value: unknown, label: string): unknown {
+  const envelope = snapshotDictionary(value, 8);
+  if (!envelope || envelope.error !== undefined || !Object.hasOwn(envelope, "data")) {
     throw new Error(`${label} response envelope is malformed.`);
   }
-  return value.data;
+  return envelope.data;
 }
 
 function nativeSession(value: unknown): NativeSession {
-  if (!isRecord(value) || typeof value.title !== "string" || !isRecord(value.time)) {
+  const session = snapshotDictionary(value, 32);
+  const time = session && snapshotDictionary(session.time, 8);
+  if (!session || typeof session.title !== "string" || !time) {
     throw new Error("Native session entry is malformed.");
   }
-  const id = validateSessionId(value.id);
-  const updated = value.time.updated;
-  const archived = value.time.archived;
+  const id = validateSessionId(session.id);
+  const updated = time.updated;
+  const archived = time.archived;
   if (!id.ok || typeof updated !== "number" || !Number.isFinite(updated)) {
     throw new Error("Native session identity or update time is malformed.");
   }
@@ -34,42 +57,85 @@ function nativeSession(value: unknown): NativeSession {
   }
   return {
     id: id.value,
-    title: value.title,
+    title: session.title,
     updatedAtMs: updated,
     isArchived: archived !== undefined,
   };
 }
 
 export function parseSessionArray(value: unknown, label: string): NativeSession[] {
-  if (!Array.isArray(value)) throw new Error(`${label} is malformed.`);
-  return value.map(nativeSession);
+  let length: number;
+  let keys: readonly PropertyKey[];
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+      throw new Error(`${label} is malformed.`);
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, "length");
+    length = descriptor?.value;
+    keys = Reflect.ownKeys(value);
+  } catch {
+    throw new Error(`${label} is malformed.`);
+  }
+  if (
+    !Number.isSafeInteger(length) ||
+    length < 0 ||
+    length > nativeSessionListHardCeiling ||
+    keys.length !== length + 1
+  ) {
+    throw new Error(`${label} is malformed.`);
+  }
+  const sessions: NativeSession[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const key = String(index);
+    if (!keys.includes(key)) throw new Error(`${label} is malformed.`);
+    let descriptor: PropertyDescriptor | undefined;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(value, key);
+    } catch {
+      throw new Error(`${label} is malformed.`);
+    }
+    if (!descriptor?.enumerable || !("value" in descriptor)) {
+      throw new Error(`${label} is malformed.`);
+    }
+    sessions.push(nativeSession(descriptor.value));
+  }
+  return sessions;
 }
 
 export function parseV2SessionArray(value: unknown): NativeSession[] {
-  const response = data(value, "V2 session listing");
-  if (!isRecord(response)) throw new Error("V2 listing is malformed.");
+  const response = snapshotDictionary(snapshotEnvelopeData(value, "V2 session listing"), 8);
+  if (!response || !Object.hasOwn(response, "data")) throw new Error("V2 listing is malformed.");
   return parseSessionArray(response.data, "V2 listing data");
 }
 
 export function parseActiveMap(value: unknown): Record<string, unknown> {
-  const response = data(value, "V2 active status");
-  if (!isRecord(response) || !isRecord(response.data)) {
+  const response = snapshotEnvelopeData(value, "V2 active status");
+  const responseRecord = snapshotDictionary(response);
+  const active = responseRecord && snapshotDictionary(responseRecord.data);
+  if (!active) {
     throw new Error("V2 active status map is malformed.");
   }
-  return response.data;
+  return active;
+}
+
+export function parseActivityMap(value: unknown, label: string): Record<string, unknown> {
+  const snapshot = snapshotDictionary(value);
+  if (!snapshot) throw new Error(`${label} map is malformed.`);
+  return snapshot;
 }
 
 function activityStatus(value: unknown): ActivityStatus {
-  if (!isRecord(value)) return "unknown";
-  if (value.type === "busy" || value.type === "idle") return value.type;
+  const entry = snapshotDictionary(value, 4);
+  if (!entry) return "unknown";
+  if (entry.type === "busy" || entry.type === "idle") return entry.type;
   if (
-    value.type === "retry" &&
-    Number.isSafeInteger(value.attempt) &&
-    (value.attempt as number) >= 0 &&
-    typeof value.message === "string" &&
-    typeof value.next === "number" &&
-    Number.isFinite(value.next) &&
-    value.next >= 0
+    entry.type === "retry" &&
+    Number.isSafeInteger(entry.attempt) &&
+    (entry.attempt as number) >= 0 &&
+    typeof entry.message === "string" &&
+    typeof entry.next === "number" &&
+    Number.isFinite(entry.next) &&
+    entry.next >= 0
   ) {
     return "retry";
   }
@@ -81,11 +147,12 @@ export function mergedActivityStatus(
   active: Readonly<Record<string, unknown>>,
   id: SessionId,
 ): ActivityStatus {
-  const legacy = id in statuses ? activityStatus(statuses[id]) : "idle";
+  const legacy = Object.hasOwn(statuses, id) ? activityStatus(statuses[id]) : "idle";
   if (legacy === "busy" || legacy === "retry") return legacy;
-  if (!(id in active)) return legacy;
+  if (!Object.hasOwn(active, id)) return legacy;
   const activeEntry = active[id];
-  return isRecord(activeEntry) && activeEntry.type === "running" ? "busy" : "unknown";
+  const snapshot = snapshotDictionary(activeEntry, 2);
+  return snapshot?.type === "running" ? "busy" : "unknown";
 }
 
 export function combineRootSets(

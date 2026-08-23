@@ -1,5 +1,6 @@
 import type { StartupRecoveryBarrier } from "../../application/delivery-ports";
 import type { DeliveryMetadata, DeliveryParticipantRole } from "../../domain/deliveries";
+import { validateDeliveryId } from "../../domain/generated-ids";
 import { type FencingToken, OwnershipLostFault } from "../../domain/ownership";
 import { type DeliveryRow, deliveryMetadataColumns, hydrateDelivery } from "./delivery-rows";
 import type { OwnershipRepository } from "./ownership-repository";
@@ -17,6 +18,7 @@ export class DeliveryQueryRepository {
     readonly workspaceKey: string;
     readonly state: "prepared" | "submitting";
     readonly limit: number;
+    readonly cursor?: Readonly<{ readonly createdAtMs: number; readonly id: string }>;
     readonly excludeClaimedByToken?: FencingToken;
     readonly startupBarrier?: StartupRecoveryBarrier;
   }): readonly DeliveryMetadata[] {
@@ -38,19 +40,36 @@ export class DeliveryQueryRepository {
       this.ownership.assertBarrier(input.startupBarrier, input.fencingToken);
       rows = this.context.database
         .query<DeliveryRow, [string, number, number]>(
-          `SELECT ${deliveryMetadataColumns} FROM deliveries
+          `SELECT ${deliveryMetadataColumns} FROM deliveries INDEXED BY deliveries_submitting_startup_v7
            WHERE workspace_key = ? AND state = 'submitting' AND claimed_fencing_token != ?
            ORDER BY created_at_ms, id LIMIT ?`,
         )
         .all(input.workspaceKey, input.excludeClaimedByToken, input.limit);
     } else {
       this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
-      rows = this.context.database
-        .query<DeliveryRow, [string, number]>(
-          `SELECT ${deliveryMetadataColumns} FROM deliveries
-           WHERE workspace_key = ? AND state = 'prepared' ORDER BY created_at_ms, id LIMIT ?`,
-        )
-        .all(input.workspaceKey, input.limit);
+      if (input.cursor === undefined) {
+        rows = this.context.database
+          .query<DeliveryRow, [string, number]>(
+            `SELECT ${deliveryMetadataColumns} FROM deliveries INDEXED BY deliveries_prepared_startup_v7
+             WHERE workspace_key = ? AND state = 'prepared' ORDER BY created_at_ms, id LIMIT ?`,
+          )
+          .all(input.workspaceKey, input.limit);
+      } else {
+        if (
+          !Number.isSafeInteger(input.cursor.createdAtMs) ||
+          input.cursor.createdAtMs < 0 ||
+          !validateDeliveryId(input.cursor.id).ok
+        ) {
+          throw new StoreIntegrityError("The delivery recovery cursor is malformed.");
+        }
+        rows = this.context.database
+          .query<DeliveryRow, [string, number, string, number]>(
+            `SELECT ${deliveryMetadataColumns} FROM deliveries INDEXED BY deliveries_prepared_startup_v7
+             WHERE workspace_key = ? AND state = 'prepared' AND (created_at_ms, id) > (?, ?)
+             ORDER BY created_at_ms, id LIMIT ?`,
+          )
+          .all(input.workspaceKey, input.cursor.createdAtMs, input.cursor.id, input.limit);
+      }
     }
     return rows.map(hydrateDelivery);
   }

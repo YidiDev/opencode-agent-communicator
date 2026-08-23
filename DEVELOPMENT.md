@@ -84,6 +84,10 @@ Additional rules:
 - `@ts-ignore` MUST NOT be used.
 - `@ts-expect-error` MAY be used in a type-level test with a reason.
 - Public and persistence-boundary return types MUST be explicit.
+- Persistence adapters are internal trusted ports, not public readiness boundaries. Public
+  composition MUST complete lifecycle recovery before registering or exposing any tool. Every
+  tool-facing application use case MUST also call `CommunicatorReadinessPort.assertReady()` before
+  validation or effects.
 - Exhaustive discriminated-union switches MUST end in a `never` check.
 - IDs MUST use branded types after runtime validation.
 - Runtime schemas and TypeScript types MUST come from one canonical definition.
@@ -166,6 +170,9 @@ central allowlist process as size exceptions.
 - Persisted `prepared` state MUST prove an external call has not begun.
 - Persisted `submitting` state MUST be treated as ambiguous after process loss
   unless authoritative evidence resolves it.
+- Request startup recovery has separate immutable workspace bounds: 1024 pending
+  prepared/expiry records and 4096 `delivery_state = submitting` records across
+  every resolution state, including terminal metadata.
 - Ambiguous external effects MUST NOT be retried automatically.
 - Terminal transitions MUST commit before an in-memory waiter resolves.
 - Cleanup MUST be idempotent.
