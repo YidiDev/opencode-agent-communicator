@@ -32,6 +32,9 @@ export class DeliveryQueryRepository {
       if (input.excludeClaimedByToken === undefined || input.startupBarrier === undefined) {
         throw new OwnershipLostFault("Submitting recovery requires a startup barrier.");
       }
+      if (input.excludeClaimedByToken !== input.fencingToken) {
+        throw new OwnershipLostFault("Delivery recovery exclusion must match its fencing token.");
+      }
       this.ownership.assertBarrier(input.startupBarrier, input.fencingToken);
       rows = this.context.database
         .query<DeliveryRow, [string, number, number]>(

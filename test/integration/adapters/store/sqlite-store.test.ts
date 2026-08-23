@@ -145,12 +145,12 @@ describe("Linux private SQLite initialization", () => {
     first.close();
 
     const second = openStore({ state: location.state, ownerId: "owner-reopen", time });
-    expect(second.schemaVersion).toBe(3);
+    expect(second.schemaVersion).toBe(4);
     const migrationCount = inspect<{ count: number }>(
       second.databasePath,
       "SELECT count(*) AS count FROM schema_migrations",
     );
-    expect(migrationCount?.count).toBe(3);
+    expect(migrationCount?.count).toBe(4);
     expect(Number(await second.acquire())).toBe(Number(token) + 1);
     expect(await second.readStorageDiagnostics()).toEqual({
       journalMode: "wal",
@@ -237,7 +237,7 @@ describe("Linux private SQLite initialization", () => {
     expect(() => openStore({ state: location.state })).toThrow(StoreIntegrityError);
   });
 
-  test("does not speculate on a pre-v3 schema while its legacy lease is active", async () => {
+  test("does not speculate on a pre-v4 schema while its lease is active", async () => {
     const location = temporaryState();
     const time = clock();
     const first = openStore({ state: location.state, ownerId: "legacy-owner", time });
@@ -262,13 +262,13 @@ describe("Linux private SQLite initialization", () => {
         first.databasePath,
         "SELECT user_version AS version FROM pragma_user_version",
       )?.version,
-    ).toBe(2);
+    ).toBe(3);
     expect(
       inspect<{ count: number }>(
         first.databasePath,
         "SELECT count(*) AS count FROM pragma_table_info('ownership')",
       )?.count,
-    ).toBe(6);
+    ).toBe(8);
 
     time.advance(1_099);
     expect(() => openStore({ state: location.state, ownerId: "grace-blocked", time })).toThrow(
@@ -276,7 +276,7 @@ describe("Linux private SQLite initialization", () => {
     );
     time.advance(2);
     const migrated = openStore({ state: location.state, ownerId: "expired-bootstrap", time });
-    expect(migrated.schemaVersion).toBe(3);
+    expect(migrated.schemaVersion).toBe(4);
     migrated.close();
     first.close();
   });

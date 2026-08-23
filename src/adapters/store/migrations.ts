@@ -339,6 +339,206 @@ DROP TABLE ownership_v3;
 ALTER TABLE ownership_restore RENAME TO ownership;
 `,
   },
+  {
+    version: 4,
+    checksum: "sha256:26e2bda38b4851017143a4fd0269cf542b4f6c4a96a64f1654e8b8c527219470",
+    sql: `
+CREATE TABLE requests (
+  id TEXT PRIMARY KEY CHECK (
+    length(id) = 36 AND substr(id, 1, 4) = 'req_' AND substr(id, 5) NOT GLOB '*[^0-9a-f]*'
+  ),
+  workspace_key TEXT NOT NULL REFERENCES workspaces(workspace_key) ON DELETE CASCADE CHECK (
+    length(workspace_key) BETWEEN 1 AND 128 AND substr(workspace_key, 1, 1) GLOB '[A-Za-z0-9]' AND
+    workspace_key NOT GLOB '*[^A-Za-z0-9._:-]*'
+  ),
+  source_session_id TEXT NOT NULL CHECK (
+    length(source_session_id) BETWEEN 5 AND 132 AND substr(source_session_id, 1, 4) = 'ses_' AND
+    substr(source_session_id, 5) NOT GLOB '*[^A-Za-z0-9]*'
+  ),
+  target_session_id TEXT NOT NULL CHECK (
+    length(target_session_id) BETWEEN 5 AND 132 AND substr(target_session_id, 1, 4) = 'ses_' AND
+    substr(target_session_id, 5) NOT GLOB '*[^A-Za-z0-9]*'
+  ),
+  native_message_id TEXT NOT NULL CHECK (
+    length(native_message_id) = 36 AND substr(native_message_id, 1, 4) = 'msg_' AND
+    substr(native_message_id, 5) NOT GLOB '*[^0-9a-f]*'
+  ),
+  kind TEXT NOT NULL CHECK (kind IN ('ask','wait')),
+  resolution_state TEXT NOT NULL CHECK (resolution_state IN (
+    'pending','answered','reached','deadline_expired','cancelled','delivery_failed',
+    'target_stopped','source_stopped','target_deleted','source_deleted'
+  )),
+  delivery_state TEXT NOT NULL CHECK (delivery_state IN (
+    'prepared','submitting','delivery_unknown','admitted','promoted','delivery_failed'
+  )),
+  result_state TEXT NOT NULL CHECK (result_state IN ('none','available','expired','acknowledged')),
+  payload_byte_length INTEGER NOT NULL CHECK (payload_byte_length BETWEEN 1 AND 32768),
+  retained_content_byte_length INTEGER CHECK (
+    retained_content_byte_length IS NULL OR retained_content_byte_length BETWEEN 2 AND 98304
+  ),
+  payload_sha256 TEXT CHECK (
+    payload_sha256 IS NULL OR (length(payload_sha256) = 64 AND payload_sha256 NOT GLOB '*[^0-9a-f]*')
+  ),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms BETWEEN 0 AND 9007199254740991),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms BETWEEN created_at_ms AND 9007199254740991),
+  deadline_at_ms INTEGER NOT NULL CHECK (deadline_at_ms BETWEEN created_at_ms + 1 AND 9007199254740991),
+  submitted_at_ms INTEGER CHECK (submitted_at_ms IS NULL OR submitted_at_ms BETWEEN created_at_ms AND updated_at_ms),
+  delivery_unknown_at_ms INTEGER CHECK (
+    delivery_unknown_at_ms IS NULL OR delivery_unknown_at_ms BETWEEN submitted_at_ms AND updated_at_ms
+  ),
+  admitted_at_ms INTEGER CHECK (admitted_at_ms IS NULL OR admitted_at_ms BETWEEN submitted_at_ms AND updated_at_ms),
+  promoted_at_ms INTEGER CHECK (promoted_at_ms IS NULL OR promoted_at_ms BETWEEN admitted_at_ms AND updated_at_ms),
+  delivery_failed_at_ms INTEGER CHECK (
+    delivery_failed_at_ms IS NULL OR delivery_failed_at_ms BETWEEN submitted_at_ms AND updated_at_ms
+  ),
+  claimed_fencing_token INTEGER CHECK (
+    claimed_fencing_token IS NULL OR claimed_fencing_token BETWEEN 1 AND 9007199254740991
+  ),
+  admitted_seq INTEGER CHECK (admitted_seq IS NULL OR admitted_seq BETWEEN 0 AND 9007199254740991),
+  promoted_seq INTEGER CHECK (promoted_seq IS NULL OR promoted_seq BETWEEN 0 AND 9007199254740991),
+  evidence_observed_at_ms INTEGER CHECK (
+    evidence_observed_at_ms IS NULL OR evidence_observed_at_ms BETWEEN admitted_at_ms AND updated_at_ms
+  ),
+  resolved_at_ms INTEGER CHECK (resolved_at_ms IS NULL OR resolved_at_ms BETWEEN created_at_ms AND updated_at_ms),
+  result_byte_length INTEGER CHECK (result_byte_length IS NULL OR result_byte_length BETWEEN 1 AND 32768),
+  result_sha256 TEXT CHECK (
+    result_sha256 IS NULL OR (length(result_sha256) = 64 AND result_sha256 NOT GLOB '*[^0-9a-f]*')
+  ),
+  result_available_at_ms INTEGER CHECK (
+    result_available_at_ms IS NULL OR result_available_at_ms BETWEEN resolved_at_ms AND updated_at_ms
+  ),
+  result_expires_at_ms INTEGER CHECK (
+    result_expires_at_ms IS NULL OR result_expires_at_ms = result_available_at_ms + 86400000
+  ),
+  result_expired_at_ms INTEGER CHECK (
+    result_expired_at_ms IS NULL OR result_expired_at_ms BETWEEN result_expires_at_ms AND updated_at_ms
+  ),
+  acknowledged_at_ms INTEGER CHECK (
+    acknowledged_at_ms IS NULL OR acknowledged_at_ms BETWEEN result_available_at_ms AND updated_at_ms
+  ),
+  CHECK (source_session_id <> target_session_id),
+  CHECK ((resolution_state = 'pending') = (payload_sha256 IS NOT NULL)),
+  CHECK ((resolution_state = 'pending') = (retained_content_byte_length IS NOT NULL)),
+  CHECK ((resolution_state = 'pending') = (resolved_at_ms IS NULL)),
+  CHECK ((resolution_state = 'answered') = (kind = 'ask' AND result_state <> 'none')),
+  CHECK ((resolution_state = 'reached') = (kind = 'wait' AND result_state <> 'none')),
+  CHECK ((resolution_state IN ('answered','reached')) = (result_state <> 'none')),
+  CHECK ((delivery_state = 'prepared') = (submitted_at_ms IS NULL)),
+  CHECK (delivery_state <> 'delivery_unknown' OR delivery_unknown_at_ms IS NOT NULL),
+  CHECK (delivery_unknown_at_ms IS NULL OR delivery_state IN ('delivery_unknown','delivery_failed')),
+  CHECK ((delivery_state IN ('admitted','promoted')) = (admitted_at_ms IS NOT NULL)),
+  CHECK ((delivery_state = 'promoted') = (promoted_at_ms IS NOT NULL)),
+  CHECK ((delivery_state = 'delivery_failed') = (delivery_failed_at_ms IS NOT NULL)),
+  CHECK ((delivery_state <> 'prepared') = (claimed_fencing_token IS NOT NULL)),
+  CHECK ((delivery_state IN ('admitted','promoted')) = (admitted_seq IS NOT NULL)),
+  CHECK ((delivery_state = 'promoted') = (promoted_seq IS NOT NULL)),
+  CHECK ((delivery_state IN ('admitted','promoted')) = (evidence_observed_at_ms IS NOT NULL)),
+  CHECK (promoted_seq IS NULL OR promoted_seq > admitted_seq),
+  CHECK (delivery_state <> 'delivery_unknown' OR delivery_unknown_at_ms >= submitted_at_ms),
+  CHECK (delivery_state <> 'delivery_failed' OR (
+    delivery_failed_at_ms >= COALESCE(delivery_unknown_at_ms, submitted_at_ms) AND
+    (resolution_state <> 'pending')
+  )),
+  CHECK (resolution_state <> 'delivery_failed' OR (
+    delivery_state = 'delivery_failed' AND resolved_at_ms = delivery_failed_at_ms
+  )),
+  CHECK (delivery_state <> 'delivery_failed' OR resolution_state = 'delivery_failed' OR delivery_failed_at_ms >= resolved_at_ms),
+  CHECK (resolution_state <> 'deadline_expired' OR resolved_at_ms >= deadline_at_ms),
+  CHECK (resolution_state IN ('pending','deadline_expired') OR resolved_at_ms < deadline_at_ms),
+  CHECK ((result_state = 'available') = (result_byte_length IS NOT NULL)),
+  CHECK ((result_state = 'available') = (result_sha256 IS NOT NULL)),
+  CHECK ((result_state <> 'none') = (result_available_at_ms IS NOT NULL)),
+  CHECK ((result_state <> 'none') = (result_expires_at_ms IS NOT NULL)),
+  CHECK (result_state <> 'expired' OR result_expired_at_ms IS NOT NULL),
+  CHECK (result_expired_at_ms IS NULL OR result_state IN ('expired','acknowledged')),
+  CHECK ((result_state = 'acknowledged') = (acknowledged_at_ms IS NOT NULL)),
+  CHECK (result_state <> 'acknowledged' OR result_expired_at_ms IS NULL OR acknowledged_at_ms >= result_expired_at_ms),
+  CHECK (result_available_at_ms IS NULL OR result_available_at_ms = resolved_at_ms),
+  UNIQUE (id, workspace_key, source_session_id, target_session_id)
+) STRICT, WITHOUT ROWID;
+CREATE UNIQUE INDEX requests_native_message ON requests(workspace_key, native_message_id);
+CREATE INDEX requests_deadline ON requests(workspace_key, deadline_at_ms, id) WHERE resolution_state = 'pending';
+CREATE INDEX requests_prepared_recovery ON requests(workspace_key, created_at_ms, id)
+  WHERE resolution_state = 'pending' AND delivery_state = 'prepared';
+CREATE INDEX requests_submitting_recovery ON requests(workspace_key, created_at_ms, id, claimed_fencing_token)
+  WHERE delivery_state = 'submitting';
+CREATE INDEX requests_source ON requests(workspace_key, source_session_id, created_at_ms, id);
+CREATE INDEX requests_target ON requests(workspace_key, target_session_id, created_at_ms, id);
+CREATE INDEX requests_result_expiry ON requests(workspace_key, result_expires_at_ms, id)
+  WHERE result_state = 'available';
+CREATE INDEX requests_metadata_gc ON requests(workspace_key, resolved_at_ms, id)
+  WHERE resolution_state <> 'pending' AND result_state <> 'available';
+CREATE INDEX requests_pending_workspace_quota
+  ON requests(workspace_key, retained_content_byte_length) WHERE resolution_state = 'pending';
+CREATE INDEX requests_pending_source_quota
+  ON requests(workspace_key, source_session_id, retained_content_byte_length)
+  WHERE resolution_state = 'pending';
+CREATE INDEX requests_pending_target_quota
+  ON requests(workspace_key, target_session_id, retained_content_byte_length)
+  WHERE resolution_state = 'pending';
+CREATE TABLE request_payloads (
+  request_id TEXT PRIMARY KEY REFERENCES requests(id) ON DELETE CASCADE,
+  payload_json TEXT NOT NULL CHECK (
+    length(CAST(payload_json AS BLOB)) BETWEEN 1 AND 32768 AND json_valid(payload_json)
+  ),
+  envelope_json TEXT NOT NULL CHECK (
+    length(CAST(envelope_json AS BLOB)) BETWEEN 1 AND 65536 AND json_valid(envelope_json)
+  )
+) STRICT, WITHOUT ROWID;
+CREATE TABLE request_wait_edges (
+  request_id TEXT PRIMARY KEY,
+  workspace_key TEXT NOT NULL REFERENCES workspaces(workspace_key) ON DELETE CASCADE CHECK (
+    length(workspace_key) BETWEEN 1 AND 128 AND substr(workspace_key, 1, 1) GLOB '[A-Za-z0-9]' AND
+    workspace_key NOT GLOB '*[^A-Za-z0-9._:-]*'
+  ),
+  source_session_id TEXT NOT NULL CHECK (
+    length(source_session_id) BETWEEN 5 AND 132 AND substr(source_session_id, 1, 4) = 'ses_' AND
+    substr(source_session_id, 5) NOT GLOB '*[^A-Za-z0-9]*'
+  ),
+  target_session_id TEXT NOT NULL CHECK (
+    length(target_session_id) BETWEEN 5 AND 132 AND substr(target_session_id, 1, 4) = 'ses_' AND
+    substr(target_session_id, 5) NOT GLOB '*[^A-Za-z0-9]*'
+  ),
+  CHECK (source_session_id <> target_session_id),
+  FOREIGN KEY (request_id, workspace_key, source_session_id, target_session_id)
+    REFERENCES requests(id, workspace_key, source_session_id, target_session_id) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+CREATE INDEX request_edges_source ON request_wait_edges(workspace_key, source_session_id, target_session_id);
+CREATE INDEX request_edges_target ON request_wait_edges(workspace_key, target_session_id, source_session_id);
+CREATE TABLE request_rate_events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT CHECK (sequence BETWEEN 1 AND 9007199254740991),
+  workspace_key TEXT NOT NULL REFERENCES workspaces(workspace_key) ON DELETE CASCADE CHECK (
+    length(workspace_key) BETWEEN 1 AND 128 AND substr(workspace_key, 1, 1) GLOB '[A-Za-z0-9]' AND
+    workspace_key NOT GLOB '*[^A-Za-z0-9._:-]*'
+  ),
+  source_session_id TEXT NOT NULL CHECK (
+    length(source_session_id) BETWEEN 5 AND 132 AND substr(source_session_id, 1, 4) = 'ses_' AND
+    substr(source_session_id, 5) NOT GLOB '*[^A-Za-z0-9]*'
+  ),
+  target_session_id TEXT NOT NULL CHECK (
+    length(target_session_id) BETWEEN 5 AND 132 AND substr(target_session_id, 1, 4) = 'ses_' AND
+    substr(target_session_id, 5) NOT GLOB '*[^A-Za-z0-9]*'
+  ),
+  occurred_at_ms INTEGER NOT NULL CHECK (occurred_at_ms BETWEEN 0 AND 9007199254740991)
+) STRICT;
+CREATE INDEX request_rate_workspace ON request_rate_events(workspace_key, occurred_at_ms);
+CREATE INDEX request_rate_source ON request_rate_events(workspace_key, source_session_id, occurred_at_ms);
+CREATE INDEX request_rate_target ON request_rate_events(workspace_key, target_session_id, occurred_at_ms);
+CREATE TABLE request_results (
+  request_id TEXT PRIMARY KEY REFERENCES requests(id) ON DELETE CASCADE,
+  result_json TEXT NOT NULL CHECK (
+    length(CAST(result_json AS BLOB)) BETWEEN 1 AND 32768 AND json_valid(result_json)
+  )
+) STRICT, WITHOUT ROWID;
+`,
+    downSql: `
+DROP TABLE request_results;
+DROP TABLE request_rate_events;
+DROP TABLE request_wait_edges;
+DROP TABLE request_payloads;
+DROP TABLE requests;
+`,
+  },
 ] as const;
 
 interface VersionRow {
