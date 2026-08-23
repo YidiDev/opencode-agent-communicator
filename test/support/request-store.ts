@@ -67,8 +67,14 @@ export function openRequestStore(
   });
 }
 
-function session(value: string) {
+export function requestSession(value: string) {
   const result = validateSessionId(value);
+  if (!result.ok) throw new Error(result.message);
+  return result.value;
+}
+
+export function requestWorkspace(value: string): WorkspaceKey {
+  const result = validateWorkspaceKey(value);
   if (!result.ok) throw new Error(result.message);
   return result.value;
 }
@@ -93,8 +99,8 @@ export async function requestFixture(
   workspaceKey = requestTestWorkspace(),
 ): Promise<PrepareRequestInput> {
   const ids = identities(createdAtMs % 251);
-  const sourceSessionId = session(sourceName);
-  const targetSessionId = session(targetName);
+  const sourceSessionId = requestSession(sourceName);
+  const targetSessionId = requestSession(targetName);
   const id = ids.requestId();
   const nativeMessageId = ids.nativeMessageId();
   const payload = await canonicalizeSerializeAndDigestPendingRequestPayload(digest, {
@@ -111,6 +117,59 @@ export async function requestFixture(
     targetSessionId,
     nativeMessageId,
     kind: "wait",
+    resolutionState: "pending",
+    deliveryState: "prepared",
+    resultState: "none",
+    payloadByteLength: payload.byteLength,
+    payloadSha256: payload.sha256,
+    createdAtMs,
+    updatedAtMs: createdAtMs,
+    deadlineAtMs,
+  };
+  const envelopeJson = await serializeVerifiedRequestEnvelope(
+    {
+      requestId: id,
+      nativeMessageId,
+      sourceSessionId,
+      targetSessionId,
+      workspaceKey,
+      createdAtMs,
+      deadlineAtMs,
+      payload: payload.value,
+    },
+    digest,
+  );
+  return { fencingToken: token, request, payloadJson: payload.serialized, envelopeJson };
+}
+
+export async function requestFixtureForPayload(
+  token: FencingToken,
+  payloadInput: unknown,
+  options: {
+    readonly createdAtMs?: number;
+    readonly identitySeed?: number;
+    readonly sourceName?: string;
+    readonly targetName?: string;
+    readonly workspaceKey?: WorkspaceKey;
+  } = {},
+): Promise<PrepareRequestInput> {
+  const createdAtMs = options.createdAtMs ?? 1_000;
+  const ids = identities(options.identitySeed ?? createdAtMs % 251);
+  const sourceSessionId = requestSession(options.sourceName ?? "ses_source");
+  const targetSessionId = requestSession(options.targetName ?? "ses_target");
+  const workspaceKey = options.workspaceKey ?? requestTestWorkspace();
+  const id = ids.requestId();
+  const nativeMessageId = ids.nativeMessageId();
+  const payload = await canonicalizeSerializeAndDigestPendingRequestPayload(digest, payloadInput);
+  if (!payload.ok) throw new Error(payload.message);
+  const deadlineAtMs = createdAtMs + payload.value.timeoutSeconds * 1_000;
+  const request: PendingRequestMetadata & { readonly deliveryState: "prepared" } = {
+    id,
+    workspaceKey,
+    sourceSessionId,
+    targetSessionId,
+    nativeMessageId,
+    kind: payload.value.kind,
     resolutionState: "pending",
     deliveryState: "prepared",
     resultState: "none",

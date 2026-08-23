@@ -242,14 +242,20 @@ export type FailedDeliveryRequestMetadata = RequestMetadataBase &
     readonly resolutionState: "delivery_failed";
     readonly resolvedAtMs: number;
   };
-export type OtherUnsuccessfulRequestMetadata = RequestMetadataBase &
-  ErasedPayloadIdentityMetadata &
-  RequestDeliveryMetadata &
-  RequestNoResultMetadata & {
-    readonly kind: RequestKind;
-    readonly resolutionState: Exclude<UnsuccessfulRequestResolutionState, "delivery_failed">;
-    readonly resolvedAtMs: number;
-  };
+type OtherUnsuccessfulResolutionState = Exclude<
+  UnsuccessfulRequestResolutionState,
+  "delivery_failed"
+>;
+export type OtherUnsuccessfulRequestMetadata = {
+  [State in OtherUnsuccessfulResolutionState]: RequestMetadataBase &
+    ErasedPayloadIdentityMetadata &
+    RequestDeliveryMetadata &
+    RequestNoResultMetadata & {
+      readonly kind: RequestKind;
+      readonly resolutionState: State;
+      readonly resolvedAtMs: number;
+    };
+}[OtherUnsuccessfulResolutionState];
 export type UnsuccessfulTerminalRequestMetadata =
   | FailedDeliveryRequestMetadata
   | OtherUnsuccessfulRequestMetadata;

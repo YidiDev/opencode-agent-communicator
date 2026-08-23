@@ -116,6 +116,24 @@ describe("request payload validation", () => {
 
   test("measures multibyte text and canonical JSON at exact UTF-8 boundaries", () => {
     expect(
+      validateAskQuestion({ prompt: "a".repeat(requestLimits.promptBytes), options: ["x"] }).ok,
+    ).toBe(true);
+    expect(
+      validateAskQuestion({ prompt: "a".repeat(requestLimits.promptBytes + 1), options: ["x"] }).ok,
+    ).toBe(false);
+    expect(
+      validateAskQuestion({
+        prompt: "🚀".repeat(requestLimits.promptBytes / 4),
+        options: ["x"],
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateAskQuestion({
+        prompt: `${"🚀".repeat(requestLimits.promptBytes / 4)}a`,
+        options: ["x"],
+      }).ok,
+    ).toBe(false);
+    expect(
       validateAskQuestion({ prompt: "é".repeat(requestLimits.promptBytes / 2), options: ["x"] }).ok,
     ).toBe(true);
     expect(

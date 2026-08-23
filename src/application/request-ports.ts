@@ -1,6 +1,18 @@
 import type { NativeMessageId, RequestId } from "../domain/generated-ids";
 import type { FencingToken } from "../domain/ownership";
-import type { PendingRequestMetadata, RequestMetadata } from "../domain/request-types";
+import type {
+  AnsweredAskRequestMetadata,
+  AskRequestResult,
+  PendingRequestMetadata,
+  ReachedWaitRequestMetadata,
+  RequestAcknowledgedResultMetadata,
+  RequestExpiredResultMetadata,
+  RequestMetadata,
+  RequestResolutionState,
+  RetainedRequestResult,
+  WaitRequestResult,
+} from "../domain/request-types";
+import type { SessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
 import type { OperationControl, StartupRecoveryBarrier } from "./delivery-ports";
 
@@ -139,4 +151,101 @@ export interface RequestRetentionPersistencePort {
     readonly workspaceKey: WorkspaceKey;
     readonly limit: number;
   }): Promise<RequestRetentionResult>;
+}
+
+export type RequestTerminalFailureCode = RequestStoreFailureCode | "not_found_or_unauthorized";
+export type RequestTerminalFailure =
+  | {
+      readonly ok: false;
+      readonly code: "state_conflict";
+      /** Present only when an authorized, coherent authoritative state won. */
+      readonly request?: RequestMetadata;
+    }
+  | {
+      readonly ok: false;
+      readonly code: Exclude<RequestTerminalFailureCode, "state_conflict">;
+      readonly request?: never;
+    };
+
+export interface RequestParticipantMutationInput {
+  readonly fencingToken: FencingToken;
+  readonly workspaceKey: WorkspaceKey;
+  readonly requestId: RequestId;
+  readonly callerSessionId: SessionId;
+}
+
+export type RequestTerminalWriteResult<
+  Metadata extends RequestMetadata,
+  Result extends RetainedRequestResult,
+> =
+  | {
+      readonly ok: true;
+      readonly outcome: "applied";
+      readonly request: Metadata;
+      readonly result: Result;
+    }
+  | RequestTerminalFailure;
+
+export type AuthoritativeTerminalResolution = Exclude<RequestResolutionState, "pending">;
+export type RequestMetadataAtResolution<State extends RequestResolutionState> = Extract<
+  RequestMetadata,
+  { readonly resolutionState: State }
+>;
+type NonCancelledTerminalResolution = Exclude<AuthoritativeTerminalResolution, "cancelled">;
+type CancelTerminalStateResult = {
+  [State in NonCancelledTerminalResolution]: {
+    readonly ok: true;
+    readonly outcome: "terminal_state";
+    readonly resolutionState: State;
+    readonly request: RequestMetadataAtResolution<State>;
+  };
+}[NonCancelledTerminalResolution];
+export type AnsweredOrReachedRequestMetadata =
+  | AnsweredAskRequestMetadata
+  | ReachedWaitRequestMetadata;
+export type AcknowledgedAnsweredOrReachedRequestMetadata = AnsweredOrReachedRequestMetadata &
+  RequestAcknowledgedResultMetadata;
+export type ExpiredAnsweredOrReachedRequestMetadata = AnsweredOrReachedRequestMetadata &
+  RequestExpiredResultMetadata;
+
+export type CancelPendingResult =
+  | {
+      readonly ok: true;
+      readonly outcome: "applied" | "idempotent";
+      readonly resolutionState: "cancelled";
+      readonly request: RequestMetadataAtResolution<"cancelled">;
+    }
+  | CancelTerminalStateResult
+  | RequestTerminalFailure;
+
+export type AcknowledgeRequestResult =
+  | {
+      readonly ok: true;
+      readonly outcome: "applied" | "idempotent";
+      readonly request: AcknowledgedAnsweredOrReachedRequestMetadata;
+    }
+  | RequestTerminalFailure;
+
+export type ExpireAvailableResultsResult =
+  | { readonly ok: true; readonly requests: readonly ExpiredAnsweredOrReachedRequestMetadata[] }
+  | { readonly ok: false; readonly code: RequestStoreFailureCode };
+
+export interface RequestTerminalPersistencePort {
+  answerAsk(
+    input: RequestParticipantMutationInput & { readonly answers: AskRequestResult["answers"] },
+  ): Promise<RequestTerminalWriteResult<AnsweredAskRequestMetadata, AskRequestResult>>;
+  signalWait(
+    input: RequestParticipantMutationInput & { readonly evidence?: string },
+  ): Promise<RequestTerminalWriteResult<ReachedWaitRequestMetadata, WaitRequestResult>>;
+  cancelPending(input: RequestParticipantMutationInput): Promise<CancelPendingResult>;
+  acknowledgeResult(input: RequestParticipantMutationInput): Promise<AcknowledgeRequestResult>;
+}
+
+export interface RequestResultRetentionPersistencePort {
+  /** Store-clock transition of at most 100 available results at their exact 24-hour boundary. */
+  expireAvailableResults(input: {
+    readonly fencingToken: FencingToken;
+    readonly workspaceKey: WorkspaceKey;
+    readonly limit: number;
+  }): Promise<ExpireAvailableResultsResult>;
 }

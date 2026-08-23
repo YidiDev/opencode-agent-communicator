@@ -539,6 +539,91 @@ DROP TABLE request_payloads;
 DROP TABLE requests;
 `,
   },
+  {
+    version: 5,
+    checksum: "sha256:500532cacd266418fc467d6052ce51ddc9551d6a9b48931c544871017f8b707b",
+    sql: `
+-- The pre-DDL v5 audit requires each pending parent to have its exact private child rows.
+CREATE INDEX requests_available_workspace_quota
+  ON requests(workspace_key, result_byte_length) WHERE result_state = 'available';
+CREATE INDEX requests_available_source_quota
+  ON requests(workspace_key, source_session_id, result_byte_length)
+  WHERE result_state = 'available';
+CREATE INDEX requests_available_target_quota
+  ON requests(workspace_key, target_session_id, result_byte_length)
+  WHERE result_state = 'available';
+CREATE TRIGGER request_payloads_pending_insert
+BEFORE INSERT ON request_payloads
+WHEN NOT EXISTS (
+  SELECT 1 FROM requests WHERE id = NEW.request_id AND resolution_state = 'pending'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'request payload parent must be pending');
+END;
+CREATE TRIGGER request_wait_edges_pending_insert
+BEFORE INSERT ON request_wait_edges
+WHEN NOT EXISTS (
+  SELECT 1 FROM requests WHERE id = NEW.request_id AND resolution_state = 'pending'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'request edge parent must be pending');
+END;
+CREATE TRIGGER requests_terminal_private_guard
+BEFORE UPDATE OF resolution_state ON requests
+WHEN OLD.resolution_state = 'pending' AND NEW.resolution_state <> 'pending' AND (
+  EXISTS (SELECT 1 FROM request_payloads WHERE request_id = OLD.id) OR
+  EXISTS (SELECT 1 FROM request_wait_edges WHERE request_id = OLD.id)
+)
+BEGIN
+  SELECT RAISE(ABORT, 'terminal request private state must be erased first');
+END;
+CREATE TRIGGER request_results_available_insert
+BEFORE INSERT ON request_results
+WHEN NOT EXISTS (
+  SELECT 1 FROM requests WHERE id = NEW.request_id AND result_state = 'available'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'request result parent must be available');
+END;
+CREATE TRIGGER requests_result_erasure_guard
+BEFORE UPDATE OF result_state ON requests
+WHEN OLD.result_state = 'available' AND NEW.result_state <> 'available' AND
+  EXISTS (SELECT 1 FROM request_results WHERE request_id = OLD.id)
+BEGIN
+  SELECT RAISE(ABORT, 'request result must be erased first');
+END;
+CREATE TRIGGER requests_result_time_insert
+BEFORE INSERT ON requests
+WHEN NEW.result_expires_at_ms IS NOT NULL AND (
+  typeof(NEW.result_expires_at_ms) <> 'integer' OR
+  NEW.result_expires_at_ms < 0 OR NEW.result_expires_at_ms > 9007199254740991
+)
+BEGIN
+  SELECT RAISE(ABORT, 'request result expiry is outside the safe integer range');
+END;
+CREATE TRIGGER requests_result_time_update
+BEFORE UPDATE OF result_expires_at_ms ON requests
+WHEN NEW.result_expires_at_ms IS NOT NULL AND (
+  typeof(NEW.result_expires_at_ms) <> 'integer' OR
+  NEW.result_expires_at_ms < 0 OR NEW.result_expires_at_ms > 9007199254740991
+)
+BEGIN
+  SELECT RAISE(ABORT, 'request result expiry is outside the safe integer range');
+END;
+`,
+    downSql: `
+DROP TRIGGER requests_result_time_update;
+DROP TRIGGER requests_result_time_insert;
+DROP TRIGGER requests_result_erasure_guard;
+DROP TRIGGER request_results_available_insert;
+DROP TRIGGER requests_terminal_private_guard;
+DROP TRIGGER request_wait_edges_pending_insert;
+DROP TRIGGER request_payloads_pending_insert;
+DROP INDEX requests_available_target_quota;
+DROP INDEX requests_available_source_quota;
+DROP INDEX requests_available_workspace_quota;
+`,
+  },
 ] as const;
 
 interface VersionRow {
@@ -646,6 +731,45 @@ function validateAppliedHistory(database: Database, current: number): void {
   }
 }
 
+function auditRequestLifecycleInvariants(database: Database): void {
+  const invalid = database
+    .query<{ readonly invalid: number }, []>(
+      `SELECT EXISTS (
+         SELECT 1 FROM request_payloads AS p JOIN requests AS r ON r.id = p.request_id
+         WHERE r.resolution_state <> 'pending'
+       ) OR EXISTS (
+         SELECT 1 FROM request_wait_edges AS e JOIN requests AS r ON r.id = e.request_id
+         WHERE r.resolution_state <> 'pending'
+       ) OR EXISTS (
+         SELECT 1 FROM request_results AS rr JOIN requests AS r ON r.id = rr.request_id
+         WHERE r.result_state <> 'available'
+       ) OR EXISTS (
+         SELECT 1 FROM requests AS r
+         WHERE (r.resolution_state = 'pending' AND (
+           NOT EXISTS (SELECT 1 FROM request_payloads WHERE request_id = r.id) OR
+           NOT EXISTS (
+             SELECT 1 FROM request_wait_edges AS edge
+             WHERE edge.request_id = r.id AND edge.workspace_key = r.workspace_key
+               AND edge.source_session_id = r.source_session_id
+               AND edge.target_session_id = r.target_session_id
+           )
+         )) OR (r.resolution_state <> 'pending' AND (
+           EXISTS (SELECT 1 FROM request_payloads WHERE request_id = r.id) OR
+           EXISTS (SELECT 1 FROM request_wait_edges WHERE request_id = r.id)
+         )) OR (r.result_state = 'available') <> EXISTS (
+           SELECT 1 FROM request_results WHERE request_id = r.id
+         ) OR (r.result_expires_at_ms IS NOT NULL AND (
+           typeof(r.result_expires_at_ms) <> 'integer' OR
+           r.result_expires_at_ms < 0 OR r.result_expires_at_ms > 9007199254740991
+         ))
+       ) AS invalid`,
+    )
+    .get()?.invalid;
+  if (invalid !== 0) {
+    throw new StoreIntegrityError("Legacy request lifecycle state failed migration audit.");
+  }
+}
+
 export function applyMigrations(database: Database, nowMs: number, takeoverGraceMs: number): void {
   validateMigrationChecksums();
   const bootstrap = database.transaction(() => {
@@ -669,6 +793,7 @@ export function applyMigrations(database: Database, nowMs: number, takeoverGrace
     validateAppliedHistory(database, current);
     for (const migration of sqliteStoreMigrations) {
       if (migration.version <= current) continue;
+      if (migration.version === 5) auditRequestLifecycleInvariants(database);
       database.exec(migration.sql);
       database.run(
         "INSERT INTO schema_migrations(version, checksum, applied_at_ms) VALUES (?, ?, ?)",

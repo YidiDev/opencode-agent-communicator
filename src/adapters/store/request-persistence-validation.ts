@@ -7,7 +7,11 @@ import {
   deserializePendingRequestPayload,
   verifiedRequestEnvelopeTrust,
 } from "../../domain/request-serialization";
-import type { PendingRequestMetadata, RequestMetadata } from "../../domain/request-types";
+import type {
+  PendingRequestMetadata,
+  PendingRequestPayload,
+  RequestMetadata,
+} from "../../domain/request-types";
 
 export interface PreparedContent {
   readonly payloadJson: string;
@@ -15,8 +19,12 @@ export interface PreparedContent {
   readonly retainedContentBytes: number;
 }
 
+export interface PendingPrivateContent extends PreparedContent {
+  readonly payload: PendingRequestPayload;
+}
+
 function exactEnvelope(
-  request: PendingRequestMetadata & { readonly deliveryState: "prepared" },
+  request: PendingRequestMetadata,
   payload: unknown,
   envelopeJson: string,
 ): boolean {
@@ -38,14 +46,14 @@ function exactEnvelope(
   return JSON.stringify(expected) === envelopeJson;
 }
 
-export function validatePreparedContent(
-  request: PendingRequestMetadata & { readonly deliveryState: "prepared" },
+export function validatePendingPrivateContent(
+  request: PendingRequestMetadata,
   payloadJson: unknown,
   envelopeJson: unknown,
-): PreparedContent | undefined {
+  retainedContentBytes: unknown,
+): PendingPrivateContent | undefined {
   if (
     !isCoherentRequestMetadata(request) ||
-    request.updatedAtMs !== request.createdAtMs ||
     typeof payloadJson !== "string" ||
     typeof envelopeJson !== "string"
   ) {
@@ -55,29 +63,44 @@ export function validatePreparedContent(
   if (!payload.ok || payload.value.kind !== request.kind) return undefined;
   const timeoutMs = payload.value.timeoutSeconds * 1_000;
   const expectedDeadline = request.createdAtMs + timeoutMs;
+  const payloadBytes = new TextEncoder().encode(payloadJson);
+  const envelopeBytes = new TextEncoder().encode(envelopeJson).length;
+  const expectedRetainedBytes = payloadBytes.length + envelopeBytes;
   if (
     !Number.isSafeInteger(timeoutMs) ||
     !Number.isSafeInteger(expectedDeadline) ||
-    expectedDeadline !== request.deadlineAtMs
-  ) {
-    return undefined;
-  }
-  const payloadBytes = new TextEncoder().encode(payloadJson);
-  const envelopeBytes = new TextEncoder().encode(envelopeJson).length;
-  const retainedContentBytes = payloadBytes.length + envelopeBytes;
-  if (
+    expectedDeadline !== request.deadlineAtMs ||
     payloadBytes.length !== request.payloadByteLength ||
     envelopeBytes < 1 ||
     envelopeBytes > requestLimits.envelopeBytes ||
-    !Number.isSafeInteger(retainedContentBytes) ||
-    retainedContentBytes > requestLimits.canonicalContentBytes + requestLimits.envelopeBytes
+    !Number.isSafeInteger(expectedRetainedBytes) ||
+    expectedRetainedBytes > requestLimits.canonicalContentBytes + requestLimits.envelopeBytes ||
+    retainedContentBytes !== expectedRetainedBytes
   ) {
     return undefined;
   }
   const digest = createHash("sha256").update(payloadBytes).digest("hex");
   return digest === request.payloadSha256 && exactEnvelope(request, payload.value, envelopeJson)
-    ? { payloadJson, envelopeJson, retainedContentBytes }
+    ? {
+        payload: payload.value,
+        payloadJson,
+        envelopeJson,
+        retainedContentBytes: expectedRetainedBytes,
+      }
     : undefined;
+}
+
+export function validatePreparedContent(
+  request: PendingRequestMetadata & { readonly deliveryState: "prepared" },
+  payloadJson: unknown,
+  envelopeJson: unknown,
+): PreparedContent | undefined {
+  if (request.updatedAtMs !== request.createdAtMs) return undefined;
+  const retainedContentBytes =
+    typeof payloadJson === "string" && typeof envelopeJson === "string"
+      ? new TextEncoder().encode(payloadJson).length + new TextEncoder().encode(envelopeJson).length
+      : undefined;
+  return validatePendingPrivateContent(request, payloadJson, envelopeJson, retainedContentBytes);
 }
 
 export function exactPreparedReplay(
