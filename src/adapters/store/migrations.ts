@@ -624,6 +624,35 @@ DROP INDEX requests_available_source_quota;
 DROP INDEX requests_available_workspace_quota;
 `,
   },
+  {
+    version: 6,
+    checksum: "sha256:74a8aa2ee8e35ffc6632495931db32b83a2708efc496c4db1f8c8952dc5c9f5a",
+    sql: `
+CREATE INDEX requests_participant_inbox
+  ON requests(workspace_key, target_session_id, created_at_ms DESC, id DESC)
+  WHERE resolution_state = 'pending';
+CREATE INDEX requests_participant_outbox
+  ON requests(workspace_key, source_session_id, created_at_ms DESC, id DESC)
+  WHERE resolution_state = 'pending' OR resolution_state NOT IN ('answered','reached')
+    OR result_state != 'acknowledged';
+CREATE INDEX requests_due_source
+  ON requests(workspace_key, source_session_id, deadline_at_ms, id)
+  WHERE resolution_state = 'pending';
+CREATE INDEX requests_due_target
+  ON requests(workspace_key, target_session_id, deadline_at_ms, id)
+  WHERE resolution_state = 'pending';
+CREATE INDEX requests_result_due_source
+  ON requests(workspace_key, source_session_id, result_expires_at_ms, id)
+  WHERE result_state = 'available';
+`,
+    downSql: `
+DROP INDEX requests_result_due_source;
+DROP INDEX requests_due_target;
+DROP INDEX requests_due_source;
+DROP INDEX requests_participant_outbox;
+DROP INDEX requests_participant_inbox;
+`,
+  },
 ] as const;
 
 interface VersionRow {

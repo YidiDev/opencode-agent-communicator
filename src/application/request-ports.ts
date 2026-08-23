@@ -2,14 +2,17 @@ import type { NativeMessageId, RequestId } from "../domain/generated-ids";
 import type { FencingToken } from "../domain/ownership";
 import type {
   AnsweredAskRequestMetadata,
+  AskRequestPayload,
   AskRequestResult,
   PendingRequestMetadata,
   ReachedWaitRequestMetadata,
   RequestAcknowledgedResultMetadata,
+  RequestAvailableResultMetadata,
   RequestExpiredResultMetadata,
   RequestMetadata,
   RequestResolutionState,
   RetainedRequestResult,
+  WaitRequestPayload,
   WaitRequestResult,
 } from "../domain/request-types";
 import type { SessionId } from "../domain/sessions";
@@ -248,4 +251,121 @@ export interface RequestResultRetentionPersistencePort {
     readonly workspaceKey: WorkspaceKey;
     readonly limit: number;
   }): Promise<ExpireAvailableResultsResult>;
+}
+
+type SafeRequestMetadataKey =
+  | "kind"
+  | "resolutionState"
+  | "deliveryState"
+  | "resultState"
+  | "sourceSessionId"
+  | "targetSessionId"
+  | "createdAtMs"
+  | "updatedAtMs"
+  | "deadlineAtMs"
+  | "resolvedAtMs"
+  | "submittedAtMs"
+  | "deliveryUnknownAtMs"
+  | "admittedAtMs"
+  | "promotedAtMs"
+  | "deliveryFailedAtMs"
+  | "resultAvailableAtMs"
+  | "resultExpiresAtMs"
+  | "resultExpiredAtMs"
+  | "acknowledgedAtMs";
+type RedactedRequestMetadata<
+  Metadata extends RequestMetadata,
+  Role extends import("../domain/request-types").RequestParticipantRole,
+> = Metadata extends RequestMetadata
+  ? { readonly requestId: RequestId; readonly participantRole: Role } & Pick<
+      Metadata,
+      Extract<keyof Metadata, SafeRequestMetadataKey>
+    >
+  : never;
+
+export type ParticipantRequestMetadata<
+  Role extends
+    import("../domain/request-types").RequestParticipantRole = import("../domain/request-types").RequestParticipantRole,
+  Metadata extends RequestMetadata = RequestMetadata,
+> = RedactedRequestMetadata<Metadata, Role>;
+
+type PendingAskMetadata = PendingRequestMetadata & { readonly kind: "ask" };
+type PendingWaitMetadata = PendingRequestMetadata & { readonly kind: "wait" };
+type AvailableAnsweredAskMetadata = AnsweredAskRequestMetadata & RequestAvailableResultMetadata;
+type UnavailableAnsweredAskMetadata = AnsweredAskRequestMetadata &
+  (RequestExpiredResultMetadata | RequestAcknowledgedResultMetadata);
+type AvailableReachedWaitMetadata = ReachedWaitRequestMetadata & RequestAvailableResultMetadata;
+type UnavailableReachedWaitMetadata = ReachedWaitRequestMetadata &
+  (RequestExpiredResultMetadata | RequestAcknowledgedResultMetadata);
+type UnsuccessfulRequestMetadata = Exclude<
+  RequestMetadata,
+  PendingRequestMetadata | AnsweredAskRequestMetadata | ReachedWaitRequestMetadata
+>;
+
+export interface ParticipantRequestPage {
+  readonly items: readonly ParticipantRequestMetadata[];
+  readonly hasMore: boolean;
+}
+
+export type ParticipantRequestGet =
+  | {
+      readonly outcome: "metadata";
+      readonly view: "source_pending";
+      readonly metadata: ParticipantRequestMetadata<"source", PendingRequestMetadata>;
+    }
+  | {
+      readonly outcome: "metadata";
+      readonly view: "target_terminal";
+      readonly metadata: ParticipantRequestMetadata<
+        "target",
+        Exclude<RequestMetadata, PendingRequestMetadata>
+      >;
+    }
+  | {
+      readonly outcome: "metadata";
+      readonly view: "source_unsuccessful_terminal";
+      readonly metadata: ParticipantRequestMetadata<"source", UnsuccessfulRequestMetadata>;
+    }
+  | {
+      readonly outcome: "pending_payload";
+      readonly metadata: ParticipantRequestMetadata<"target", PendingAskMetadata>;
+      readonly payload: AskRequestPayload;
+    }
+  | {
+      readonly outcome: "pending_payload";
+      readonly metadata: ParticipantRequestMetadata<"target", PendingWaitMetadata>;
+      readonly payload: WaitRequestPayload;
+    }
+  | {
+      readonly outcome: "available_result";
+      readonly metadata: ParticipantRequestMetadata<"source", AvailableAnsweredAskMetadata>;
+      readonly result: AskRequestResult;
+    }
+  | {
+      readonly outcome: "available_result";
+      readonly metadata: ParticipantRequestMetadata<"source", AvailableReachedWaitMetadata>;
+      readonly result: WaitRequestResult;
+    }
+  | {
+      readonly outcome: "result_expired";
+      readonly metadata:
+        | ParticipantRequestMetadata<"source", UnavailableAnsweredAskMetadata>
+        | ParticipantRequestMetadata<"source", UnavailableReachedWaitMetadata>;
+    };
+
+export interface RequestParticipantQueryPort {
+  listForParticipant(input: {
+    readonly fencingToken: FencingToken;
+    readonly workspaceKey: WorkspaceKey;
+    readonly callerSessionId: SessionId;
+    readonly role: import("../domain/request-types").RequestListRole;
+    readonly boundary?: import("./request-list-cursor").RequestListBoundary;
+    readonly limit: number;
+  }): Promise<ParticipantRequestPage>;
+  getParticipantRequest(input: {
+    readonly fencingToken: FencingToken;
+    readonly workspaceKey: WorkspaceKey;
+    readonly requestId: RequestId;
+    readonly callerSessionId: SessionId;
+  }): Promise<ParticipantRequestGet | undefined>;
 }

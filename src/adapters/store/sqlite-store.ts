@@ -19,6 +19,7 @@ import type {
   PrepareRequestInput,
   RequestAdmissionPersistencePort,
   RequestClaimResult,
+  RequestParticipantQueryPort,
   RequestRecoveryPersistencePort,
   RequestResultRetentionPersistencePort,
   RequestRetentionPersistencePort,
@@ -44,6 +45,7 @@ import { type PreparedPrivateState, preparePrivateStatePath } from "./linux-priv
 import { applyMigrations, sqliteStoreMigrations } from "./migrations";
 import { OwnershipRepository } from "./ownership-repository";
 import { RequestDeliveryRepository } from "./request-delivery-repository";
+import { RequestParticipantQueryRepository } from "./request-participant-query-repository";
 import { RequestQueryRepository } from "./request-query-repository";
 import { RequestRepository } from "./request-repository";
 import { RequestResultRetentionRepository } from "./request-result-retention-repository";
@@ -76,7 +78,8 @@ export class LinuxBunSqliteStore
     RequestRecoveryPersistencePort,
     RequestRetentionPersistencePort,
     RequestTerminalPersistencePort,
-    RequestResultRetentionPersistencePort
+    RequestResultRetentionPersistencePort,
+    RequestParticipantQueryPort
 {
   readonly databasePath: string;
   readonly schemaVersion = sqliteStoreMigrations.length;
@@ -87,6 +90,7 @@ export class LinuxBunSqliteStore
   private readonly requestRepository: RequestRepository;
   private readonly requestDeliveryRepository: RequestDeliveryRepository;
   private readonly requestQueryRepository: RequestQueryRepository;
+  private readonly requestParticipantQueryRepository: RequestParticipantQueryRepository;
   private readonly requestRetentionRepository: RequestRetentionRepository;
   private readonly requestTerminalRepository: RequestTerminalRepository;
   private readonly requestResultRetentionRepository: RequestResultRetentionRepository;
@@ -215,6 +219,12 @@ export class LinuxBunSqliteStore
       context,
       this.ownershipRepository,
     );
+    this.requestParticipantQueryRepository = new RequestParticipantQueryRepository(
+      context,
+      this.ownershipRepository,
+      this.requestRepository,
+      this.requestResultRetentionRepository,
+    );
     this.maintenanceRepository = new StoreMaintenanceRepository(context, this.ownershipRepository);
   }
 
@@ -297,6 +307,20 @@ export class LinuxBunSqliteStore
   ): Promise<readonly import("../../domain/request-types").RequestMetadata[]> {
     this.assertOpen();
     return this.inspect(() => this.requestQueryRepository.listRecoverable(input));
+  }
+
+  async listForParticipant(
+    input: Parameters<RequestParticipantQueryPort["listForParticipant"]>[0],
+  ): ReturnType<RequestParticipantQueryPort["listForParticipant"]> {
+    this.assertOpen();
+    return this.inspect(() => this.requestParticipantQueryRepository.list(input));
+  }
+
+  async getParticipantRequest(
+    input: Parameters<RequestParticipantQueryPort["getParticipantRequest"]>[0],
+  ): ReturnType<RequestParticipantQueryPort["getParticipantRequest"]> {
+    this.assertOpen();
+    return this.inspect(() => this.requestParticipantQueryRepository.get(input));
   }
 
   async collectRequestRetention(
