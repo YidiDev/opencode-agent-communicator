@@ -72,7 +72,7 @@ function details(
 }
 
 describe("request migration and query plans", () => {
-  test("fresh migration records exact history and pins published v1-v7 checksums", () => {
+  test("fresh migration records exact history and pins published v1-v8 checksums", () => {
     const database = migratedDatabase();
     expect(sqliteStoreMigrations.map((migration) => migration.checksum)).toEqual([
       "sha256:929ff898b24a6bfefa276939fee895e41185ed9c58bd59c3f2c3359f4daa8a86",
@@ -82,6 +82,7 @@ describe("request migration and query plans", () => {
       "sha256:500532cacd266418fc467d6052ce51ddc9551d6a9b48931c544871017f8b707b",
       "sha256:74a8aa2ee8e35ffc6632495931db32b83a2708efc496c4db1f8c8952dc5c9f5a",
       "sha256:8543d47872200c45c03a5c201ef943bf6e9f1b25799078e4eb618f005b5882c9",
+      "sha256:f05b42c3099f5fe64243b686b1a6b54db715ae81301ed0130079ad8833a13841",
     ]);
     expect(
       database
@@ -93,8 +94,8 @@ describe("request migration and query plans", () => {
     database.close(true);
   });
 
-  test("upgrades every published schema prefix through v7 without losing legacy rows", () => {
-    for (const prefix of [1, 2, 3, 4, 5, 6]) {
+  test("upgrades every published schema prefix through v8 without losing legacy rows", () => {
+    for (const prefix of [1, 2, 3, 4, 5, 6, 7]) {
       const database = new Database(":memory:", { strict: true });
       database.exec("PRAGMA foreign_keys = ON");
       database.exec(`CREATE TABLE schema_migrations (
@@ -130,7 +131,7 @@ describe("request migration and query plans", () => {
         database
           .query<{ value: number }, []>("SELECT user_version AS value FROM pragma_user_version")
           .get()?.value,
-      ).toBe(7);
+      ).toBe(8);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM deliveries").get()
           ?.count,
@@ -145,7 +146,7 @@ describe("request migration and query plans", () => {
     }
   });
 
-  test("binds migrations four through seven and reverses their additive objects", () => {
+  test("binds migrations four through eight and reverses their additive objects", () => {
     const database = migratedDatabase();
     const migration = sqliteStoreMigrations[3];
     if (!migration) throw new Error("migration four is absent");
@@ -172,6 +173,24 @@ describe("request migration and query plans", () => {
     const migrationSeven = sqliteStoreMigrations[6];
     if (!migrationSeven) throw new Error("migration seven is absent");
     expect(migrationSeven.checksum).toBe(migrationSqlChecksum(migrationSeven.sql));
+    const migrationEight = sqliteStoreMigrations[7];
+    if (!migrationEight) throw new Error("migration eight is absent");
+    expect(migrationEight.checksum).toBe(migrationSqlChecksum(migrationEight.sql));
+    expect(
+      database
+        .query<{ count: number }, []>(
+          "SELECT count(*) AS count FROM sqlite_schema WHERE name = 'requests_creation_operation_v8'",
+        )
+        .get()?.count,
+    ).toBe(1);
+    database.exec(migrationEight.downSql);
+    expect(
+      database
+        .query<{ count: number }, []>(
+          "SELECT count(*) AS count FROM pragma_table_info('requests') WHERE name = 'creation_operation_id'",
+        )
+        .get()?.count,
+    ).toBe(0);
     database.exec(migrationSeven.downSql);
     expect(
       database

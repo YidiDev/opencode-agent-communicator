@@ -18,7 +18,9 @@ import type {
   ExpireDueRequestsResult,
   PrepareRequestInput,
   RequestAdmissionPersistencePort,
+  RequestClaimReconciliation,
   RequestClaimResult,
+  RequestCreationReconciliation,
   RequestDeadlineSchedulePort,
   RequestParticipantQueryPort,
   RequestRecoveryPersistencePort,
@@ -276,6 +278,13 @@ export class LinuxBunSqliteStore
       : this.mutate(() => this.deliveryRepository.createPrepared(input));
   }
 
+  async reconcilePreparedCreation(
+    input: PrepareRequestInput,
+  ): Promise<RequestCreationReconciliation> {
+    this.assertOpen();
+    return this.inspect(() => this.requestRepository.reconcilePreparedCreation(input));
+  }
+
   async cancelPrepared(input: DeliveryTransitionInput): Promise<DeliveryStoreResult> {
     this.assertOpen();
     return this.mutate(() => this.deliveryRepository.cancelPrepared(input));
@@ -290,6 +299,11 @@ export class LinuxBunSqliteStore
     return "requestId" in input
       ? this.mutate(() => this.requestRepository.claimPrepared(input))
       : this.mutate(() => this.deliveryRepository.claimPrepared(input));
+  }
+
+  async reconcilePreparedClaim(input: RequestTransitionInput): Promise<RequestClaimReconciliation> {
+    this.assertOpen();
+    return this.inspect(() => this.requestRepository.reconcilePreparedClaim(input));
   }
 
   async completeDelivery(input: CompleteRequestDeliveryInput): Promise<RequestStoreResult> {

@@ -85,7 +85,11 @@ export class RequestResultRetentionRepository {
     return this.expireRowsOwned(workspaceKey, nowMs, rows);
   }
 
-  expireExactAvailableOwned(workspaceKey: string, requestId: string, nowMs: number): void {
+  expireExactAvailableOwned(
+    workspaceKey: string,
+    requestId: string,
+    nowMs: number,
+  ): ExpiredAnsweredOrReachedRequestMetadata | undefined {
     const row = this.context.database
       .query<RequestRow, [string, string, number]>(
         `SELECT ${requestMetadataColumns} FROM requests
@@ -93,7 +97,8 @@ export class RequestResultRetentionRepository {
            AND result_expires_at_ms <= ?`,
       )
       .get(workspaceKey, requestId, nowMs);
-    if (row) this.expireRowsOwned(workspaceKey, nowMs, [row]);
+    if (!row) return undefined;
+    return this.expireRowsOwned(workspaceKey, nowMs, [row])[0];
   }
 
   private expireRowsOwned(

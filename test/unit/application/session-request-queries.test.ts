@@ -3,12 +3,18 @@ import { expect, test } from "bun:test";
 import { getSessionRequest } from "../../../src/application/get-session-request";
 import { listSessionRequests } from "../../../src/application/list-session-requests";
 import { encodeRequestListCursor } from "../../../src/application/request-list-cursor";
-import type { RequestParticipantQueryPort } from "../../../src/application/request-ports";
+import type {
+  ParticipantRequestGet,
+  ParticipantRequestPage,
+  RequestParticipantQueryPort,
+} from "../../../src/application/request-ports";
 import { validateRequestId } from "../../../src/domain/generated-ids";
 import type { FencingToken } from "../../../src/domain/ownership";
 import { OwnershipLostFault } from "../../../src/domain/ownership";
+import type { RequestMetadata } from "../../../src/domain/request-types";
 import { validateSessionId } from "../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
+import { requestFixture } from "../../support/request-store";
 
 const workspace = validateWorkspaceKey("queries");
 const caller = validateSessionId("ses_caller");
@@ -37,7 +43,16 @@ function ports(
   options: {
     readonly visible?: boolean;
     readonly membershipFault?: unknown;
-    readonly requests?: Partial<RequestParticipantQueryPort>;
+    readonly requests?: {
+      readonly listForParticipant?: (
+        input: Parameters<RequestParticipantQueryPort["listForParticipant"]>[0],
+      ) => Promise<ParticipantRequestPage & { readonly terminalized?: readonly RequestMetadata[] }>;
+      readonly getParticipantRequest?: (
+        input: Parameters<RequestParticipantQueryPort["getParticipantRequest"]>[0],
+      ) => Promise<
+        (ParticipantRequestGet & { readonly terminalized?: readonly RequestMetadata[] }) | undefined
+      >;
+    };
   } = {},
 ) {
   let membershipCalls = 0;
@@ -47,6 +62,7 @@ function ports(
     },
     value: {
       readiness: { assertReady: () => undefined },
+      notifications: { notifyTerminal: () => undefined },
       membership: {
         readCurrentRoots: async () => {
           membershipCalls++;
@@ -59,9 +75,25 @@ function ports(
         },
       },
       requests: {
-        listForParticipant:
-          options.requests?.listForParticipant ?? (async () => ({ items: [], hasMore: false })),
-        getParticipantRequest: options.requests?.getParticipantRequest ?? (async () => undefined),
+        listForParticipant: async (
+          input: Parameters<RequestParticipantQueryPort["listForParticipant"]>[0],
+        ) => {
+          const page = await (
+            options.requests?.listForParticipant ?? (async () => ({ items: [], hasMore: false }))
+          )(input);
+          return {
+            ...page,
+            terminalized: "terminalized" in page ? page.terminalized : [],
+          };
+        },
+        getParticipantRequest: async (
+          input: Parameters<RequestParticipantQueryPort["getParticipantRequest"]>[0],
+        ) => {
+          const found = await (options.requests?.getParticipantRequest ?? (async () => undefined))(
+            input,
+          );
+          return found ? { ...found, terminalized: found.terminalized ?? [] } : undefined;
+        },
       },
     },
   };
@@ -126,6 +158,44 @@ test("validates caller, role, limit, cursor, and request ID before membership", 
   expect((await listSessionRequests(mock.value, context, { limit: 101 })).ok).toBe(false);
   expect((await listSessionRequests(mock.value, context, { cursor: "bad" })).ok).toBe(false);
   expect((await getSessionRequest(mock.value, context, { request_id: "bad" })).ok).toBe(false);
+  expect(mock.membershipCalls).toBe(0);
+});
+
+test("strictly snapshots list and get arguments before any membership effect", async () => {
+  const mock = ports();
+  const getter = Object.defineProperty({}, "request_id", {
+    enumerable: true,
+    get: () => {
+      throw new Error("must not run");
+    },
+  });
+  const proxy = new Proxy(
+    {},
+    {
+      ownKeys: () => {
+        throw new Error("hostile proxy");
+      },
+    },
+  );
+  for (const query of [
+    null,
+    { role: null },
+    { limit: null },
+    { cursor: null },
+    { extra: true },
+    proxy,
+  ]) {
+    expect(await listSessionRequests(mock.value, context, query)).toMatchObject({
+      ok: false,
+      error: { code: "invalid_arguments" },
+    });
+  }
+  for (const args of [null, {}, { request_id: requestId.value, extra: true }, getter, proxy]) {
+    expect(await getSessionRequest(mock.value, context, args)).toMatchObject({
+      ok: false,
+      error: { code: "invalid_arguments" },
+    });
+  }
   expect(mock.membershipCalls).toBe(0);
 });
 
@@ -210,6 +280,51 @@ test("returns successful exact gets and safely maps request storage faults", asy
   }
 });
 
+test("list/get notify committed query-induced terminalizations without leaking them", async () => {
+  const prepared = await requestFixture(token, 1, "ses_caller", "ses_target", workspace.value);
+  const { payloadSha256: _payloadSha256, ...base } = prepared.request;
+  const terminal = {
+    ...base,
+    resolutionState: "cancelled" as const,
+    updatedAtMs: 2,
+    resolvedAtMs: 2,
+  };
+  const notified: unknown[] = [];
+  const notifications = { notifyTerminal: (event: unknown) => void notified.push(event) };
+  const listed = ports({
+    requests: {
+      listForParticipant: async () => ({ items: [], hasMore: false, terminalized: [terminal] }),
+    },
+  });
+  expect(await listSessionRequests({ ...listed.value, notifications }, context)).toEqual({
+    ok: true,
+    value: { items: [] },
+  });
+
+  const got = ports({
+    requests: {
+      getParticipantRequest: async () => ({
+        outcome: "metadata",
+        view: "source_pending",
+        metadata: {
+          ...metadataBase,
+          participantRole: "source",
+          kind: "wait",
+          resolutionState: "pending",
+          resultState: "none",
+        } as never,
+        terminalized: [terminal],
+      }),
+    },
+  });
+  const result = await getSessionRequest({ ...got.value, notifications }, context, {
+    request_id: requestId.value,
+  });
+  expect(result.ok).toBe(true);
+  if (result.ok) expect("terminalized" in result.value).toBe(false);
+  expect(notified).toHaveLength(2);
+});
+
 test("rejects an incoherent broad exact-get projection instead of forwarding it", async () => {
   const incoherent = ports({
     requests: {
@@ -228,6 +343,31 @@ test("rejects an incoherent broad exact-get projection instead of forwarding it"
           },
           result: { kind: "wait" },
         }) as never,
+    },
+  });
+  expect(
+    await getSessionRequest(incoherent.value, context, { request_id: requestId.value }),
+  ).toMatchObject({ ok: false, error: { code: "storage_unavailable" } });
+});
+
+test("rejects available-result content paired with expired metadata", async () => {
+  const incoherent = ports({
+    requests: {
+      getParticipantRequest: async () => ({
+        outcome: "available_result",
+        metadata: {
+          ...metadataBase,
+          participantRole: "source",
+          kind: "ask",
+          resolutionState: "answered",
+          resultState: "expired",
+          resolvedAtMs: 1,
+          resultAvailableAtMs: 1,
+          resultExpiresAtMs: 2,
+          resultExpiredAtMs: 2,
+        } as never,
+        result: { kind: "ask", answers: [[]] },
+      }),
     },
   });
   expect(
@@ -314,7 +454,16 @@ test("validates every coherent metadata and content exact-get view", async () =>
 });
 
 test("emits and consumes a next cursor and maps list storage faults", async () => {
-  const metadata = { requestId: requestId.value, createdAtMs: 42 } as never;
+  const metadata = {
+    ...metadataBase,
+    participantRole: "source" as const,
+    kind: "wait" as const,
+    resolutionState: "pending" as const,
+    resultState: "none" as const,
+    createdAtMs: 42,
+    updatedAtMs: 42,
+    deadlineAtMs: 43,
+  };
   let receivedBoundary: unknown;
   const first = ports({
     requests: {
@@ -324,16 +473,16 @@ test("emits and consumes a next cursor and maps list storage faults", async () =
       },
     },
   });
-  const listed = await listSessionRequests(first.value, context, { role: "inbox", limit: 100 });
+  const listed = await listSessionRequests(first.value, context, { role: "outbox", limit: 100 });
   expect(listed).toMatchObject({ ok: true, value: { items: [metadata] } });
   if (!listed.ok || !listed.value.nextCursor) throw new Error("missing cursor");
   await listSessionRequests(first.value, context, {
-    role: "inbox",
+    role: "outbox",
     cursor: listed.value.nextCursor,
   });
   expect(receivedBoundary).toEqual({ createdAtMs: 42, requestId: requestId.value });
   expect(listed.value.nextCursor).toBe(
-    encodeRequestListCursor("inbox", { createdAtMs: 42, requestId: requestId.value }),
+    encodeRequestListCursor("outbox", { createdAtMs: 42, requestId: requestId.value }),
   );
   for (const [fault, code] of [
     [new OwnershipLostFault("stale"), "ownership_lost"],

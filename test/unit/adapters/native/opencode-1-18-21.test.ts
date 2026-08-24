@@ -575,7 +575,7 @@ describe("OpenCode 1.18.21 native queue admission", () => {
   test("returns definitive rejection only for completed 4xx while not aborted", async () => {
     const fake = fixture({
       promptResponse: {
-        error: { name: "not found" },
+        error: { _tag: "SessionNotFoundError", sessionID: targetSessionId, message: "not found" },
         response: new Response(null, { status: 404 }),
       },
     });

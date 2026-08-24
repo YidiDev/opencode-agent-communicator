@@ -6,6 +6,12 @@ Its fencing token is checked by every store mutation. A process must still check
 ownership immediately before an external effect and again before recording its
 outcome.
 
+The in-process adapter is also a trusted finite-operation boundary. SQLite transactions cannot be
+safely interrupted after dispatch without introducing commit ambiguity. Application abort signals
+therefore bound native and foreground operations but do not pretend to cancel an in-flight
+transaction; creation, claim, and delivery completion use fenced exact reconciliation after a
+thrown or malformed settlement.
+
 The configured state directory must be an absolute, normalized, non-root path on
 Linux. Preparation opens `/`, walks one component at a time through
 `/proc/self/fd/<parent-fd>/<component>`, and opens every child with
@@ -95,6 +101,10 @@ and pre-install audit use `requests_submitting_recovery`; request claim checks t
 indexed count in its immediate transaction. Stale-submitting startup recovery uses
 that exact 4096 bound and a residual probe, while pending prepared and expiry work
 remain bounded at 1024.
+
+Schema v8 adds the private nullable `creation_operation_id` column and a partial unique
+workspace/operation index. Repository-created requests always carry a validated `op_…` value;
+legacy null rows remain readable but cannot be adopted by new creation reconciliation.
 
 An administrator owner label is diagnostic only. Every store construction creates
 a fresh random process-generation identity. Repeated acquisition by one live

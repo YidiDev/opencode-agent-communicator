@@ -342,7 +342,7 @@ generated schemas. At minimum they cover:
 | `session_list` | no additional codes |
 | `session_send` | `admission_failed`, `admission_unknown` |
 | `session_delivery_get` | `not_found_or_unauthorized` |
-| `session_ask`, `session_wait` | `target_idle`, `target_status_unknown`, `deadlock_detected`, `delivery_failed`, `deadline_expired`, `request_cancelled`, `target_stopped`, `source_stopped`, `target_deleted`, `source_deleted` |
+| `session_ask`, `session_wait` | `target_idle`, `target_status_unknown`, `deadlock_detected`, `delivery_failed`, `deadline_expired`, `request_cancelled`, `result_expired`, `target_stopped`, `source_stopped`, `target_deleted`, `source_deleted` |
 | `session_respond`, `session_signal` | `state_conflict` for an authorized pending wrong-kind request, response-validation rejection, or provisional persistence conflict without an authoritative winner; `request_not_pending`, `request_cancelled`, `delivery_failed`, `deadline_expired`, `target_stopped`, `source_stopped`, `target_deleted`, `source_deleted` |
 | `session_request_list` | no additional codes |
 | `session_request_get` | `result_expired` |
@@ -356,6 +356,10 @@ Before schema freeze, implementation and tests must refine this provisional tabl
 exhaustive generated mapping; tools may not return undeclared domain codes. Contract-violating or
 malformed persistence adapter results fail closed as `storage_unavailable`, rather than expanding
 the tool-specific state-conflict surface.
+
+`session_ask` and `session_wait` can return `result_expired` when the blocking process was
+suspended or disconnected for longer than the 24-hour retained-result window and later resumes.
+That authoritative lifecycle outcome is not storage corruption.
 
 ### 7.3 Authorization and Approval
 

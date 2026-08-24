@@ -223,9 +223,12 @@ describe("OpenCode 1.18.21 native steer admission", () => {
     });
   });
 
-  test("classifies only a completed actual non-aborted 4xx Response as definitive", async () => {
+  test("classifies only a known structured non-aborted 4xx response as definitive", async () => {
     const rejected = fixture({
-      response: { error: { private: "detail" }, response: new Response(null, { status: 422 }) },
+      response: {
+        error: { _tag: "InvalidRequestError", message: "invalid prompt" },
+        response: new Response(null, { status: 400 }),
+      },
     });
     expect(await rejected.adapter.steerRequest(request())).toEqual({
       kind: "definitive_rejection",
@@ -240,6 +243,26 @@ describe("OpenCode 1.18.21 native steer admission", () => {
       kind: "unknown",
     });
   });
+
+  test.each([408, 409, 425, 429])("keeps retry/concurrency HTTP %s ambiguous", async (status) => {
+    const fake = fixture({
+      response: {
+        error: { _tag: "ConflictError", message: "uncertain admission" },
+        response: new Response(null, { status }),
+      },
+    });
+    expect(await fake.adapter.steerRequest(request())).toEqual({ kind: "unknown" });
+  });
+
+  test.each([400, 401, 403, 404, 422])(
+    "rejects unstructured or proxy-like HTTP %s errors as ambiguous",
+    async (status) => {
+      for (const error of [{}, { name: "ProxyError", data: { html: "<html>" } }, "foreign"]) {
+        const fake = fixture({ response: { error, response: new Response(null, { status }) } });
+        expect(await fake.adapter.steerRequest(request())).toEqual({ kind: "unknown" });
+      }
+    },
+  );
 
   test.each([
     ["transport throw", { throwTransport: true }],

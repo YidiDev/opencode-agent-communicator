@@ -2,17 +2,52 @@ import { expect, test } from "bun:test";
 
 import type { CommittedRequestTerminalEvent } from "../../../src/application/request-notification-port";
 import {
-  RequestRuntime,
+  RequestRuntime as ProductionRequestRuntime,
   RequestRuntimeCapacityError,
   type RequestRuntimeOutcome,
   requestRuntimeMaximumWaitersHardCeiling,
 } from "../../../src/application/request-runtime";
 import { validateRequestId } from "../../../src/domain/generated-ids";
+import { validateSessionId } from "../../../src/domain/sessions";
+import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 
 function id(seed: string) {
   const parsed = validateRequestId(`req_${seed.repeat(32)}`);
   if (!parsed.ok) throw new Error(parsed.message);
   return parsed.value;
+}
+
+const boundSource = validateSessionId("ses_boundsource");
+const boundWorkspace = validateWorkspaceKey("bound-workspace");
+if (!boundSource.ok || !boundWorkspace.ok) throw new Error("invalid scoped runtime fixture");
+const runtimeSource = boundSource.value;
+const runtimeWorkspace = boundWorkspace.value;
+
+type BoundInput = Parameters<ProductionRequestRuntime["attach"]>[0];
+type LegacyInput = Omit<BoundInput, "sourceSessionId" | "workspaceKey">;
+
+class RequestRuntime extends ProductionRequestRuntime {
+  override attach(input: BoundInput): ReturnType<ProductionRequestRuntime["attach"]>;
+  override attach(input: LegacyInput): ReturnType<ProductionRequestRuntime["attach"]>;
+  override attach(input: BoundInput | LegacyInput): ReturnType<ProductionRequestRuntime["attach"]> {
+    return super.attach({
+      sourceSessionId: runtimeSource,
+      workspaceKey: runtimeWorkspace,
+      ...input,
+    });
+  }
+
+  override attachProvisional(input: BoundInput): ReturnType<ProductionRequestRuntime["attach"]>;
+  override attachProvisional(input: LegacyInput): ReturnType<ProductionRequestRuntime["attach"]>;
+  override attachProvisional(
+    input: BoundInput | LegacyInput,
+  ): ReturnType<ProductionRequestRuntime["attach"]> {
+    return super.attachProvisional({
+      sourceSessionId: runtimeSource,
+      workspaceKey: runtimeWorkspace,
+      ...input,
+    });
+  }
 }
 
 function event(requestId = id("1"), kind: "ask" | "wait" = "wait"): CommittedRequestTerminalEvent {
@@ -47,6 +82,37 @@ test("provisional and normal attachments observe committed terminal events", asy
   expect(await normal.outcome).toEqual({ outcome: "terminal", event: terminal });
   provisional.detach();
   normal.detach();
+});
+
+test("a resolved waiter retains its sole quota reservation until detach", async () => {
+  const runtime = new RequestRuntime(1, 1, 1);
+  const original = runtime.attach({ requestId: id("1"), expectedKind: "wait" });
+  runtime.notifyTerminal(event());
+  expect(() => runtime.attach({ requestId: id("2"), expectedKind: "wait" })).toThrow(
+    RequestRuntimeCapacityError,
+  );
+  expect((await original.outcome).outcome).toBe("terminal");
+  original.detach();
+  const replacement = runtime.attach({ requestId: id("2"), expectedKind: "wait" });
+  replacement.detach();
+});
+
+test("enforces the explicit per-source waiter capacity independently of total capacity", () => {
+  const runtime = new RequestRuntime(4, 1, 4);
+  runtime.attach({
+    requestId: id("1"),
+    expectedKind: "wait",
+    sourceSessionId: boundSource.value,
+    workspaceKey: boundWorkspace.value,
+  });
+  expect(() =>
+    runtime.attach({
+      requestId: id("2"),
+      expectedKind: "ask",
+      sourceSessionId: boundSource.value,
+      workspaceKey: boundWorkspace.value,
+    }),
+  ).toThrow(RequestRuntimeCapacityError);
 });
 
 test("notification before attachment is not cached and duplicate notification is harmless", async () => {
