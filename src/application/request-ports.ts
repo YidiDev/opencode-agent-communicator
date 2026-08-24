@@ -1,4 +1,4 @@
-import type { NativeMessageId, RequestId } from "../domain/generated-ids";
+import type { NativeMessageId, RequestId, StartOperationId } from "../domain/generated-ids";
 import type { FencingToken } from "../domain/ownership";
 import type {
   AnsweredAskRequestMetadata,
@@ -24,6 +24,11 @@ import type {
   StartupRecoveryBarrier,
 } from "./delivery-ports";
 import type { CommittedRequestNotificationPort } from "./request-notification-port";
+
+export type {
+  RequestAuthorizationDecision,
+  RequestAuthorizationPort,
+} from "./request-authorization-port";
 
 export const requestStoreFailureCodes = [
   "deadlock_detected",
@@ -51,11 +56,9 @@ export type NativeSteerAdmission =
   | { readonly kind: "unknown" };
 
 export interface NativeSteerAdmissionPort {
-  /** Caller-aborted transport must return unknown, never definitive_rejection. */
   steerRequest(input: {
     readonly targetSessionId: SessionId;
     readonly nativeMessageId: NativeMessageId;
-    /** Complete communicator-verified request envelope. */
     readonly envelope: string;
     readonly abort: AbortSignal;
   }): Promise<NativeSteerAdmission>;
@@ -105,11 +108,9 @@ export interface PreparedSessionRequestRecoverySummary {
 
 export interface PrepareRequestInput {
   readonly fencingToken: FencingToken;
-  /** Must be coherent pending/prepared metadata for exactly the configured workspace. */
+  readonly creationOperationId: StartOperationId;
   readonly request: PendingRequestMetadata & { readonly deliveryState: "prepared" };
-  /** Exact canonical JSON whose UTF-8 bytes and digest are bound by request metadata. */
   readonly payloadJson: string;
-  /** Complete, communicator-verified JSON envelope. It remains durable while pending. */
   readonly envelopeJson: string;
 }
 
@@ -185,12 +186,14 @@ export interface RequestAdmissionPersistencePort {
    * timestamp; and inserts metadata, payload, wait edge and rate event. No subset may be visible.
    */
   createPrepared(input: PrepareRequestInput): Promise<RequestStoreResult>;
+  reconcilePreparedCreation(input: PrepareRequestInput): Promise<RequestCreationReconciliation>;
   /**
    * Revalidates the private payload/envelope trust boundary, then fenced-CASes prepared+pending to
    * submitting using transaction-observed store time. At/after deadline it atomically terminalizes
    * instead. Only a winning predeadline transaction returns native-submission eligibility.
    */
   claimPrepared(input: RequestTransitionInput): Promise<RequestClaimResult>;
+  reconcilePreparedClaim(input: RequestTransitionInput): Promise<RequestClaimReconciliation>;
   /**
    * Fenced legal delivery CAS whose persisted transition/deadline time is transaction-observed
    * store time. Native evidence remains historical but cannot exceed that time.
@@ -206,6 +209,24 @@ export interface RequestAdmissionPersistencePort {
     readonly limit: number;
   }): Promise<ExpireDueRequestsResult>;
 }
+
+export type RequestCreationReconciliation =
+  | { readonly outcome: "absent" }
+  | { readonly outcome: "matching"; readonly request: RequestMetadata }
+  | { readonly outcome: "conflict" };
+
+export type RequestClaimReconciliation =
+  | {
+      readonly outcome: "still_prepared";
+      readonly request: PendingRequestMetadata & { readonly deliveryState: "prepared" };
+    }
+  | { readonly outcome: "absent_or_other_claim" }
+  | {
+      readonly outcome: "current_claim";
+      readonly request: RequestMetadata & { readonly deliveryState: "submitting" };
+      readonly envelopeJson: string;
+    }
+  | { readonly outcome: "settled"; readonly request: RequestMetadata };
 
 export interface RequestRecoveryPersistencePort {
   /** Prepared scans use fenced store time; submitting scans require the unforgeable startup barrier. */
@@ -404,6 +425,12 @@ export interface ParticipantRequestPage {
   readonly hasMore: boolean;
 }
 
+export interface ParticipantRequestRepositoryPage {
+  readonly items: readonly ParticipantRequestMetadata[];
+  readonly hasMore: boolean;
+  readonly terminalized: readonly RequestMetadata[];
+}
+
 export type ParticipantRequestGet =
   | {
       readonly outcome: "metadata";
@@ -450,6 +477,11 @@ export type ParticipantRequestGet =
         | ParticipantRequestMetadata<"source", UnavailableReachedWaitMetadata>;
     };
 
+/** Internal repository result. The public projection and transition notifications are separated. */
+export type ParticipantRequestRepositoryGet = ParticipantRequestGet & {
+  readonly terminalized: readonly RequestMetadata[];
+};
+
 export interface RequestParticipantQueryPort {
   listForParticipant(input: {
     readonly fencingToken: FencingToken;
@@ -458,11 +490,11 @@ export interface RequestParticipantQueryPort {
     readonly role: import("../domain/request-types").RequestListRole;
     readonly boundary?: import("./request-list-cursor").RequestListBoundary;
     readonly limit: number;
-  }): Promise<ParticipantRequestPage>;
+  }): Promise<ParticipantRequestRepositoryPage>;
   getParticipantRequest(input: {
     readonly fencingToken: FencingToken;
     readonly workspaceKey: WorkspaceKey;
     readonly requestId: RequestId;
     readonly callerSessionId: SessionId;
-  }): Promise<ParticipantRequestGet | undefined>;
+  }): Promise<ParticipantRequestRepositoryGet | undefined>;
 }

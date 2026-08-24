@@ -53,8 +53,7 @@ test("enforces inbox/outbox/all state roles and never leaks private list content
     role: "outbox",
     limit: 50,
   });
-  expect(inbox.items).toHaveLength(1);
-  expect(outbox.items).toHaveLength(1);
+  expect([inbox.items.length, outbox.items.length]).toEqual([1, 1]);
   expect(inbox.items[0]?.participantRole).toBe("target");
   expect(outbox.items[0]?.participantRole).toBe("source");
   expect(JSON.stringify(inbox)).not.toMatch(
@@ -314,6 +313,7 @@ test("unauthorized exact get cannot expire or inspect a corrupt due request", as
 
   const ports = {
     readiness: { assertReady: () => undefined },
+    notifications: { notifyTerminal: () => undefined },
     membership: {
       readCurrentRoots: async () => ({
         sourceTitle: undefined,

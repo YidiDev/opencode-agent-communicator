@@ -689,6 +689,25 @@ DROP TRIGGER requests_submitting_ceiling_update_v7;
 DROP TRIGGER requests_submitting_ceiling_insert_v7;
 DROP INDEX deliveries_submitting_startup_v7;
 DROP INDEX deliveries_prepared_startup_v7;
+    `,
+  },
+  {
+    version: 8,
+    checksum: "sha256:f05b42c3099f5fe64243b686b1a6b54db715ae81301ed0130079ad8833a13841",
+    sql: `
+ALTER TABLE requests ADD COLUMN creation_operation_id TEXT
+  CHECK (creation_operation_id IS NULL OR (
+    length(creation_operation_id) = 35 AND
+    substr(creation_operation_id, 1, 3) = 'op_' AND
+    substr(creation_operation_id, 4) NOT GLOB '*[^0-9a-f]*'
+  ));
+CREATE UNIQUE INDEX requests_creation_operation_v8
+  ON requests(workspace_key, creation_operation_id)
+  WHERE creation_operation_id IS NOT NULL;
+`,
+    downSql: `
+DROP INDEX requests_creation_operation_v8;
+ALTER TABLE requests DROP COLUMN creation_operation_id;
 `,
   },
 ] as const;

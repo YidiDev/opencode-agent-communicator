@@ -42,6 +42,8 @@ export interface ClaimedSessionRequestAdmissionInput {
   readonly control: OperationControl;
   /** Process-lifecycle signal for the external effect; it is never a request cancellation. */
   readonly effectSignal: AbortSignal;
+  /** Blocking invocations classify caller-aborted in-flight transport as durable ambiguity. */
+  readonly callerAbortPersistsUnknown?: boolean;
 }
 
 function failure(code: RequestStoreFailureCode): DomainResult<never> {
@@ -259,7 +261,9 @@ async function admitClaimedSessionRequestInternal(
   if (!validAdmissionInput(input)) {
     return domainFailure("state_conflict", "Claimed request admission input is malformed.", false);
   }
-  if (stopped(ports, input.control) || input.effectSignal.aborted) return failure("ownership_lost");
+  if (input.effectSignal.aborted) return failure("ownership_lost");
+  if (stopped(ports, input.control) && input.callerAbortPersistsUnknown !== true)
+    return failure("ownership_lost");
   const current = await runUntilAborted(input.effectSignal, () =>
     ports.ownership.isCurrent(input.fencingToken),
   );
@@ -271,17 +275,34 @@ async function admitClaimedSessionRequestInternal(
   }
   if (current.value !== true) return failure("ownership_lost");
   // No awaited work may occur between this final startup-control check and the single native effect.
-  if (stopped(ports, input.control) || input.effectSignal.aborted) return failure("ownership_lost");
+  if (input.effectSignal.aborted) return failure("ownership_lost");
+  const abortedBeforeNative = stopped(ports, input.control);
+  if (abortedBeforeNative && input.callerAbortPersistsUnknown !== true)
+    return failure("ownership_lost");
   const linked = linkedEffectSignal(input.control.abort, input.effectSignal);
   let native: NativeSteerAdmission | undefined;
   try {
-    native = await performNativeSteer(ports, input, linked.signal);
+    native = abortedBeforeNative
+      ? { kind: "unknown" }
+      : await performNativeSteer(ports, input, linked.signal);
   } finally {
     linked.dispose();
   }
-  if (!native) return failure("ownership_lost");
+  if (!native) {
+    if (
+      input.callerAbortPersistsUnknown === true &&
+      input.control.abort.aborted &&
+      !input.effectSignal.aborted
+    ) {
+      native = { kind: "unknown" };
+    } else {
+      return failure("ownership_lost");
+    }
+  }
   // An interrupted effect is ambiguous. Keep submitting for a successor; never persist rejection.
-  if (stopped(ports, input.control) || input.effectSignal.aborted) return failure("ownership_lost");
+  if (input.effectSignal.aborted) return failure("ownership_lost");
+  if (stopped(ports, input.control) && !input.control.abort.aborted)
+    return failure("ownership_lost");
   const currentAfterEffect = await runUntilAborted(input.effectSignal, () =>
     ports.ownership.isCurrent(input.fencingToken),
   );

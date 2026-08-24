@@ -155,13 +155,14 @@ export class RequestDeadlineScheduler {
     return this.faultValue;
   }
 
-  wake(): void {
-    if (!this.active) return;
+  wake(): undefined {
+    if (!this.active) return undefined;
     this.dirty = true;
-    if (!this.clearTimer()) return;
-    if (this.pumping) return;
+    if (!this.clearTimer()) return undefined;
+    if (this.pumping) return undefined;
     this.pumping = true;
     this.completion = Promise.resolve().then(() => this.pump());
+    return undefined;
   }
 
   stop(): void {

@@ -571,7 +571,14 @@ async function expectInitialSchedulerFailures(
       },
     );
     expect(result).toMatchObject({ ok: false, error: { code: expectedCode } });
-    expect(await runtime.attach({ requestId: request.id, expectedKind: "wait" }).outcome).toEqual({
+    expect(
+      await runtime.attach({
+        requestId: request.id,
+        expectedKind: "wait",
+        sourceSessionId: request.sourceSessionId,
+        workspaceKey: request.workspaceKey,
+      }).outcome,
+    ).toEqual({
       outcome: runtimeOutcome,
     });
   }
@@ -710,7 +717,12 @@ test("startup coordinator acquires one barrier, starts scheduler last, and stops
   );
   expect(invalid).toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
   expect(
-    await stopped.attach({ requestId: prepared.request.id, expectedKind: "wait" }).outcome,
+    await stopped.attach({
+      requestId: prepared.request.id,
+      expectedKind: "wait",
+      sourceSessionId: prepared.request.sourceSessionId,
+      workspaceKey: prepared.request.workspaceKey,
+    }).outcome,
   ).toEqual({
     outcome: "shutdown",
   });
@@ -758,7 +770,12 @@ test("startup coordinator acquires one barrier, starts scheduler last, and stops
   );
   expect(faulted).toMatchObject({ ok: false, error: { code: "storage_unavailable" } });
   expect(
-    await faultRuntime.attach({ requestId: prepared.request.id, expectedKind: "wait" }).outcome,
+    await faultRuntime.attach({
+      requestId: prepared.request.id,
+      expectedKind: "wait",
+      sourceSessionId: prepared.request.sourceSessionId,
+      workspaceKey: prepared.request.workspaceKey,
+    }).outcome,
   ).toEqual({ outcome: "shutdown" });
 
   await expectInitialSchedulerFailures(ports, prepared.request);

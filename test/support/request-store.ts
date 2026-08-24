@@ -139,7 +139,13 @@ export async function requestFixture(
     },
     digest,
   );
-  return { fencingToken: token, request, payloadJson: payload.serialized, envelopeJson };
+  return {
+    fencingToken: token,
+    creationOperationId: ids.startOperationId(),
+    request,
+    payloadJson: payload.serialized,
+    envelopeJson,
+  };
 }
 
 export async function requestFixtureForPayload(
@@ -192,7 +198,13 @@ export async function requestFixtureForPayload(
     },
     digest,
   );
-  return { fencingToken: token, request, payloadJson: payload.serialized, envelopeJson };
+  return {
+    fencingToken: token,
+    creationOperationId: ids.startOperationId(),
+    request,
+    payloadJson: payload.serialized,
+    envelopeJson,
+  };
 }
 
 export { digest as requestDigestPort, serializeVerifiedRequestEnvelope };
