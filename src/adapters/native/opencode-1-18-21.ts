@@ -279,7 +279,9 @@ export function createOpenCode11821NativeAdapter(
       } catch (_cause: unknown) {
         return { kind: "unknown" };
       }
-      if (isAuthoritativeClientRejection(response, message.abort.aborted)) {
+      if (
+        isAuthoritativeClientRejection(response, message.abort.aborted, message.targetSessionId)
+      ) {
         return { kind: "definitive_rejection" };
       }
       return parseAdmissionResponse(response, message, now);
@@ -301,7 +303,9 @@ export function createOpenCode11821NativeAdapter(
       } catch (_cause: unknown) {
         return { kind: "unknown" };
       }
-      if (isAuthoritativeClientRejection(response, request.abort.aborted)) {
+      if (
+        isAuthoritativeClientRejection(response, request.abort.aborted, request.targetSessionId)
+      ) {
         return { kind: "definitive_rejection" };
       }
       return parseAdmissionResponse(response, request, now, "steer");

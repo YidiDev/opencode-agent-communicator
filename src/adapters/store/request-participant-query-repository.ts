@@ -3,6 +3,8 @@ import type {
   ParticipantRequestGet,
   ParticipantRequestMetadata,
   ParticipantRequestPage,
+  ParticipantRequestRepositoryGet,
+  ParticipantRequestRepositoryPage,
 } from "../../application/request-ports";
 import { validateRequestId } from "../../domain/generated-ids";
 import type { FencingToken } from "../../domain/ownership";
@@ -134,7 +136,7 @@ export class RequestParticipantQueryRepository {
     readonly role: RequestListRole;
     readonly boundary?: RequestListBoundary;
     readonly limit: number;
-  }): ParticipantRequestPage {
+  }): ParticipantRequestRepositoryPage {
     const workspace = validateWorkspaceKey(input.workspaceKey);
     const caller = validateSessionId(input.callerSessionId);
     if (
@@ -151,14 +153,17 @@ export class RequestParticipantQueryRepository {
     return this.context.database
       .transaction(() => {
         this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
-        if (workspace.value !== this.context.workspaceKey) return { items: [], hasMore: false };
+        if (workspace.value !== this.context.workspaceKey)
+          return { items: [], hasMore: false, terminalized: [] };
         const nowMs = requestStoreNowMs(this.context);
-        if (input.role !== "outbox") this.drainDueTargetRequests(caller.value, nowMs);
+        const terminalized: RequestMetadata[] = [];
+        if (input.role !== "outbox")
+          terminalized.push(...this.drainDueTargetRequests(caller.value, nowMs));
         if (input.role !== "inbox") {
-          this.drainDueSourceRequests(caller.value, nowMs);
-          this.drainDueSourceResults(caller.value, nowMs);
+          terminalized.push(...this.drainDueSourceRequests(caller.value, nowMs));
+          terminalized.push(...this.drainDueSourceResults(caller.value, nowMs));
         }
-        return this.listOwned(input, caller.value);
+        return { ...this.listOwned(input, caller.value), terminalized };
       })
       .immediate();
   }
@@ -184,7 +189,7 @@ export class RequestParticipantQueryRepository {
     readonly workspaceKey: string;
     readonly requestId: string;
     readonly callerSessionId: string;
-  }): ParticipantRequestGet | undefined {
+  }): ParticipantRequestRepositoryGet | undefined {
     const workspace = validateWorkspaceKey(input.workspaceKey);
     const caller = validateSessionId(input.callerSessionId);
     const requestId = validateRequestId(input.requestId);
@@ -198,9 +203,12 @@ export class RequestParticipantQueryRepository {
         const authorizedRole = this.authorizeExact(workspace.value, requestId.value, caller.value);
         if (!authorizedRole) return undefined;
         const nowMs = requestStoreNowMs(this.context);
-        this.requests.expireExactDueOwned(workspace.value, requestId.value, nowMs);
-        this.results.expireExactAvailableOwned(workspace.value, requestId.value, nowMs);
-        return this.getOwned(workspace.value, requestId.value, caller.value, authorizedRole);
+        const terminalized = [
+          this.requests.expireExactDueOwned(workspace.value, requestId.value, nowMs),
+          this.results.expireExactAvailableOwned(workspace.value, requestId.value, nowMs),
+        ].filter((item): item is RequestMetadata => item !== undefined);
+        const found = this.getOwned(workspace.value, requestId.value, caller.value, authorizedRole);
+        return found ? { ...found, terminalized } : undefined;
       })
       .immediate();
   }
@@ -405,38 +413,50 @@ export class RequestParticipantQueryRepository {
     return rows.map(hydrateRole);
   }
 
-  private drainDueSourceRequests(caller: string, nowMs: number): void {
+  private drainDueSourceRequests(caller: string, nowMs: number): RequestMetadata[] {
+    const terminalized: RequestMetadata[] = [];
     const maximumBatches = Math.ceil(sqliteStoreHardCeilings.pendingRequestsPerSource / 100) + 1;
     for (let batch = 0; batch < maximumBatches; batch++) {
-      if (
-        this.requests.expireDueForSourceOwned(this.context.workspaceKey, caller, nowMs, 100)
-          .length < 100
-      )
-        return;
+      const batchItems = this.requests.expireDueForSourceOwned(
+        this.context.workspaceKey,
+        caller,
+        nowMs,
+        100,
+      );
+      terminalized.push(...batchItems);
+      if (batchItems.length < 100) return terminalized;
     }
     throw new StoreIntegrityError("Source request expiry exceeded its hard bound.");
   }
 
-  private drainDueTargetRequests(caller: string, nowMs: number): void {
+  private drainDueTargetRequests(caller: string, nowMs: number): RequestMetadata[] {
+    const terminalized: RequestMetadata[] = [];
     const maximumBatches = Math.ceil(sqliteStoreHardCeilings.pendingRequestsPerTarget / 100) + 1;
     for (let batch = 0; batch < maximumBatches; batch++) {
-      if (
-        this.requests.expireDueForTargetOwned(this.context.workspaceKey, caller, nowMs, 100)
-          .length < 100
-      )
-        return;
+      const batchItems = this.requests.expireDueForTargetOwned(
+        this.context.workspaceKey,
+        caller,
+        nowMs,
+        100,
+      );
+      terminalized.push(...batchItems);
+      if (batchItems.length < 100) return terminalized;
     }
     throw new StoreIntegrityError("Target request expiry exceeded its hard bound.");
   }
 
-  private drainDueSourceResults(caller: string, nowMs: number): void {
+  private drainDueSourceResults(caller: string, nowMs: number): RequestMetadata[] {
+    const terminalized: RequestMetadata[] = [];
     const maximumBatches = Math.ceil(sqliteStoreHardCeilings.availableResultsPerSource / 100) + 1;
     for (let batch = 0; batch < maximumBatches; batch++) {
-      if (
-        this.results.expireAvailableForSourceOwned(this.context.workspaceKey, caller, nowMs, 100)
-          .length < 100
-      )
-        return;
+      const batchItems = this.results.expireAvailableForSourceOwned(
+        this.context.workspaceKey,
+        caller,
+        nowMs,
+        100,
+      );
+      terminalized.push(...batchItems);
+      if (batchItems.length < 100) return terminalized;
     }
     throw new StoreIntegrityError("Source result expiry exceeded its hard bound.");
   }

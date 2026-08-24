@@ -28,6 +28,12 @@ The committed test and this capability summary contain
 no captured transcript, raw workspace path, credential, or generated export.
 Live tests are intentionally excluded from normal tests and coverage.
 
+The V2 prompt error declaration/source pins definitive pre-admission rejection to exact 400
+`InvalidRequestError`, 401 `UnauthorizedError`, and target-correlated 404
+`SessionNotFoundError` tuples. A no-admission rejection is not currently feasible to induce in the
+isolated live harness. That classification is therefore declaration/source-bound rather than
+live-proven; 409 conflicts and every unlisted, mismatched, or proxy-like response remain unknown.
+
 ## Phase 0 native-session capability matrix
 
 `test/live/phase0-native-session.test.ts` uses the project-local

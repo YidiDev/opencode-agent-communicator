@@ -93,6 +93,7 @@ test("readiness blocks request list/get family before validation or effects", as
   const base = blocked(effects);
   const ports = {
     readiness: base.readiness,
+    notifications: { notifyTerminal: () => undefined },
     membership: base.membership,
     requests: { listForParticipant: base.touch, getParticipantRequest: base.touch },
   } satisfies SessionRequestListPorts & SessionRequestGetPorts;

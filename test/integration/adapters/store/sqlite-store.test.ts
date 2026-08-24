@@ -145,12 +145,12 @@ describe("Linux private SQLite initialization", () => {
     first.close();
 
     const second = openStore({ state: location.state, ownerId: "owner-reopen", time });
-    expect(second.schemaVersion).toBe(7);
+    expect(second.schemaVersion).toBe(8);
     const migrationCount = inspect<{ count: number }>(
       second.databasePath,
       "SELECT count(*) AS count FROM schema_migrations",
     );
-    expect(migrationCount?.count).toBe(7);
+    expect(migrationCount?.count).toBe(8);
     expect(Number(await second.acquire())).toBe(Number(token) + 1);
     expect(await second.readStorageDiagnostics()).toEqual({
       journalMode: "wal",
@@ -276,7 +276,7 @@ describe("Linux private SQLite initialization", () => {
     );
     time.advance(2);
     const migrated = openStore({ state: location.state, ownerId: "expired-bootstrap", time });
-    expect(migrated.schemaVersion).toBe(7);
+    expect(migrated.schemaVersion).toBe(8);
     migrated.close();
     first.close();
   });
