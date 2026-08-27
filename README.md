@@ -47,17 +47,18 @@ release gates. Network and clustered filesystems are rejected for the state stor
 
 ## Install
 
-### 1. Add the plugin
+### 1. Add the plugin from GitHub
 
-Add the exact package version and an options object to either the project `opencode.json` or the
-global `~/.config/opencode/opencode.json`:
+Until `0.1.0` is published to npm, install the reviewed release candidate directly from GitHub. The
+repository is currently private, so the account running OpenCode must have working SSH access to it.
+Use the full commit SHA rather than `main` so startup always resolves the same source:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "opencode-agent-communicator@0.1.0",
+      "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#d7456f0237e3a43db57fbc940a49e8c048ae847a",
       {
         "policies": {
           "message": "allow",
@@ -71,9 +72,14 @@ global `~/.config/opencode/opencode.json`:
 }
 ```
 
-OpenCode `1.18.21` accepts plugin entries as either a package string or `[package, options]`. This
-plugin uses the tuple form because its options are strict and package-specific. OpenCode installs npm
-plugins with Bun into its cache; no project-level `bun add` is required.
+OpenCode `1.18.21` accepts plugin entries as either a package string or `[package, options]` and its
+package installer accepts Git dependency specifiers. This plugin uses the tuple form because its
+options are strict and package-specific. OpenCode clones and installs the pinned repository into its
+package cache; no project-level clone or `bun add` is required. To upgrade a Git installation, replace
+the SHA with a newer reviewed commit and restart OpenCode.
+
+After the package is published, the Git URL can be replaced with
+`opencode-agent-communicator@0.1.0`. Do not use that npm specifier before publication.
 
 ### 2. Prepare private state
 
@@ -107,7 +113,7 @@ configuration are startup errors.
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "opencode-agent-communicator@0.1.0",
+      "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#d7456f0237e3a43db57fbc940a49e8c048ae847a",
       {
         "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
         "startupDeadlineMs": 30000,
@@ -379,7 +385,8 @@ version. Before replacing a development build:
 
 1. Stop every OpenCode backend that uses the state directory.
 2. Back up the entire private state directory, including SQLite sidecars, while no backend is running.
-3. Pin `opencode-agent-communicator@0.1.0` and OpenCode `1.18.21` in configuration.
+3. Pin the GitHub installation to a reviewed full commit SHA and pin OpenCode `1.18.21` in
+   configuration. After npm publication, use `opencode-agent-communicator@0.1.0` instead.
 4. Restart OpenCode and verify plugin startup and the 14-tool manifest.
 
 Startup applies forward SQLite migrations atomically. Production never runs migration `downSql`.
