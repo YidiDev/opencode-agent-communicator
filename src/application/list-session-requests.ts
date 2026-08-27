@@ -3,6 +3,7 @@ import { OwnershipLostFault } from "../domain/ownership";
 import { type DomainResult, domainFailure } from "../domain/results";
 import { validateSessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
+import { boundedExternalCall } from "./bounded-external-call";
 import {
   assertCommunicatorReady,
   type CommunicatorReadinessPort,
@@ -35,6 +36,7 @@ export interface SessionRequestListPorts {
   readonly notifications: CommittedRequestNotificationPort;
 }
 
+// biome-ignore-all format: keep strict page validation inside its bounded query branch.
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: validation, visibility, pagination, and committed transition hints remain one query boundary.
 export async function listSessionRequests(
   ports: SessionRequestListPorts,
@@ -42,10 +44,12 @@ export async function listSessionRequests(
     readonly workspaceKey: WorkspaceKey;
     readonly callerSessionId: unknown;
     readonly fencingToken: FencingToken;
+    readonly abort?: AbortSignal;
+    readonly deadlineMs?: number;
   },
   query: unknown = undefined,
 ): Promise<DomainResult<SessionRequestListResult>> {
-  assertCommunicatorReady(ports.readiness);
+  assertCommunicatorReady(ports.readiness, context.fencingToken);
   const caller = validateSessionId(context.callerSessionId);
   if (!caller.ok) return domainFailure("invalid_arguments", caller.message, false);
   const queryData = query === undefined ? {} : snapshotDataRecord(query, 3);
@@ -79,12 +83,33 @@ export async function listSessionRequests(
   if (parsedCursor && !parsedCursor.ok) {
     return domainFailure("invalid_arguments", parsedCursor.message, false);
   }
-  try {
-    const rawMembership = await ports.membership.readCurrentRoots(
+  const invoke = async <Value>(operation: () => Promise<Value>) => {
+    if (context.abort && context.deadlineMs !== undefined) {
+      return boundedExternalCall(operation, context.abort, context.deadlineMs);
+    }
+    try {
+      return { kind: "value" as const, value: await operation() };
+    } catch (cause: unknown) {
+      return { kind: "rejected" as const, cause };
+    }
+  };
+  {
+    const membershipCall = await invoke(() => ports.membership.readCurrentRoots(
       context.workspaceKey,
       caller.value,
       caller.value,
-    );
+    ));
+    if (membershipCall.kind === "expired") {
+      return domainFailure("deadline_expired", "Request list invocation deadline expired.", false);
+    }
+    if (membershipCall.kind === "rejected") {
+      if (membershipCall.cause instanceof OwnershipLostFault) {
+        return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+      }
+      return domainFailure("native_unavailable", "Current session membership is unavailable.", true);
+    }
+    const rawMembership = membershipCall.value;
+    try {
     const membership = snapshotDataRecord(rawMembership, 3);
     if (
       !membership ||
@@ -105,21 +130,30 @@ export async function listSessionRequests(
         false,
       );
     }
-  } catch (cause: unknown) {
-    if (cause instanceof OwnershipLostFault) {
-      return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+    } catch {
+      return domainFailure("native_unavailable", "Current session membership is unavailable.", true);
     }
-    return domainFailure("native_unavailable", "Current session membership is unavailable.", true);
   }
-  try {
-    const rawPage = await ports.requests.listForParticipant({
+  {
+    const pageCall = await invoke(() => ports.requests.listForParticipant({
       fencingToken: context.fencingToken,
       workspaceKey: context.workspaceKey,
       callerSessionId: caller.value,
       role: typedRole,
       ...(parsedCursor?.ok ? { boundary: parsedCursor.boundary } : {}),
       limit: limit as number,
-    });
+    }));
+    if (pageCall.kind === "expired") {
+      return domainFailure("deadline_expired", "Request list invocation deadline expired.", false);
+    }
+    if (pageCall.kind === "rejected") {
+      if (pageCall.cause instanceof OwnershipLostFault) {
+        return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+      }
+      return domainFailure("storage_unavailable", "Request storage is unavailable.", true);
+    }
+    const rawPage = pageCall.value;
+    try {
     const repositoryResult = snapshotDataRecord(rawPage, 3);
     if (!repositoryResult || Object.keys(repositoryResult).length !== 3)
       throw new Error("The participant list terminalizations were malformed.");
@@ -184,10 +218,8 @@ export async function listSessionRequests(
           : {}),
       },
     };
-  } catch (cause: unknown) {
-    if (cause instanceof OwnershipLostFault) {
-      return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+    } catch {
+      return domainFailure("storage_unavailable", "Request storage is unavailable.", true);
     }
-    return domainFailure("storage_unavailable", "Request storage is unavailable.", true);
   }
 }

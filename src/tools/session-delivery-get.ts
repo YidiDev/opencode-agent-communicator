@@ -16,6 +16,7 @@ import { publicParticipantDelivery } from "./public-values";
 export function createSessionDeliveryGetTool(
   ports: SessionDeliveryGetPorts,
   workspaceKey: WorkspaceKey,
+  invocationDeadlineMs?: () => number,
 ): InternalToolContract<SessionDeliveryGetToolArguments> {
   return {
     description:
@@ -23,10 +24,19 @@ export function createSessionDeliveryGetTool(
     args: sessionDeliveryGetArgumentsSchema,
     async execute(arguments_, context) {
       const source = validateSessionId(context.sessionID);
+      const deadlineMs = invocationDeadlineMs?.();
+      if (deadlineMs !== undefined && (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1)) {
+        throw new Error("Delivery query invocation deadline is invalid.");
+      }
       const result = source.ok
         ? await getSessionDelivery(
             ports,
-            { workspaceKey, sourceSessionId: source.value },
+            {
+              workspaceKey,
+              sourceSessionId: source.value,
+              abort: context.abort,
+              ...(deadlineMs === undefined ? {} : { deadlineMs }),
+            },
             arguments_,
           )
         : domainFailure("invalid_arguments", source.message, false);

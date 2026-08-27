@@ -231,6 +231,42 @@ test("wake during read cannot lose an earlier deadline", async () => {
   expect(timers.delays).toEqual([2]);
 });
 
+test("stop drain waits for the in-flight store completion before disposal can close it", async () => {
+  let release: (() => void) | undefined;
+  let storeClosed = false;
+  const scheduler = new RequestDeadlineScheduler({
+    requests: {
+      expireDueRequests: () =>
+        new Promise((resolve) => {
+          release = () => {
+            expect(storeClosed).toBe(false);
+            resolve({ ok: true, requests: [] });
+          };
+        }),
+      readNextPendingDeadline: async () => ({ storeObservedAtMs: 0, maximumSleepMs: 100 }),
+    },
+    notifications: { notifyTerminal: () => undefined },
+    fencingToken: token,
+    workspaceKey,
+    timers: new FakeTimers(),
+    nowMonotonicMs: () => 0,
+  });
+  let drained = false;
+  const drain = scheduler.drain().then(() => {
+    drained = true;
+    storeClosed = true;
+  });
+  // Replace the completion after drain has observed the scheduler's initial settled promise.
+  scheduler.start();
+  while (!release) await Promise.resolve();
+  scheduler.stop();
+  await Promise.resolve();
+  expect(drained).toBe(false);
+  release();
+  await drain;
+  expect(storeClosed).toBe(true);
+});
+
 test("wake during arm clears the stale timer", async () => {
   const timers = new FakeTimers();
   let scheduler: RequestDeadlineScheduler;
@@ -622,7 +658,7 @@ test("invalid, throwing, and regressing monotonic clocks fault", async () => {
   }
 });
 
-test("stop releases drain while persistence is hung and eventual rejection stays observed", async () => {
+test("stop aborts before drain and remains finite for a non-cooperative persistence promise", async () => {
   let reject!: (cause: unknown) => void;
   const scheduler = new RequestDeadlineScheduler({
     requests: {
@@ -638,6 +674,7 @@ test("stop releases drain while persistence is hung and eventual rejection stays
   while (!reject) await Promise.resolve();
   scheduler.stop();
   await scheduler.drain();
+  expect(scheduler.status).toBe("stopped");
   reject(new OwnershipLostFault("late"));
   await Promise.resolve();
 });

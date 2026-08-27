@@ -126,6 +126,33 @@ function fileIdentity(path: string): { readonly inode: bigint; readonly hash: st
   };
 }
 
+function assertBroadModeRejectedWithoutMutation(
+  state: string,
+  expectedStateMode: number,
+  expectedDatabaseMode: number,
+  label: string,
+): void {
+  const paths = readdirSync(state).map((name) => join(state, name));
+  const before = new Map(paths.map((path) => [path, fileIdentity(path)]));
+  let rejected = false;
+  try {
+    openStore(state, `broad-mode-${label}`);
+  } catch (cause: unknown) {
+    rejected = cause instanceof StoreSecurityError;
+  }
+  assert(rejected, `${label} is rejected`);
+  assert((lstatSync(state).mode & 0o777) === expectedStateMode, `${label} state mode is unchanged`);
+  assert(readdirSync(state).length === paths.length, `${label} creates no state files`);
+  for (const [path, identity] of before) {
+    assert(fileIdentity(path).inode === identity.inode, `${label} inode is unchanged`);
+    assert(fileIdentity(path).hash === identity.hash, `${label} content is unchanged`);
+  }
+  assert(
+    (lstatSync(join(state, databaseName)).mode & 0o777) === expectedDatabaseMode,
+    `${label} database mode is unchanged`,
+  );
+}
+
 async function baselineWorker(root: string): Promise<void> {
   assert(process.getuid?.() === victimUid, "store worker is victim UID 10001");
   const state = join(root, "baseline-state");
@@ -158,14 +185,20 @@ async function baselineWorker(root: string): Promise<void> {
   store.close();
 
   integrityEvidence(join(state, databaseName));
-  chmodSync(join(state, databaseName), 0o644);
   chmodSync(state, 0o755);
-  const reopened = openStore(state, "readonly-repair");
+  assertBroadModeRejectedWithoutMutation(state, 0o755, 0o600, "broad state/private database");
+  chmodSync(state, 0o700);
+  chmodSync(join(state, databaseName), 0o644);
+  assertBroadModeRejectedWithoutMutation(state, 0o700, 0o644, "private state/broad database");
+  chmodSync(join(state, databaseName), 0o600);
+  const reopened = openStore(state, "readonly-reopen");
   await reopened.acquire();
   stateModeEvidence(state, reopened.databasePath);
   reopened.close();
   integrityEvidence(join(state, databaseName));
-  console.log("PASS baseline modes/link-counts/integrity/lock-timeout/mode-repair-reopen");
+  console.log(
+    "PASS baseline modes/link-counts/integrity/lock-timeout/separate-broad-mode-rejects/reopen",
+  );
 }
 
 async function lockHolder(databasePath: string, ready: string, release: string): Promise<void> {
@@ -179,16 +212,18 @@ async function lockHolder(databasePath: string, ready: string, release: string):
 
 async function canonicalWorker(root: string, moved: string): Promise<void> {
   const state = join(root, "canonical-state");
-  const store = openStore(state, "canonical-held");
-  const token = await store.acquire();
-  assert((await store.createPrepared(fixture(token, 10))).ok, "initial anchored write succeeds");
+  let rejected = false;
+  try {
+    openStore(state, "canonical-held");
+  } catch (cause: unknown) {
+    rejected = cause instanceof StoreSecurityError;
+  }
+  assert(rejected, "attacker-controlled ancestor is rejected before SQLite opens");
+  assert(readdirSync(state).length === 0, "rejected state directory remains empty");
   writeFileSync(marker("canonical-ready"), "ready");
   await waitFor(marker("canonical-go"));
-  assert((await store.createPrepared(fixture(token, 11))).ok, "write remains on held directory");
-  assert(existsSync(join(moved, `${databaseName}-wal`)), "WAL remains in moved held directory");
   assert(!existsSync(join(state, databaseName)), "replacement receives no database state");
-  store.close();
-  integrityEvidence(join(moved, databaseName));
+  assert(!existsSync(join(moved, databaseName)), "moved directory contains no database state");
 }
 
 function canonicalAttacker(state: string, moved: string): void {
@@ -494,11 +529,11 @@ async function canonicalScenario(root: string): Promise<void> {
     launchWorker("canonical-attacker", [state, moved], attackerUid),
     "UID 10002 canonical swap",
   );
-  await requireSuccess(child, "canonical descriptor scenario");
+  await requireSuccess(child, "canonical identity fail-closed scenario");
   assert(readdirSync(state).length === 0, "no state appears outside held directory");
   assert(lstatSync(state).uid === attackerUid, "replacement remains attacker-owned");
   chmodSync(root, 0o700);
-  console.log("PASS UID-10002 path-swap/inode-anchored-writes/no-replacement-state");
+  console.log("PASS UID-10002 untrusted-ancestor/path-swap/fail-closed/no-state");
 }
 
 async function attackerScenario(root: string): Promise<void> {

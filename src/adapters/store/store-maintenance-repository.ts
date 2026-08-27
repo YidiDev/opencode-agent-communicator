@@ -1,6 +1,8 @@
 import type { FencingToken } from "../../domain/ownership";
+import type { WorkspaceKey } from "../../domain/workspaces";
 import { readNumericPragma } from "./database-configuration";
 import type { OwnershipRepository } from "./ownership-repository";
+import { requestStoreNowMs } from "./request-repository-shared";
 import { type StoreContext, StoreIntegrityError } from "./store-types";
 
 const deliveryMetadataRetentionMs = 30 * 24 * 60 * 60 * 1_000;
@@ -29,32 +31,47 @@ export class StoreMaintenanceRepository {
 
   garbageCollectDeliveryMetadata(input: {
     readonly fencingToken: FencingToken;
-    readonly nowMs: number;
+    readonly workspaceKey: WorkspaceKey;
     readonly limit: number;
-  }): number {
-    if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 1_000) {
+  }): Readonly<{
+    readonly ok: true;
+    readonly deletedDeliveries: number;
+    readonly deletedRateEvents: number;
+  }> {
+    if (
+      input.workspaceKey !== this.context.workspaceKey ||
+      !Number.isSafeInteger(input.limit) ||
+      input.limit < 1 ||
+      input.limit > 1_000
+    ) {
       throw new StoreIntegrityError("The metadata GC batch limit is invalid.");
     }
     const collect = this.context.database.transaction(() => {
       this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
-      const cutoffMs = Math.max(0, input.nowMs - deliveryMetadataRetentionMs);
+      const storeNowMs = requestStoreNowMs(this.context);
+      const metadataCutoffMs = Math.max(0, storeNowMs - deliveryMetadataRetentionMs);
+      const rateCutoffMs = Math.max(0, storeNowMs - this.context.limits.rateWindowMs);
       const deleted = this.context.database.run(
         `DELETE FROM deliveries WHERE id IN (
            SELECT id FROM deliveries
            WHERE state IN ('admission_unknown','admitted','promoted','failed','cancelled')
              AND workspace_key = ? AND updated_at_ms <= ? ORDER BY updated_at_ms, id LIMIT ?
          )`,
-        [this.context.workspaceKey, cutoffMs, input.limit],
+        [input.workspaceKey, metadataCutoffMs, input.limit],
       );
-      this.context.database.run(
+      const rateEvents = this.context.database.run(
         `DELETE FROM delivery_rate_events WHERE sequence IN (
            SELECT sequence FROM delivery_rate_events
            WHERE workspace_key = ? AND occurred_at_ms <= ?
            ORDER BY occurred_at_ms, sequence LIMIT ?
          )`,
-        [this.context.workspaceKey, cutoffMs, input.limit],
+        [input.workspaceKey, rateCutoffMs, input.limit],
       );
-      return deleted.changes;
+      return {
+        ok: true as const,
+        deletedDeliveries: deleted.changes,
+        deletedRateEvents: rateEvents.changes,
+      };
     });
     return collect.immediate();
   }

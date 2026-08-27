@@ -18,7 +18,7 @@ import {
   notifyTerminalSafely,
 } from "./request-terminal-notification";
 import {
-  assertRequestMutationControl,
+  checkRequestMutationControl,
   hasExactKeys,
   malformedRequestStoreFailure,
   mapTargetTerminalStoreFailure,
@@ -70,7 +70,7 @@ export async function respondToSessionRequest(
   context: SessionRequestMutationContext,
   args: SessionRespondArguments,
 ): Promise<DomainResult<SessionRespondResult>> {
-  assertCommunicatorReady(ports.readiness);
+  assertCommunicatorReady(ports.readiness, context.fencingToken);
   const identity = validateRequestMutation(context, args.request_id);
   if (!identity.ok) return identity;
   const answers = validateRetainedAskRequestResult({ kind: "ask", answers: args.answers });
@@ -79,7 +79,8 @@ export async function respondToSessionRequest(
   if (!submitted.ok) return submitted;
   const current = await requireCurrentCaller(ports, context, identity.value.callerSessionId);
   if (!current.ok) return current;
-  assertRequestMutationControl(ports, context);
+  const dispatchControl = checkRequestMutationControl(ports, context);
+  if (!dispatchControl.ok) return dispatchControl;
   try {
     const stored: unknown = await ports.requests.answerAsk({
       fencingToken: context.fencingToken,

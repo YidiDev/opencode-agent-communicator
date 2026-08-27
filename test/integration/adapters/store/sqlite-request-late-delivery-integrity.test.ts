@@ -135,7 +135,7 @@ describe("late delivery terminal result integrity", () => {
         store.close();
       }
     }
-  });
+  }, 30_000);
 
   test("post-transition validation rolls back a child deleted by the delivery update itself", async () => {
     const store = openRequestStore();

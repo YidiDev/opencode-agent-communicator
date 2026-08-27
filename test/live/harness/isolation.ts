@@ -20,6 +20,7 @@ export type IsolationSetupStage = "after-root" | "after-directories" | "after-co
 interface IsolationOptions {
   readonly providerBaseUrl: string;
   readonly pluginPath: string;
+  readonly pluginOptions?: Readonly<Record<string, unknown>>;
   readonly setupOperation?: (input: {
     readonly stage: IsolationSetupStage;
     readonly root: string;
@@ -84,11 +85,18 @@ async function initializeIsolatedOpenCodeState(
     enabled_providers: [testProviderID],
     skills: { paths: [controlSkillPath] },
     tools: { diagnostic_context: true },
-    plugin: [[pathToFileURL(options.pluginPath).href, { evidencePath, skillPath }]],
+    plugin: [
+      [
+        pathToFileURL(options.pluginPath).href,
+        options.pluginOptions ?? { evidencePath, skillPath },
+      ],
+    ],
     permission: {
       live_allow: "allow",
       live_deny: "deny",
       live_ask: "ask",
+      session_start: "ask",
+      session_stop: "allow",
     },
     provider: {
       [testProviderID]: {

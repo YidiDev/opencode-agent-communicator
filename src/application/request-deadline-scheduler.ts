@@ -1,30 +1,20 @@
 import type { FencingToken } from "../domain/ownership";
-import { OwnershipLostFault } from "../domain/ownership";
-import { isCoherentRequestMetadata } from "../domain/request-metadata";
-import type { RequestMetadata } from "../domain/request-types";
 import type { WorkspaceKey } from "../domain/workspaces";
-import { runUntilAborted } from "./abortable-operation";
+import type { DeliveryRetentionPersistencePort } from "./delivery-retention";
 import { observeNativePromiseRejection } from "./native-promise-observation";
-import { inspectPendingDeadlineSchedule } from "./request-deadline-boundaries";
-import { drainRequestMaintenance, type RequestMaintenancePorts } from "./request-maintenance";
+import type { RequestDeadlinePumpFaultCode } from "./request-deadline-maintenance";
+import { type RequestDeadlineTimedSchedule, runRequestDeadlinePump } from "./request-deadline-pump";
+import type { RequestMaintenancePorts } from "./request-maintenance";
 import type { CommittedRequestNotificationPort } from "./request-notification-port";
-import type {
-  NextPendingRequestDeadline,
-  RequestDeadlinePersistencePort,
-  RequestStoreFailureCode,
-} from "./request-ports";
-import { requestStoreFailureCodes } from "./request-ports";
-import { inspectRequestMetadata } from "./request-recovery-boundaries";
-import {
-  createTerminalNotificationEvent,
-  notifyTerminalSafely,
-} from "./request-terminal-notification";
-import { snapshotDataRecord, snapshotDenseArray } from "./strict-port-boundaries";
+import type { RequestDeadlinePersistencePort } from "./request-ports";
 
-export const requestDeadlineBatchLimit = 100;
+export {
+  requestDeadlineBatchLimit,
+  requestDeadlineMaximumExpiredRowsPerPump,
+} from "./request-deadline-inspection";
+export { requestDeadlineMaximumBatchesPerPump } from "./request-deadline-pump";
+
 export const requestDeadlineMaximumTimerDelayMs = 2_147_483_647;
-export const requestDeadlineMaximumExpiredRowsPerPump = 2_048;
-export const requestDeadlineMaximumBatchesPerPump = 22;
 export const requestDeadlineMaximumImmediateSchedulesPerPump = 32;
 
 export interface RequestDeadlineTimerPort {
@@ -37,10 +27,7 @@ const nativeDeadlineTimers: RequestDeadlineTimerPort = {
   clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
-export type RequestDeadlineSchedulerFaultCode =
-  | "ownership_lost"
-  | "storage_failure"
-  | "port_contract_violation";
+export type RequestDeadlineSchedulerFaultCode = RequestDeadlinePumpFaultCode;
 
 export class RequestDeadlineSchedulerFault extends Error {
   override readonly name = "RequestDeadlineSchedulerFault";
@@ -58,6 +45,11 @@ export interface RequestDeadlineSchedulerOptions {
   readonly timers?: RequestDeadlineTimerPort;
   readonly nowMonotonicMs?: () => number;
   readonly maintenance?: RequestMaintenancePorts;
+  readonly additionalMaintenance?: (
+    shouldStop: () => boolean,
+    abort: AbortSignal,
+  ) => Promise<{ readonly ok: boolean; readonly code?: string }>;
+  readonly deliveryRetention?: DeliveryRetentionPersistencePort;
   readonly onFault?: (fault: RequestDeadlineSchedulerFault) => undefined;
 }
 
@@ -66,19 +58,7 @@ export type RequestDeadlineSchedulerReadiness =
   | Readonly<{ readonly ok: true }>
   | Readonly<{ readonly ok: false; readonly fault: RequestDeadlineSchedulerFault }>;
 
-interface PumpBudget {
-  readonly seen: Set<string>;
-  expiredRows: number;
-  batches: number;
-  immediateSchedules: number;
-}
-
 type ScheduleDecision = "armed" | "immediate" | "failed";
-type BatchDecision = "full" | "done" | "stopped";
-type TimedSchedule = Readonly<{
-  schedule: NextPendingRequestDeadline;
-  elapsedMs: number;
-}>;
 
 function defaultMonotonicNowMs(): number {
   if (typeof performance !== "undefined" && typeof performance.now === "function") {
@@ -87,16 +67,10 @@ function defaultMonotonicNowMs(): number {
   return Number(process.hrtime.bigint()) / 1_000_000;
 }
 
-function classifyFailure(code: RequestStoreFailureCode): RequestDeadlineSchedulerFaultCode {
-  return code === "ownership_lost" ? "ownership_lost" : "storage_failure";
-}
-
 export class RequestDeadlineScheduler {
   private readonly timers: RequestDeadlineTimerPort;
   private readonly nowMonotonicMs: () => number;
-  private readonly stopLatch: Promise<void>;
   private readonly effectController = new AbortController();
-  private releaseStopLatch!: () => void;
   private active = false;
   private stopped = false;
   private faultReported = false;
@@ -113,9 +87,6 @@ export class RequestDeadlineScheduler {
   constructor(private readonly options: RequestDeadlineSchedulerOptions) {
     this.timers = options.timers ?? nativeDeadlineTimers;
     this.nowMonotonicMs = options.nowMonotonicMs ?? defaultMonotonicNowMs;
-    this.stopLatch = new Promise((resolve) => {
-      this.releaseStopLatch = resolve;
-    });
   }
 
   start(): void {
@@ -170,8 +141,10 @@ export class RequestDeadlineScheduler {
     this.stopped = true;
     this.active = false;
     this.dirty = false;
+    // Interrupt bounded port wrappers before disposal starts waiting for the pump. The pump
+    // promise remains the drain boundary, while a non-cooperative promise that lost the abort
+    // race stays observed by the wrapper and cannot make disposal unbounded.
     this.effectController.abort("scheduler_stopped");
-    this.releaseStopLatch();
     const stoppedFault = new RequestDeadlineSchedulerFault("port_contract_violation");
     this.resolveReadiness(Object.freeze({ ok: false, fault: stoppedFault }));
     if (!this.clearTimerHandle()) {
@@ -181,195 +154,42 @@ export class RequestDeadlineScheduler {
   }
 
   async drain(): Promise<void> {
-    while (!this.stopped) {
+    for (;;) {
       const observed = this.completion;
-      await Promise.race([observed, this.stopLatch]);
-      if (this.stopped) return;
-      if (observed === this.completion) return;
+      await observed;
+      // A completing pump may synchronously schedule its replacement from `finally`. Do not
+      // release disposal until the replacement has also settled, including after stop.
+      if (observed === this.completion && !this.pumping) return;
     }
   }
 
   private async pump(): Promise<void> {
-    const budget: PumpBudget = {
-      seen: new Set(),
-      expiredRows: 0,
-      batches: 0,
-      immediateSchedules: 0,
-    };
+    let immediateSchedules = 0;
     try {
-      while (this.active && this.dirty) {
-        this.dirty = false;
-        const timedSchedule = await this.expireAndRead(budget);
-        if (!this.active || !timedSchedule) return;
-        if (!this.applySchedule(timedSchedule, budget)) return;
-      }
-    } catch (cause: unknown) {
-      this.fail(cause instanceof OwnershipLostFault ? "ownership_lost" : "storage_failure");
+      await runRequestDeadlinePump({
+        options: this.options,
+        abort: this.effectController.signal,
+        isActive: () => this.active,
+        consumeDirty: () => {
+          if (!this.dirty) return false;
+          this.dirty = false;
+          return true;
+        },
+        readMonotonicMs: () => this.readMonotonicClock(),
+        applySchedule: (schedule) => {
+          const result = this.applySchedule(schedule, immediateSchedules);
+          immediateSchedules = result.immediateSchedules;
+          return result.continue;
+        },
+        fail: (code) => this.fail(code),
+      });
     } finally {
       this.pumping = false;
       if (this.active && this.dirty) this.wake();
     }
   }
 
-  private async expireAndRead(budget: PumpBudget): Promise<TimedSchedule | undefined> {
-    while (this.active) {
-      budget.batches += 1;
-      if (budget.batches > requestDeadlineMaximumBatchesPerPump) {
-        this.fail("port_contract_violation");
-        return undefined;
-      }
-      const decision = await this.expireBatch(budget);
-      if (decision === "stopped") return undefined;
-      if (decision === "done") break;
-    }
-    if (!(await this.runMaintenance())) return undefined;
-    return this.readSchedule();
-  }
-
-  private async runMaintenance(): Promise<boolean> {
-    if (!this.options.maintenance) return this.active;
-    const result = await drainRequestMaintenance({
-      ports: this.options.maintenance,
-      fencingToken: this.options.fencingToken,
-      workspaceKey: this.options.workspaceKey,
-      shouldStop: () => !this.active,
-      abort: this.effectController.signal,
-    });
-    if (!this.active) return false;
-    if (result.ok) return true;
-    this.fail(
-      result.code === "ownership_lost"
-        ? "ownership_lost"
-        : result.code === "contract"
-          ? "port_contract_violation"
-          : "storage_failure",
-    );
-    return false;
-  }
-
-  private async expireBatch(budget: PumpBudget): Promise<BatchDecision> {
-    let returned: unknown;
-    try {
-      const settlement = await runUntilAborted(this.effectController.signal, () =>
-        this.options.requests.expireDueRequests({
-          fencingToken: this.options.fencingToken,
-          workspaceKey: this.options.workspaceKey,
-          limit: requestDeadlineBatchLimit,
-        }),
-      );
-      if (settlement.kind === "aborted") return "stopped";
-      if (settlement.kind === "rejected") throw settlement.cause;
-      returned = settlement.value;
-    } catch (cause: unknown) {
-      this.fail(cause instanceof OwnershipLostFault ? "ownership_lost" : "storage_failure");
-      return "stopped";
-    }
-    if (!this.active) return "stopped";
-    const inspected = this.inspectExpiration(returned, budget);
-    if (!inspected) return "stopped";
-    if ("failure" in inspected) {
-      this.fail(inspected.failure);
-      return "stopped";
-    }
-    for (const request of inspected.requests) {
-      try {
-        notifyTerminalSafely(
-          this.options.notifications,
-          createTerminalNotificationEvent(request as never),
-        );
-      } catch {
-        this.fail("port_contract_violation");
-        return "stopped";
-      }
-    }
-    return inspected.requests.length === requestDeadlineBatchLimit ? "full" : "done";
-  }
-
-  private async readSchedule(): Promise<TimedSchedule | undefined> {
-    if (!this.active) return undefined;
-    const before = this.readMonotonicClock();
-    if (before === undefined) return undefined;
-    let returned: unknown;
-    try {
-      const settlement = await runUntilAborted(this.effectController.signal, () =>
-        this.options.requests.readNextPendingDeadline({
-          fencingToken: this.options.fencingToken,
-          workspaceKey: this.options.workspaceKey,
-        }),
-      );
-      if (settlement.kind === "aborted") return undefined;
-      if (settlement.kind === "rejected") throw settlement.cause;
-      returned = settlement.value;
-    } catch (cause: unknown) {
-      this.fail(cause instanceof OwnershipLostFault ? "ownership_lost" : "storage_failure");
-      return undefined;
-    }
-    if (!this.active) return undefined;
-    const after = this.readMonotonicClock();
-    if (after === undefined) return undefined;
-    if (after < before) {
-      this.fail("port_contract_violation");
-      return undefined;
-    }
-    const schedule = inspectPendingDeadlineSchedule(returned);
-    if (schedule) return { schedule, elapsedMs: after - before };
-    this.fail("port_contract_violation");
-    return undefined;
-  }
-
-  private inspectExpiration(
-    value: unknown,
-    budget: PumpBudget,
-  ):
-    | { readonly requests: readonly RequestMetadata[] }
-    | { readonly failure: RequestDeadlineSchedulerFaultCode }
-    | undefined {
-    try {
-      const result = snapshotDataRecord(value, 2);
-      if (!result) throw new TypeError();
-      const keys = Object.keys(result);
-      if (result.ok === false) {
-        if (
-          keys.length !== 2 ||
-          !keys.includes("code") ||
-          !requestStoreFailureCodes.includes(result.code as RequestStoreFailureCode)
-        ) {
-          throw new TypeError();
-        }
-        return { failure: classifyFailure(result.code as RequestStoreFailureCode) };
-      }
-      if (result.ok !== true || keys.length !== 2 || !keys.includes("requests")) {
-        throw new TypeError();
-      }
-      const rawRequests = snapshotDenseArray(result.requests, requestDeadlineBatchLimit);
-      if (!rawRequests) throw new TypeError();
-      if (budget.expiredRows + rawRequests.length > requestDeadlineMaximumExpiredRowsPerPump) {
-        throw new TypeError();
-      }
-      const requests: RequestMetadata[] = [];
-      for (const raw of rawRequests) {
-        const request = inspectRequestMetadata(raw);
-        if (
-          !request ||
-          !isCoherentRequestMetadata(request) ||
-          request.workspaceKey !== this.options.workspaceKey ||
-          request.resolutionState !== "deadline_expired" ||
-          budget.seen.has(request.id as string)
-        ) {
-          throw new TypeError();
-        }
-        budget.seen.add(request.id as string);
-        requests.push(Object.freeze(request) as unknown as RequestMetadata);
-      }
-      budget.expiredRows += requests.length;
-      return { requests };
-    } catch {
-      this.fail("port_contract_violation");
-      return undefined;
-    }
-  }
-
-  private arm({ schedule, elapsedMs }: TimedSchedule): ScheduleDecision {
+  private arm({ schedule, elapsedMs }: RequestDeadlineTimedSchedule): ScheduleDecision {
     let delay = Math.min(schedule.maximumSleepMs, requestDeadlineMaximumTimerDelayMs);
     if (schedule.nextDeadlineAtMs !== undefined) {
       if (schedule.nextDeadlineAtMs <= schedule.storeObservedAtMs + elapsedMs) return "immediate";
@@ -408,22 +228,27 @@ export class RequestDeadlineScheduler {
     return "armed";
   }
 
-  private applySchedule(schedule: TimedSchedule, budget: PumpBudget): boolean {
-    if (this.dirty) return true;
+  private applySchedule(
+    schedule: RequestDeadlineTimedSchedule,
+    immediateSchedules: number,
+  ): { readonly continue: boolean; readonly immediateSchedules: number } {
+    if (this.dirty) return { continue: true, immediateSchedules };
     const decision = this.arm(schedule);
-    if (decision === "failed") return false;
+    if (decision === "failed") return { continue: false, immediateSchedules };
     if (decision === "immediate") {
-      budget.immediateSchedules += 1;
-      if (budget.immediateSchedules > requestDeadlineMaximumImmediateSchedulesPerPump) {
+      const nextImmediateSchedules = immediateSchedules + 1;
+      if (nextImmediateSchedules > requestDeadlineMaximumImmediateSchedulesPerPump) {
         this.fail("port_contract_violation");
-        return false;
+        return { continue: false, immediateSchedules: nextImmediateSchedules };
       }
       this.dirty = true;
-      return true;
+      return { continue: true, immediateSchedules: nextImmediateSchedules };
     }
-    if (this.dirty) return this.clearTimer();
+    if (this.dirty) {
+      return { continue: this.clearTimer(), immediateSchedules };
+    }
     if (this.timerArmed) this.markReady();
-    return true;
+    return { continue: true, immediateSchedules };
   }
 
   private markReady(): void {
@@ -478,7 +303,6 @@ export class RequestDeadlineScheduler {
     this.active = false;
     this.dirty = false;
     this.effectController.abort("scheduler_faulted");
-    this.releaseStopLatch();
     this.timerVersion += 1;
     this.clearTimerHandle();
     const fault = new RequestDeadlineSchedulerFault(code);

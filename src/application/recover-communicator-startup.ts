@@ -3,20 +3,22 @@ import { OwnershipLostFault } from "../domain/ownership";
 import { type DomainResult, domainFailure } from "../domain/results";
 import { validateWorkspaceKey, type WorkspaceKey } from "../domain/workspaces";
 import { runUntilAborted } from "./abortable-operation";
-import {
+import { startReadyLifecycle } from "./communicator-ready-lifecycle";
+import type {
   CommunicatorStartupRecoveryLifecycle,
-  type CommunicatorStartupRecoverySummary,
-  markCommunicatorLifecycleReady,
+  CommunicatorStartupRecoverySummary,
 } from "./communicator-startup-lifecycle";
 import type {
-  ClockPort,
-  CurrentWorkspaceMembershipPort,
-  DeliveryPersistencePort,
-  NativeQueueAdmissionPort,
-  OwnershipPort,
-  RecoveryStartupBarrierPort,
-} from "./delivery-ports";
+  CommunicatorStartupRecoveryInput,
+  CommunicatorStartupRecoveryPorts,
+} from "./communicator-startup-types";
+import type { RecoveryStartupBarrierPort } from "./delivery-ports";
+import { drainDeliveryRetention } from "./delivery-retention";
 import { inspectStartupBarrier } from "./message-recovery-boundaries";
+import {
+  ParticipantDeletionReconciliationFault,
+  reconcileParticipantDeletions,
+} from "./participant-deletion-reconciliation";
 import {
   classifyStaleMessageDeliveries,
   recoverPreparedMessageDeliveries,
@@ -26,62 +28,25 @@ import {
   expireDueSessionRequests,
   recoverPreparedSessionRequests,
 } from "./recover-session-requests";
-import {
-  RequestDeadlineScheduler,
-  type RequestDeadlineSchedulerFault,
-  type RequestDeadlineTimerPort,
-} from "./request-deadline-scheduler";
+import { recoverSessionStarts } from "./recover-session-starts";
 import {
   drainRequestMaintenance,
   requestStartupResultExpiryHardBudget,
 } from "./request-maintenance";
-import type {
-  NativeSteerAdmissionPort,
-  RequestAdmissionPersistencePort,
-  RequestDeadlinePersistencePort,
-  RequestParticipantActivityPort,
-  RequestRecoveryPersistencePort,
-  RequestResultRetentionPersistencePort,
-  RequestRetentionPersistencePort,
-} from "./request-ports";
-import type { RequestRuntime, RequestRuntimeStopReason } from "./request-runtime";
+import type { RequestRuntimeStopReason } from "./request-runtime";
 import { operationControlStopped, readSafeClockMs } from "./safe-clock";
-import {
-  createLinkedStartupEffectControl,
-  type StartupDeadlineTimerPort,
-} from "./startup-effect-control";
-
-export interface CommunicatorStartupRecoveryPorts {
-  readonly membership: CurrentWorkspaceMembershipPort;
-  readonly deliveries: DeliveryPersistencePort;
-  readonly nativeQueue: NativeQueueAdmissionPort;
-  readonly requests: RequestRecoveryPersistencePort &
-    RequestAdmissionPersistencePort &
-    RequestDeadlinePersistencePort;
-  readonly activity: RequestParticipantActivityPort;
-  readonly nativeSteer: NativeSteerAdmissionPort;
-  readonly ownership: OwnershipPort;
-  readonly startupBarrier: RecoveryStartupBarrierPort;
-  readonly clock: ClockPort;
-  readonly runtime: RequestRuntime;
-  readonly resultRetention: RequestResultRetentionPersistencePort;
-  readonly requestRetention: RequestRetentionPersistencePort;
-}
+import { drainStartMaintenance } from "./start-maintenance";
+import { createLinkedStartupEffectControl } from "./startup-effect-control";
 
 export {
   CommunicatorStartupRecoveryLifecycle,
   type CommunicatorStartupRecoverySummary,
 } from "./communicator-startup-lifecycle";
 
-export interface CommunicatorStartupRecoveryInput {
-  readonly workspaceKey: WorkspaceKey;
-  readonly abort: AbortSignal;
-  readonly deadlineMs: number;
-  readonly limit: number;
-  readonly timers?: RequestDeadlineTimerPort;
-  readonly startupTimers?: StartupDeadlineTimerPort;
-  readonly nowMonotonicMs?: () => number;
-}
+export type {
+  CommunicatorStartupRecoveryInput,
+  CommunicatorStartupRecoveryPorts,
+} from "./communicator-startup-types";
 
 function startupFailure(
   code: "ownership_lost" | "storage_unavailable",
@@ -159,6 +124,10 @@ async function runHygiene(
     readonly expiredResults: number;
     readonly retainedRequestsDeleted: number;
     readonly retainedRateEventsDeleted: number;
+    readonly retainedStartOperationsDeleted: number;
+    readonly retainedStartRateEventsDeleted: number;
+    readonly retainedDeliveriesDeleted: number;
+    readonly retainedDeliveryRateEventsDeleted: number;
   }>
 > {
   const result = await drainRequestMaintenance({
@@ -175,12 +144,46 @@ async function runHygiene(
       "Request maintenance hygiene failed.",
     );
   }
+  const deliveryRetention = await drainDeliveryRetention({
+    persistence: ports.deliveries,
+    fencingToken,
+    workspaceKey,
+    shouldStop,
+    abort: signal,
+  });
+  if (!deliveryRetention.ok) {
+    return startupFailure(
+      deliveryRetention.code === "ownership_lost" ? "ownership_lost" : "storage_unavailable",
+      "Delivery maintenance hygiene failed.",
+    );
+  }
+  const startResult = ports.startLimits
+    ? await drainStartMaintenance({
+        starts: ports.starts,
+        limits: ports.startLimits,
+        fencingToken,
+        workspaceKey,
+        nowMs: ports.clock.nowMs(),
+        shouldStop,
+        abort: signal,
+      })
+    : { ok: true as const, deletedOperations: 0, deletedRateEvents: 0 };
+  if (!startResult.ok) {
+    return startupFailure(
+      startResult.code === "ownership_lost" ? "ownership_lost" : "storage_unavailable",
+      "Start-operation maintenance hygiene failed.",
+    );
+  }
   return {
     ok: true,
     value: {
       expiredResults: result.expiredResults,
       retainedRequestsDeleted: result.deletedRequests,
       retainedRateEventsDeleted: result.deletedRateEvents,
+      retainedStartOperationsDeleted: startResult.deletedOperations,
+      retainedStartRateEventsDeleted: startResult.deletedRateEvents,
+      retainedDeliveriesDeleted: deliveryRetention.deletedDeliveries,
+      retainedDeliveryRateEventsDeleted: deliveryRetention.deletedRateEvents,
     },
   };
 }
@@ -221,6 +224,32 @@ async function runStartupPhases(
   if (!staleMessages.ok) return staleMessages;
   const staleRequests = await classifyStaleSessionRequests(requestPorts, phaseInput);
   if (!staleRequests.ok) return staleRequests;
+  let participantDeletions: Awaited<ReturnType<typeof reconcileParticipantDeletions>>;
+  try {
+    participantDeletions = await reconcileParticipantDeletions(
+      {
+        requests: ports.requests,
+        presence: ports.participantPresence,
+        notifications: ports.runtime,
+        lifecycle: { fencingToken },
+        workspaceKey: input.workspaceKey,
+      },
+      signal,
+    );
+  } catch (cause: unknown) {
+    const ownershipLost =
+      cause instanceof ParticipantDeletionReconciliationFault && cause.code === "ownership_lost";
+    return startupFailure(
+      ownershipLost ? "ownership_lost" : "storage_unavailable",
+      "Participant deletion startup reconciliation failed.",
+    );
+  }
+  const staleStarts = await recoverSessionStarts(ports.starts, ports.clock, {
+    fencingToken,
+    workspaceKey: input.workspaceKey,
+    abort: signal,
+    nativeStart: ports.nativeStart,
+  });
   const linkedInput = { ...input, abort: signal };
   if (startupControlStopped(ports, linkedInput)) {
     return startupFailure("ownership_lost", "Startup ownership was lost.");
@@ -251,8 +280,16 @@ async function runStartupPhases(
   return {
     ok: true,
     value: Object.freeze({
+      participantDeletionCandidates: participantDeletions.candidates,
+      participantDeletionsObserved: participantDeletions.absent,
+      participantDeletionUnknown: participantDeletions.unknown,
+      participantRequestsTerminalized: participantDeletions.terminalized,
       staleMessages: staleMessages.value,
       staleRequests: staleRequests.value,
+      preparedStartsAwaitingApproval: staleStarts.preparedAwaitingInvocationApproval,
+      startCreationOutcomesUnknown: staleStarts.creationOutcomesUnknown,
+      startTitleOutcomesUnknown: staleStarts.titleOutcomesUnknown,
+      startAdmissionsUnknown: staleStarts.admissionsUnknown,
       dueRequestsBeforePrepared: dueBefore.value,
       preparedMessagesSubmitted: preparedMessages.value.submitted,
       preparedMessagesCancelled: preparedMessages.value.cancelled,
@@ -264,131 +301,6 @@ async function runStartupPhases(
       ...hygiene.value,
     }),
   };
-}
-
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: scheduler settlement and the final abort, clock, and ownership race checks form one readiness commit boundary.
-async function startReadyLifecycle(
-  ports: CommunicatorStartupRecoveryPorts,
-  input: CommunicatorStartupRecoveryInput,
-  fencingToken: FencingToken,
-  summary: Readonly<CommunicatorStartupRecoverySummary>,
-  signal: AbortSignal,
-): Promise<DomainResult<CommunicatorStartupRecoveryLifecycle>> {
-  let lifecycle: CommunicatorStartupRecoveryLifecycle | undefined;
-  const scheduler = new RequestDeadlineScheduler({
-    requests: ports.requests,
-    notifications: ports.runtime,
-    fencingToken,
-    workspaceKey: input.workspaceKey,
-    maintenance: {
-      resultRetention: ports.resultRetention,
-      requestRetention: ports.requestRetention,
-    },
-    ...(input.timers ? { timers: input.timers } : {}),
-    ...(input.nowMonotonicMs ? { nowMonotonicMs: input.nowMonotonicMs } : {}),
-    onFault: (fault: RequestDeadlineSchedulerFault) => {
-      lifecycle?.stop(fault.code === "ownership_lost" ? "ownership_lost" : "shutdown", fault);
-      return undefined;
-    },
-  });
-  lifecycle = new CommunicatorStartupRecoveryLifecycle(
-    fencingToken,
-    scheduler,
-    summary,
-    ports.runtime,
-  );
-  const readiness = await runUntilAborted(signal, () => scheduler.startAndWaitReady());
-  if (readiness.kind === "aborted") {
-    const fault = scheduler.fault;
-    lifecycle.stop(fault?.code === "ownership_lost" ? "ownership_lost" : "shutdown", fault);
-    return fault
-      ? startupFailure(
-          fault.code === "ownership_lost" ? "ownership_lost" : "storage_unavailable",
-          "Request deadline scheduler failed initial readiness.",
-        )
-      : startupFailure("ownership_lost", "Startup scheduler readiness was interrupted.");
-  }
-  if (readiness.kind === "rejected") {
-    lifecycle.stop("shutdown", scheduler.fault);
-    return startupFailure("storage_unavailable", "Request deadline scheduler readiness rejected.");
-  }
-  if (!readiness.value.ok) {
-    const fault = readiness.value.fault;
-    lifecycle.stop(fault.code === "ownership_lost" ? "ownership_lost" : "shutdown", fault);
-    return startupFailure(
-      fault.code === "ownership_lost" ? "ownership_lost" : "storage_unavailable",
-      "Request deadline scheduler failed initial readiness.",
-    );
-  }
-  const nowMs = readSafeClockMs(ports.clock);
-  if (signal.aborted || nowMs === undefined || nowMs >= input.deadlineMs) {
-    lifecycle.stop("ownership_lost", scheduler.fault);
-    return startupFailure("ownership_lost", "Startup readiness was interrupted.");
-  }
-  const finalOwnership = await runUntilAborted(signal, () =>
-    ports.ownership.isCurrent(fencingToken),
-  );
-  if (finalOwnership.kind === "aborted") {
-    const fault = scheduler.fault;
-    lifecycle.stop(
-      fault?.code === "ownership_lost" ? "ownership_lost" : fault ? "shutdown" : "ownership_lost",
-      fault,
-    );
-    return fault
-      ? startupFailure(
-          fault.code === "ownership_lost" ? "ownership_lost" : "storage_unavailable",
-          "Request deadline scheduler lost readiness.",
-        )
-      : startupFailure("ownership_lost", "Startup readiness was interrupted.");
-  }
-  if (finalOwnership.kind === "rejected") {
-    const ownershipLost = finalOwnership.cause instanceof OwnershipLostFault;
-    lifecycle.stop(ownershipLost ? "ownership_lost" : "shutdown", scheduler.fault);
-    return startupFailure(
-      ownershipLost ? "ownership_lost" : "storage_unavailable",
-      ownershipLost
-        ? "Startup ownership was lost."
-        : "Startup final ownership verification failed.",
-    );
-  }
-  if (finalOwnership.value !== true) {
-    lifecycle.stop("ownership_lost", scheduler.fault);
-    return startupFailure("ownership_lost", "Startup ownership was lost.");
-  }
-  // Readiness is one atomic certification boundary. The ownership await can yield to every other
-  // lifecycle input, so none of the earlier observations may be reused here.
-  const finalNowMs = readSafeClockMs(ports.clock);
-  const schedulerFault = scheduler.fault;
-  if (
-    signal.aborted ||
-    finalNowMs === undefined ||
-    finalNowMs >= input.deadlineMs ||
-    scheduler.status !== "ready" ||
-    schedulerFault !== undefined ||
-    lifecycle.status !== "starting"
-  ) {
-    const storageFault = schedulerFault !== undefined || scheduler.status === "faulted";
-    lifecycle.stop(
-      schedulerFault?.code === "ownership_lost"
-        ? "ownership_lost"
-        : storageFault
-          ? "shutdown"
-          : "ownership_lost",
-      schedulerFault,
-    );
-    return startupFailure(
-      schedulerFault?.code === "ownership_lost"
-        ? "ownership_lost"
-        : storageFault
-          ? "storage_unavailable"
-          : "ownership_lost",
-      storageFault
-        ? "Request deadline scheduler lost readiness."
-        : "Startup readiness was interrupted.",
-    );
-  }
-  markCommunicatorLifecycleReady(lifecycle);
-  return { ok: true, value: lifecycle };
 }
 
 export async function recoverCommunicatorStartup(
@@ -419,14 +331,12 @@ export async function recoverCommunicatorStartup(
       domainFailure("invalid_arguments", "Startup deadline timer is invalid.", false),
     );
   }
-  let scheduler: RequestDeadlineScheduler | undefined;
   let lifecycle: CommunicatorStartupRecoveryLifecycle | undefined;
   const stop = (result: DomainResult<never>): DomainResult<never> => {
     const reason: RequestRuntimeStopReason =
       !result.ok && result.error.code === "ownership_lost" ? "ownership_lost" : "shutdown";
     if (lifecycle) lifecycle.stop(reason);
     else {
-      scheduler?.stop();
       ports.runtime.stop(reason);
     }
     return result;
@@ -476,7 +386,6 @@ export async function recoverCommunicatorStartup(
     );
     if (!ready.ok) return ready;
     lifecycle = ready.value;
-    scheduler = lifecycle.scheduler;
     effectControl.dispose();
     return ready;
   } catch (cause: unknown) {

@@ -402,7 +402,11 @@ describe("ownership epochs and startup recovery", () => {
       first.establish(tokenOne, { abort: new AbortController().signal }),
     ).rejects.toThrow(OwnershipLostFault);
     await expect(
-      first.garbageCollectMetadata({ fencingToken: tokenOne, nowMs: time.now(), limit: 1 }),
+      first.garbageCollectMetadata({
+        fencingToken: tokenOne,
+        workspaceKey: workspace,
+        limit: 1,
+      }),
     ).rejects.toThrow(OwnershipLostFault);
     second.close();
     first.close();
@@ -714,9 +718,10 @@ describe("fail-closed hydration and retention", () => {
     const path = statePath();
     const time = controlledClock(1_000);
     const database = store(path, "gc-owner", time);
-    const token = await database.acquire();
+    let token = await database.acquire();
     const old = input(token, 50, 1_000);
     const recent = input(token, 51, 1_001);
+    const oldPrepared = input(token, 52, 1_000);
     await database.createPrepared(old);
     await database.cancelPrepared({
       fencingToken: token,
@@ -725,6 +730,7 @@ describe("fail-closed hydration and retention", () => {
       nowMs: 1_002,
     });
     await database.createPrepared(recent);
+    await database.createPrepared(oldPrepared);
     await database.cancelPrepared({
       fencingToken: token,
       workspaceKey: workspace,
@@ -741,13 +747,15 @@ describe("fail-closed hydration and retention", () => {
     ).toBeNull();
     reader.close(true);
     const afterThirtyDays = 1_002 + 30 * 24 * 60 * 60 * 1_000;
+    time.moveWall(afterThirtyDays - time.now());
+    token = await database.acquire();
     expect(
       await database.garbageCollectMetadata({
         fencingToken: token,
-        nowMs: afterThirtyDays,
+        workspaceKey: workspace,
         limit: 1,
       }),
-    ).toBe(1);
+    ).toEqual({ ok: true, deletedDeliveries: 1, deletedRateEvents: 1 });
     expect(
       await database.getForParticipant({
         workspaceKey: workspace,
@@ -762,6 +770,13 @@ describe("fail-closed hydration and retention", () => {
         participantSessionId: sourceA,
       }),
     ).toBeDefined();
+    expect(
+      await database.getForParticipant({
+        workspaceKey: workspace,
+        deliveryId: oldPrepared.id,
+        participantSessionId: sourceA,
+      }),
+    ).toMatchObject({ delivery: { state: "prepared" } });
     database.close();
   });
 });

@@ -1,9 +1,10 @@
-import { type DeliveryMetadata, isCoherentDeliveryMetadata } from "../domain/deliveries";
+import type { DeliveryMetadata } from "../domain/deliveries";
 import type { DeliveryId } from "../domain/generated-ids";
 import { type FencingToken, OwnershipLostFault } from "../domain/ownership";
 import { type DomainResult, domainFailure } from "../domain/results";
 import type { WorkspaceKey } from "../domain/workspaces";
 import { runUntilAborted } from "./abortable-operation";
+import { boundedExternalCall } from "./bounded-external-call";
 import type {
   ClockPort,
   DeliveryPersistencePort,
@@ -15,6 +16,7 @@ import type {
 } from "./delivery-ports";
 import { inspectDeliveryMutation } from "./message-recovery-boundaries";
 import { operationControlStopped, readSafeClockMs } from "./safe-clock";
+import { snapshotDataRecord } from "./strict-port-boundaries";
 
 export interface MessageAdmissionPorts {
   readonly deliveries: DeliveryPersistencePort;
@@ -48,12 +50,8 @@ export function deliveryStoreFailure(
 
 function admissionResult(
   outcome: NativeQueueAdmission,
-  write: DeliveryStoreResult,
+  write: Extract<DeliveryStoreResult, { readonly ok: true }>,
 ): DomainResult<DeliveryMetadata> {
-  if (!write.ok) return deliveryStoreFailure(write.code);
-  if (!isCoherentDeliveryMetadata(write.delivery)) {
-    return deliveryStoreFailure("state_conflict", write.delivery.id);
-  }
   if (outcome.kind === "definitive_rejection") {
     return domainFailure("admission_failed", "Native queue admission was rejected.", false, {
       delivery_id: write.delivery.id,
@@ -70,13 +68,68 @@ function admissionResult(
   return { ok: true, value: write.delivery };
 }
 
-function isCoherent(outcome: NativeQueueAdmission): boolean {
-  if (outcome.kind !== "admitted" && outcome.kind !== "promoted") return true;
-  if (!Number.isSafeInteger(outcome.admittedSeq) || outcome.admittedSeq < 0) return false;
-  if (!Number.isFinite(outcome.observedAtMs) || outcome.observedAtMs < 0) return false;
+function exactKeys(record: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(record);
+  return keys.length === expected.length && keys.every((key) => expected.includes(key));
+}
+
+function inspectNativeAdmission(value: unknown): NativeQueueAdmission {
+  const record = snapshotDataRecord(value, 4);
+  if (!record) return { kind: "unknown" };
+  if (
+    exactKeys(record, ["kind"]) &&
+    (record.kind === "unknown" || record.kind === "definitive_rejection")
+  ) {
+    return { kind: record.kind };
+  }
+  if (
+    exactKeys(record, ["kind", "admittedSeq", "observedAtMs"]) &&
+    record.kind === "admitted" &&
+    Number.isSafeInteger(record.admittedSeq) &&
+    (record.admittedSeq as number) >= 0 &&
+    Number.isFinite(record.observedAtMs) &&
+    (record.observedAtMs as number) >= 0
+  ) {
+    return {
+      kind: "admitted",
+      admittedSeq: record.admittedSeq as number,
+      observedAtMs: record.observedAtMs as number,
+    };
+  }
+  if (
+    exactKeys(record, ["kind", "admittedSeq", "promotedSeq", "observedAtMs"]) &&
+    record.kind === "promoted" &&
+    Number.isSafeInteger(record.admittedSeq) &&
+    (record.admittedSeq as number) >= 0 &&
+    Number.isSafeInteger(record.promotedSeq) &&
+    (record.promotedSeq as number) > (record.admittedSeq as number) &&
+    Number.isFinite(record.observedAtMs) &&
+    (record.observedAtMs as number) >= 0
+  ) {
+    return {
+      kind: "promoted",
+      admittedSeq: record.admittedSeq as number,
+      promotedSeq: record.promotedSeq as number,
+      observedAtMs: record.observedAtMs as number,
+    };
+  }
+  return { kind: "unknown" };
+}
+
+function claimedAdmissionUnknown(deliveryId: DeliveryId): DomainResult<never> {
+  return domainFailure(
+    "admission_unknown",
+    "Native queue admission could not be determined before the invocation deadline.",
+    false,
+    { delivery_id: deliveryId },
+  );
+}
+
+function isDurablyRecordedOutcome(result: DomainResult<DeliveryMetadata>): boolean {
   return (
-    outcome.kind === "admitted" ||
-    (Number.isSafeInteger(outcome.promotedSeq) && outcome.promotedSeq > outcome.admittedSeq)
+    result.ok ||
+    result.error.code === "admission_failed" ||
+    result.error.code === "admission_unknown"
   );
 }
 
@@ -89,7 +142,6 @@ async function recordOutcome(
   abort: AbortSignal,
   deadlineMs: number | undefined,
 ): Promise<DomainResult<DeliveryMetadata>> {
-  if (!isCoherent(outcome)) outcome = { kind: "unknown" };
   const nowMs = readSafeClockMs(ports.clock);
   if (nowMs === undefined || operationControlStopped(ports.clock, abort, deadlineMs)) {
     return deliveryStoreFailure("ownership_lost", deliveryId);
@@ -144,6 +196,27 @@ async function recordOutcome(
     : deliveryStoreFailure(result.code, deliveryId);
 }
 
+function deadlineLinkedSignal(
+  abort: AbortSignal,
+  deadlineMs: number,
+): {
+  readonly signal: AbortSignal;
+  dispose(): void;
+} {
+  const controller = new AbortController();
+  const onAbort = (): void => controller.abort("message invocation interrupted");
+  if (abort.aborted || Date.now() >= deadlineMs) onAbort();
+  else abort.addEventListener("abort", onAbort, { once: true });
+  const timer = setTimeout(onAbort, Math.max(0, deadlineMs - Date.now()));
+  return {
+    signal: controller.signal,
+    dispose() {
+      clearTimeout(timer);
+      abort.removeEventListener("abort", onAbort);
+    },
+  };
+}
+
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one linear claimed-effect boundary preserves exact interruption and ownership-fault mappings.
 export async function admitClaimedMessage(
   ports: MessageAdmissionPorts,
@@ -158,15 +231,40 @@ export async function admitClaimedMessage(
     readonly interruptionMeansOwnershipLoss?: true;
   },
 ): Promise<DomainResult<DeliveryMetadata>> {
-  const durableOperationSignal =
-    input.interruptionMeansOwnershipLoss === true ? input.abort : new AbortController().signal;
+  const recovery = input.interruptionMeansOwnershipLoss === true;
+  const durableOperationSignal = recovery ? input.abort : new AbortController().signal;
   const stopped = (): boolean =>
-    input.interruptionMeansOwnershipLoss === true &&
-    operationControlStopped(ports.clock, input.abort, input.deadlineMs);
+    recovery && operationControlStopped(ports.clock, input.abort, input.deadlineMs);
   if (stopped()) return deliveryStoreFailure("ownership_lost", input.delivery.id);
-  const current = await runUntilAborted(durableOperationSignal, () =>
-    ports.ownership.isCurrent(input.fencingToken),
-  );
+  const bounded = <Value>(operation: () => Promise<Value>) =>
+    recovery
+      ? runUntilAborted(durableOperationSignal, operation)
+      : input.deadlineMs === undefined
+        ? runUntilAborted(input.abort, operation)
+        : boundedExternalCall(operation, input.abort, input.deadlineMs).then((result) =>
+            result.kind === "value"
+              ? { kind: "settled" as const, value: result.value }
+              : result.kind === "rejected"
+                ? { kind: "rejected" as const, cause: result.cause }
+                : { kind: "aborted" as const },
+          );
+  const recordUnknownWithoutWaiting = (): void => {
+    const recording = recordOutcome(
+      ports,
+      input.workspaceKey,
+      input.fencingToken,
+      input.delivery.id,
+      { kind: "unknown" },
+      new AbortController().signal,
+      undefined,
+    );
+    recording.catch(() => undefined);
+  };
+  const current = await bounded(() => ports.ownership.isCurrent(input.fencingToken));
+  if (current.kind === "aborted" && !recovery) {
+    recordUnknownWithoutWaiting();
+    return claimedAdmissionUnknown(input.delivery.id);
+  }
   if (current.kind === "aborted" || (current.kind === "settled" && current.value !== true)) {
     return deliveryStoreFailure("ownership_lost", input.delivery.id);
   }
@@ -179,14 +277,14 @@ export async function admitClaimedMessage(
   // No awaited work is allowed between this final control check and the native effect.
   if (stopped()) return deliveryStoreFailure("ownership_lost", input.delivery.id);
   let outcome: NativeQueueAdmission;
-  try {
-    const promise = ports.nativeQueue.queueMessage({
-      targetSessionId: input.delivery.targetSessionId,
-      nativeMessageId: input.delivery.nativeMessageId,
-      envelope: input.envelope,
-      abort: input.abort,
-    });
-    if (input.interruptionMeansOwnershipLoss === true) {
+  if (recovery) {
+    try {
+      const promise = ports.nativeQueue.queueMessage({
+        targetSessionId: input.delivery.targetSessionId,
+        nativeMessageId: input.delivery.nativeMessageId,
+        envelope: input.envelope,
+        abort: input.abort,
+      });
       const settlement = await runUntilAborted(input.abort, () => promise);
       if (settlement.kind === "aborted") {
         return deliveryStoreFailure("ownership_lost", input.delivery.id);
@@ -195,29 +293,64 @@ export async function admitClaimedMessage(
         return deliveryStoreFailure("ownership_lost", input.delivery.id);
       }
       outcome = settlement.kind === "settled" ? settlement.value : { kind: "unknown" };
-    } else {
-      outcome = await promise;
+    } catch (cause: unknown) {
+      if (cause instanceof OwnershipLostFault) {
+        return deliveryStoreFailure("ownership_lost", input.delivery.id);
+      }
+      outcome = { kind: "unknown" };
     }
-  } catch (cause: unknown) {
-    if (cause instanceof OwnershipLostFault) {
-      return deliveryStoreFailure("ownership_lost", input.delivery.id);
+  } else {
+    const effect =
+      input.deadlineMs === undefined
+        ? { signal: input.abort, dispose() {} }
+        : deadlineLinkedSignal(input.abort, input.deadlineMs);
+    try {
+      const settlement = await runUntilAborted(effect.signal, () =>
+        ports.nativeQueue.queueMessage({
+          targetSessionId: input.delivery.targetSessionId,
+          nativeMessageId: input.delivery.nativeMessageId,
+          envelope: input.envelope,
+          abort: effect.signal,
+        }),
+      );
+      if (settlement.kind !== "settled") {
+        recordUnknownWithoutWaiting();
+        return claimedAdmissionUnknown(input.delivery.id);
+      }
+      outcome = inspectNativeAdmission(settlement.value);
+    } finally {
+      effect.dispose();
     }
-    outcome = { kind: "unknown" };
   }
+  outcome = inspectNativeAdmission(outcome);
   if (stopped()) return deliveryStoreFailure("ownership_lost", input.delivery.id);
-  if (input.abort.aborted && outcome.kind === "definitive_rejection") {
-    outcome = { kind: "unknown" };
+  if (
+    !recovery &&
+    (input.abort.aborted || (input.deadlineMs !== undefined && Date.now() >= input.deadlineMs))
+  ) {
+    recordUnknownWithoutWaiting();
+    return claimedAdmissionUnknown(input.delivery.id);
   }
-  const currentAfterEffect = await runUntilAborted(durableOperationSignal, () =>
-    ports.ownership.isCurrent(input.fencingToken),
-  );
+  const currentAfterEffect = await bounded(() => ports.ownership.isCurrent(input.fencingToken));
+  if (currentAfterEffect.kind === "aborted" && !recovery) {
+    recordUnknownWithoutWaiting();
+    return claimedAdmissionUnknown(input.delivery.id);
+  }
   if (
     currentAfterEffect.kind === "aborted" ||
     (currentAfterEffect.kind === "settled" && currentAfterEffect.value !== true)
   ) {
+    if (!recovery) {
+      recordUnknownWithoutWaiting();
+      return claimedAdmissionUnknown(input.delivery.id);
+    }
     return deliveryStoreFailure("ownership_lost", input.delivery.id);
   }
   if (currentAfterEffect.kind === "rejected") {
+    if (!recovery) {
+      recordUnknownWithoutWaiting();
+      return claimedAdmissionUnknown(input.delivery.id);
+    }
     return deliveryStoreFailure(
       currentAfterEffect.cause instanceof OwnershipLostFault
         ? "ownership_lost"
@@ -225,13 +358,37 @@ export async function admitClaimedMessage(
       input.delivery.id,
     );
   }
-  return recordOutcome(
-    ports,
-    input.workspaceKey,
-    input.fencingToken,
-    input.delivery.id,
-    outcome,
-    durableOperationSignal,
-    input.interruptionMeansOwnershipLoss === true ? input.deadlineMs : undefined,
-  );
+  const record = () =>
+    recordOutcome(
+      ports,
+      input.workspaceKey,
+      input.fencingToken,
+      input.delivery.id,
+      outcome,
+      durableOperationSignal,
+      recovery ? input.deadlineMs : undefined,
+    );
+  if (recovery) return record();
+  if (input.deadlineMs === undefined) {
+    const recorded = await runUntilAborted(input.abort, record);
+    if (recorded.kind !== "settled") {
+      if (recorded.kind === "rejected") recordUnknownWithoutWaiting();
+      return claimedAdmissionUnknown(input.delivery.id);
+    }
+    if (isDurablyRecordedOutcome(recorded.value)) {
+      return recorded.value;
+    }
+    recordUnknownWithoutWaiting();
+    return claimedAdmissionUnknown(input.delivery.id);
+  }
+  const recorded = await boundedExternalCall(record, input.abort, input.deadlineMs);
+  if (recorded.kind === "value") {
+    if (isDurablyRecordedOutcome(recorded.value)) {
+      return recorded.value;
+    }
+    recordUnknownWithoutWaiting();
+    return claimedAdmissionUnknown(input.delivery.id);
+  }
+  if (recorded.kind === "rejected") recordUnknownWithoutWaiting();
+  return claimedAdmissionUnknown(input.delivery.id);
 }

@@ -67,7 +67,10 @@ function fixture(options: FixtureOptions = {}) {
     {
       client: {
         experimental: { session: { list: async () => ({ data: [] }) } },
-        session: { status: async () => ({ data: {} }) },
+        session: {
+          status: async () => ({ data: {} }),
+          abort: async () => ({ data: true }),
+        },
       },
       directory: "/workspace",
       serverUrl: new URL("http://127.0.0.1:4321/"),

@@ -12,6 +12,8 @@ The test proves the following surfaces against the live binary:
   enabling `OPENCODE_PURE`; required built-in V2 catalog/config plugins remain
   enabled;
 - dynamic loopback `serve` startup and exact `/global/health` version;
+- black-box unknown tool arguments (1.18.21 preserves undeclared keys through plugin `execute`, so
+  composition's strict runtime parser can authoritatively reject them);
 - explicit local plugin loading and diagnostic tool registration;
 - local OpenAI-compatible streaming tool-call behavior;
 - ToolContext identifiers, agent, directory, worktree, abort signal, metadata,
@@ -19,8 +21,23 @@ The test proves the following surfaces against the live binary:
 - active ToolContext cancellation, the persisted tool result at the cancellation
   boundary, retry status, config-hook skill behavior, and durable replay across
   a process restart;
-- native unsanitized and `--sanitize` export envelope and session identity;
+- native unsanitized and `--sanitize` export envelope, strict pinned schema validation, session
+  identity, exact proven `[redacted:session-title:<id>]` /
+  `[redacted:session-directory:<id>]` markers, and a live sanitized `import` round trip;
 - instance disposal reaching the plugin disposer.
+- a separately packed and installed production entry loaded directly, with the exact 14-tool
+  manifest, both bundled skills, and successful production disposal. The test invokes every tool
+  through the live host. It proves successful list/send/delivery, ask/respond/get/ack, wait/signal,
+  and approved start/stop paths; request listing; an authoritative target-role cancel rejection; and
+  the exact configured export-unavailable result. Dynamic request, delivery, operation, native
+  message, and session identities are correlated across those exact outputs. This does not claim a
+  successful cancel path or secure export, nor exhaustive policy/recovery coverage.
+- production receives the host's unmodified pinned `PluginInput`; there is no test client `Proxy`,
+  fabricated health/list result, or loader wrapper. The exact first host effect is global health via
+  a location-free narrow 1.18.21 V2 client. Only after that proof does production construct the
+  native adapter and persistent resources. Runtime legacy root listing is reached through a narrow
+  pinned adapter because its generated `PluginInput` type omits the method; archive and V2-only
+  operations use the pinned internal V2 client.
 
 All runtime evidence is written below a mode-0700 temporary root and recursively
 removed after the test. This is cleanup, not a forensic secure-erasure claim.
@@ -79,6 +96,7 @@ timestamps, paths, titles, and transcript text below are symbolic.
 | ToolContext.ask allow | After the tool has invoked `context.ask`, the legacy permission list contains no request for its session. `permission:"live_allow"` resolves and the tool part completes with its exact returned output. | A configured allow rule does not expose a pending approval at the observed ask boundary. |
 | ToolContext.ask deny | `permission:"live_deny"` rejects with the native configured-rule message, including the effective wildcard allow and specific deny rules. The tool part persists as `status:"error"` with that exact message and no pending request remains. | Denial is an exception from `ask`; tools must not perform the protected action before it resolves. |
 | ToolContext.ask ask | `permission:"live_ask"` blocks and is listed by the legacy permission API. The request preserves both patterns, the `always` pattern, nested metadata, session ID, tool message ID, and exact provider call ID `call_live_diagnostic`. That ID also matches the persisted tool part and the follow-up provider request's `tool_call_id`. Replying `once` returns HTTP 200, resolves `ask`, and persists the exact tool output. | Approval correlation is exact from provider tool call through pending request, persisted part, and provider result turn. Use the legacy permission surface for this legacy ToolContext request; V2 resource terminology must not be substituted for its `patterns`/`always` fields. |
+
 | ToolContext abort | The tool records the live ToolContext signal as exactly `false` before interruption and exactly `true` after legacy session abort. The cooperative diagnostic tool then returns `tool-observed-abort`, and 1.18.21 persists that invocation as `status:"completed"` with that output (not `Cancelled`). | AbortSignal is active, but abort is cooperative and does not guarantee an error result. Treat the persisted tool part as authoritative and make side-effecting tools abort-aware. |
 | Execution-start evidence | Three `session.next.step.started` events are observed, but they identify assistant message IDs and contain no admitted caller message ID. Provider gates prove execution of marker text, but no native event exactly links execution start to an admitted input ID. | Omit a native `started` delivery state; promotion remains the strongest exact native input correlation. |
 | Restart/cursor replay | After the serving process exits and a new exact 1.18.21 process opens the same isolated state, `session.events({after:String(seq)})` replays the next durable event exclusively. A subscription opened at the current sequence then receives a newly admitted event live with the admission sequence. | Persist a sequence per session aggregate and resubscribe with it after restart. Replay and live continuation are one stream, but consumers still need deduplication at their durable checkpoint boundary. |
@@ -86,6 +104,30 @@ timestamps, paths, titles, and transcript text below are symbolic.
 | Fixture failure cleanup | `createIsolatedOpenCodeState` wraps every operation after temporary-root creation and recursively removes that root on failure while preserving the original failure. A deterministic injected failure after private-directory creation proves both error identity and root absence. Fixture setup also tracks provider, isolation, and server incrementally. A readiness failure terminates the launched server before propagation; every setup, test, and close failure path independently attempts server, provider, and isolation cleanup while preserving the first failure. | Live evidence must not leak processes or private roots, and cleanup errors must not mask the causal test/setup failure. |
 | Config-hook `skills.paths` | The plugin config hook runs in the correct process and appends the exact private skill root. The legacy `app.skills` list discovers the hooked skill with its exact name, description, and `SKILL.md` location. A statically configured control skill is also present. The separate V2 location-scoped skill list contains neither one. | Config-hook registration works for the 1.18.21 legacy/runtime skill registry. Verify with `app.skills`; do not use `v2.skill.list` as its registration check or assume the two registries are equivalent. |
 | Subscription/server disposal | Explicit iterator return yields `done:true`; restarted `instance.dispose()` returns true. The companion test correlates plugin disposal to process and instance identity. Session abort does not dispose the server, while process/instance disposal is a separate boundary. | Consumer, execution, server, and plugin disposal must be managed separately. |
+
+### Participant deletion and admission reconciliation
+
+The pinned `@opencode-ai/plugin` 1.18.21 hook consumes the legacy SDK `Event` union. Its
+authoritative deletion member is exactly `type: "session.deleted"` with
+`properties: { info: Session }`; `Session` carries `id`, `projectID`, `directory`, optional
+`parentID`, and the remaining session metadata. It carries **no native message ID and no admission
+or promotion sequence**. Production therefore uses this event only as deletion evidence after
+strict data-only shape, project/directory binding, root identity, and bounded session-ID checks.
+
+The exact live harness also proves the stronger anti-entropy primitive used when a hook is missed:
+`v2.session.get({sessionID})` returns HTTP 200 with the same ID for an archived root even though the
+root is absent from the visible-root list. The same archived root remains directly retrievable from
+a client bound to the fixture's alternate location. After authoritative legacy deletion, both
+location bindings return HTTP 404 with exactly `_tag`, `message`, and the requested `sessionID` in a
+`SessionNotFoundError`, and no data. Production classifies only that correlated direct 404 as
+`absent`; list omission, malformed responses, transport failures, and uncorrelated errors are
+`unknown`.
+
+No request delivery promotion is inferred from deletion timing or event order. A submission with
+authoritative admission response remains `admitted` (or `promoted` when that response itself
+contains both sequences); an ambiguous submission remains `delivery_unknown`. This is deliberately
+conservative: correlating a `session.deleted` event to a request would invent evidence absent from
+the pinned native event and could incorrectly promote an unadmitted request.
 
 ### Exact observed shape templates
 

@@ -117,16 +117,16 @@ export function canAtomicallyReachWithAvailableResult(
 }
 
 function latestDeliveryTransitionAtMs(metadata: RequestMetadata): number {
-  if (metadata.deliveryState === "prepared") return metadata.createdAtMs;
-  if (metadata.deliveryState === "submitting") return metadata.submittedAtMs;
-  if (metadata.deliveryState === "delivery_unknown") return metadata.deliveryUnknownAtMs;
-  if (metadata.deliveryState === "admitted") {
-    return Math.max(metadata.admittedAtMs, metadata.admissionEvidence.observedAtMs);
-  }
-  if (metadata.deliveryState === "promoted") {
-    return Math.max(metadata.promotedAtMs, metadata.admissionEvidence.observedAtMs);
-  }
-  return metadata.deliveryFailedAtMs;
+  // The transition guard immediately before this call permits only submitting and unknown.
+  // Keeping terminal-state handling here made unreachable branches look like supported failure
+  // transitions and obscured that invariant.
+  const transition = metadata as Extract<
+    RequestMetadata,
+    { readonly deliveryState: "submitting" | "delivery_unknown" }
+  >;
+  return transition.deliveryState === "delivery_unknown"
+    ? transition.deliveryUnknownAtMs
+    : transition.submittedAtMs;
 }
 
 export function canAtomicallyFailPendingRequestDelivery(

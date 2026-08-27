@@ -34,11 +34,11 @@ const exceptionRules = new Set([
   "ts-expect-error",
   "architecture",
   "import-cycle",
-  "coverage-functions",
+  "coverage-branches",
   "coverage-lines",
 ]);
 
-const coverageExceptionRules = new Set(["coverage-functions", "coverage-lines"]);
+const coverageExceptionRules = new Set(["coverage-branches", "coverage-lines"]);
 
 function toProjectPath(rootDirectory: string, path: string): string {
   return relative(rootDirectory, path).split(sep).join("/");

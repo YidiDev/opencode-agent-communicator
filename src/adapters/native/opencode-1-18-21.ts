@@ -3,37 +3,64 @@ import type {
   CurrentWorkspaceMembershipPort,
   NativeQueueAdmissionPort,
 } from "../../application/delivery-ports";
+import type { NativeParticipantPresencePort } from "../../application/participant-deletion-ports";
 import type {
   NativeSteerAdmissionPort,
   RequestParticipantActivityPort,
 } from "../../application/request-ports";
+import type { NativeSessionStartPort } from "../../application/session-start-ports";
+import type { NativeSessionInterruptPort } from "../../application/session-stop-ports";
 import type { HostHealthPort } from "../../domain/host";
-import {
-  type RootSessionObservation,
-  type VisibleRootSessionPort,
-  validateSessionId,
-} from "../../domain/sessions";
+import { type VisibleRootSessionPort, validateSessionId } from "../../domain/sessions";
 import type { WorkspaceKey } from "../../domain/workspaces";
 import { validateWorkspaceKey } from "../../domain/workspaces";
 import {
-  isAuthoritativeClientRejection,
-  parseAdmissionResponse,
-} from "./opencode-1-18-21-admission";
+  createAdmissionOperations,
+  createObservationOperations,
+} from "./opencode-1-18-21-operations";
+import { createDirectParticipantPresencePort } from "./opencode-1-18-21-presence";
 import {
-  combineRootSets,
-  mergedActivityStatus,
-  parseActiveMap,
-  parseActivityMap,
-  parseSessionArray,
-  parseV2SessionArray,
-  snapshotEnvelopeData,
-} from "./opencode-1-18-21-sessions";
+  createDeterministicRootSession,
+  reconcileDeterministicRootSession,
+  updateAndVerifySessionTitle,
+} from "./opencode-1-18-21-start";
+import {
+  envelopeData,
+  method,
+  NativeAdapterFault,
+  requireRecord,
+} from "./opencode-1-18-21-surface";
 
 interface V2ClientSurface {
   readonly global: { health(): Promise<unknown> };
+  readonly experimental?: {
+    readonly session: {
+      list(
+        parameters: {
+          readonly roots: true;
+          readonly archived: boolean;
+          readonly directory: string;
+        },
+        options?: { readonly signal?: AbortSignal },
+      ): Promise<unknown>;
+    };
+  };
   readonly v2: {
     readonly session: {
       active(options?: { readonly signal?: AbortSignal }): Promise<unknown>;
+      create?(
+        parameters: {
+          readonly id: string;
+          readonly agent?: string;
+          readonly model?: { readonly providerID: string; readonly id: string };
+          readonly location: { readonly directory: string };
+        },
+        options: { readonly signal: AbortSignal },
+      ): Promise<unknown>;
+      get?(
+        parameters: { readonly sessionID: string },
+        options: { readonly signal: AbortSignal },
+      ): Promise<unknown>;
       list(parameters: {
         readonly directory: string;
         readonly limit: number;
@@ -55,16 +82,20 @@ interface V2ClientSurface {
 
 interface LegacyClientSurface {
   listRoots(
-    parameters: {
-      readonly roots: true;
-      readonly archived: boolean;
-      readonly directory: string;
-    },
+    parameters: { readonly roots: true; readonly directory: string },
     options?: { readonly signal?: AbortSignal },
   ): Promise<unknown>;
   readStatus(
     parameters: { readonly directory: string },
     options?: { readonly signal?: AbortSignal },
+  ): Promise<unknown>;
+  interrupt(
+    parameters: { readonly sessionID: string; readonly directory: string },
+    options: { readonly signal: AbortSignal },
+  ): Promise<unknown>;
+  updateTitle(
+    parameters: { readonly sessionID: string; readonly directory: string; readonly title: string },
+    options: { readonly signal: AbortSignal },
   ): Promise<unknown>;
 }
 
@@ -88,50 +119,53 @@ export type OpenCodeNativeAdapter = HostHealthPort &
   NativeQueueAdmissionPort &
   NativeSteerAdmissionPort &
   RequestParticipantActivityPort &
-  CurrentWorkspaceMembershipPort;
-
-class NativeAdapterFault extends Error {
-  constructor(message: string, cause?: unknown) {
-    super(message, { cause });
-    this.name = "NativeAdapterFault";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function envelopeData(value: unknown, label: string): unknown {
-  try {
-    return snapshotEnvelopeData(value, label);
-  } catch (cause: unknown) {
-    throw new NativeAdapterFault(`${label} returned malformed data.`, cause);
-  }
-}
-
-function method(
-  object: unknown,
-  key: string,
-  label: string,
-): (...arguments_: unknown[]) => unknown {
-  if (!isRecord(object)) throw new NativeAdapterFault(`${label} is unavailable.`);
-  const candidate = object[key];
-  if (typeof candidate !== "function") throw new NativeAdapterFault(`${label} is unavailable.`);
-  return (...arguments_: unknown[]): unknown => Reflect.apply(candidate, object, arguments_);
-}
+  CurrentWorkspaceMembershipPort &
+  NativeSessionInterruptPort &
+  NativeSessionStartPort &
+  NativeParticipantPresencePort;
 
 function legacySurface(client: unknown): LegacyClientSurface {
-  if (!isRecord(client)) throw new NativeAdapterFault("Injected legacy client is unavailable.");
-  const session = client.session;
-  const experimental = isRecord(client.experimental) ? client.experimental.session : undefined;
-  const list = method(experimental, "list", "Legacy root/archive listing");
+  const legacyClient = requireRecord(client, "Injected legacy client is unavailable.");
+  const session = legacyClient.session;
+  // The 1.18.21 runtime exposes this endpoint although PluginInput's legacy generated type omits it.
   const status = method(session, "status", "Legacy session status");
+  const abort = method(session, "abort", "Legacy session interrupt");
   return {
     async listRoots(parameters, options): Promise<unknown> {
-      return list(parameters, options);
+      return method(session, "list", "Pinned legacy root listing")(parameters, options);
     },
     async readStatus(parameters, options): Promise<unknown> {
       return status(parameters, options);
+    },
+    async interrupt(parameters, options): Promise<unknown> {
+      return abort(parameters, options);
+    },
+    async updateTitle(parameters, options): Promise<unknown> {
+      return method(session, "update", "Legacy session title update")(parameters, options);
+    },
+  };
+}
+
+function startSessionSurface(session: V2ClientSurface["v2"]["session"]) {
+  return {
+    async create(
+      parameters: {
+        readonly id: string;
+        readonly agent?: string;
+        readonly model?: { readonly providerID: string; readonly id: string };
+        readonly location: { readonly directory: string };
+      },
+      options: { readonly signal: AbortSignal },
+    ) {
+      if (!session.create) throw new NativeAdapterFault("V2 session creation is unavailable.");
+      return session.create(parameters, options);
+    },
+    async get(
+      parameters: { readonly sessionID: string },
+      options: { readonly signal: AbortSignal },
+    ) {
+      if (!session.get) throw new NativeAdapterFault("V2 session read-back is unavailable.");
+      return session.get(parameters, options);
     },
   };
 }
@@ -144,171 +178,67 @@ export function createOpenCode11821NativeAdapter(
     dependencies.createV2Client ?? ((configuration) => createOpencodeClient(configuration));
   const v2 = createV2({ baseUrl: input.serverUrl.toString(), directory: input.directory });
   const legacy = legacySurface(input.client);
+  const listArchivedRoots = (
+    parameters: { readonly roots: true; readonly archived: boolean; readonly directory: string },
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<unknown> =>
+    method(
+      v2.experimental?.session,
+      "list",
+      "Pinned root/archive listing",
+    )(parameters, options) as Promise<unknown>;
+  const startSession = startSessionSurface(v2.v2.session);
+  const participantPresence = createDirectParticipantPresencePort(startSession);
   const now = dependencies.now ?? Date.now;
   const configuredWorkspace = validateWorkspaceKey(input.workspaceKey);
   if (!configuredWorkspace.ok) throw new NativeAdapterFault(configuredWorkspace.message);
+  const observations = createObservationOperations({
+    active: (options) => v2.v2.session.active(options),
+    configuredWorkspace: configuredWorkspace.value,
+    health: () => v2.global.health(),
+    listArchivedRoots: () =>
+      listArchivedRoots({ roots: true, archived: true, directory: input.directory }),
+    listMetadata: () =>
+      v2.v2.session.list({ directory: input.directory, limit: 100, order: "desc" }),
+    listVisibleRoots: (options) =>
+      legacy.listRoots({ roots: true, directory: input.directory }, options),
+    now,
+    readStatus: (options) => legacy.readStatus({ directory: input.directory }, options),
+  });
+  const admissions = createAdmissionOperations({
+    now,
+    prompt: (parameters, options) => v2.v2.session.prompt(parameters, options),
+  });
 
   return {
-    async readHealth(): Promise<unknown> {
-      return envelopeData(await v2.global.health(), "Host health");
-    },
-    async readVisibleRoots(includeArchived: boolean): Promise<readonly RootSessionObservation[]> {
-      const archivedRequest = includeArchived
-        ? legacy.listRoots({ roots: true, archived: true, directory: input.directory })
-        : undefined;
-      const [listedResult, visibleRootsResult, archivedRootsResult, statusResult, activeResult] =
-        await Promise.all([
-          v2.v2.session.list({ directory: input.directory, limit: 100, order: "desc" }),
-          legacy.listRoots({
-            roots: true,
-            archived: false,
-            directory: input.directory,
-          }),
-          archivedRequest,
-          legacy.readStatus({ directory: input.directory }),
-          v2.v2.session.active(),
-        ]);
-      const listed = parseV2SessionArray(listedResult);
-      const visibleRoots = parseSessionArray(
-        envelopeData(visibleRootsResult, "Legacy visible root listing"),
-        "Visible root listing",
-      );
-      const archivedRoots =
-        archivedRootsResult === undefined
-          ? []
-          : parseSessionArray(
-              envelopeData(archivedRootsResult, "Legacy archived root listing"),
-              "Archived root listing",
-            );
-      const roots = combineRootSets(visibleRoots, archivedRoots);
-      const statusData = parseActivityMap(
-        envelopeData(statusResult, "Legacy status"),
-        "Legacy status",
-      );
-      const activeData = parseActiveMap(activeResult);
-      const listedById = new Map(listed.map((session) => [session.id, session]));
-      const observedAtMs = now();
-      if (!Number.isFinite(observedAtMs) || observedAtMs < 0) {
-        throw new NativeAdapterFault("Observation clock is invalid.");
+    ...observations,
+    ...admissions,
+    ...participantPresence,
+    async interruptSession(request) {
+      if (request.abort.aborted || !validateSessionId(request.targetSessionId).ok) {
+        return "unknown";
       }
-      return roots.map((root) => {
-        const display = listedById.get(root.id) ?? root;
-        return {
-          id: root.id,
-          title: display.title,
-          updatedAtMs: display.updatedAtMs,
-          isArchived: root.isArchived,
-          status: mergedActivityStatus(statusData, activeData, root.id),
-          observedAtMs,
-        };
-      });
-    },
-    async readCurrentRoots(workspaceKey, sourceSessionId, targetSessionId) {
-      const suppliedWorkspace = validateWorkspaceKey(workspaceKey);
-      if (!suppliedWorkspace.ok || suppliedWorkspace.value !== configuredWorkspace.value) {
-        throw new NativeAdapterFault("Workspace binding does not match this native adapter.");
-      }
-      const roots = parseSessionArray(
-        envelopeData(
-          await legacy.listRoots({
-            roots: true,
-            archived: false,
-            directory: input.directory,
-          }),
-          "Legacy current root listing",
-        ),
-        "Current root listing",
-      );
-      const byId = new Map(roots.map((root) => [root.id, root]));
-      return {
-        sourceVisible: byId.has(sourceSessionId),
-        targetVisible: byId.has(targetSessionId),
-        sourceTitle: byId.get(sourceSessionId)?.title,
-      };
-    },
-    async observeRequestParticipants(workspaceKey, sourceSessionId, targetSessionId, abort) {
-      const suppliedWorkspace = validateWorkspaceKey(workspaceKey);
-      if (!suppliedWorkspace.ok || suppliedWorkspace.value !== configuredWorkspace.value) {
-        throw new NativeAdapterFault("Workspace binding does not match this native adapter.");
-      }
-      if (!validateSessionId(sourceSessionId).ok || !validateSessionId(targetSessionId).ok) {
-        throw new NativeAdapterFault("Request participant identity is malformed.");
-      }
-      if (abort.aborted)
-        throw new NativeAdapterFault("Request participant observation was aborted.");
-      const [rootsResult, statusResult, activeResult] = await Promise.all([
-        legacy.listRoots(
-          { roots: true, archived: false, directory: input.directory },
-          { signal: abort },
-        ),
-        legacy.readStatus({ directory: input.directory }, { signal: abort }),
-        v2.v2.session.active({ signal: abort }),
-      ]);
-      const roots = parseSessionArray(
-        envelopeData(rootsResult, "Legacy current root listing"),
-        "Current root listing",
-      );
-      if (abort.aborted)
-        throw new NativeAdapterFault("Request participant observation was aborted.");
-      const statuses = parseActivityMap(
-        envelopeData(statusResult, "Legacy status"),
-        "Legacy status",
-      );
-      const active = parseActiveMap(activeResult);
-      const visible = new Set(roots.map((root) => root.id));
-      return Object.freeze({
-        sourceVisible: visible.has(sourceSessionId),
-        targetVisible: visible.has(targetSessionId),
-        targetStatus: mergedActivityStatus(statuses, active, targetSessionId),
-      });
-    },
-    async queueMessage(message) {
-      if (message.abort.aborted) return { kind: "unknown" };
-      let response: unknown;
       try {
-        response = await v2.v2.session.prompt(
-          {
-            sessionID: message.targetSessionId,
-            id: message.nativeMessageId,
-            prompt: { text: message.envelope },
-            delivery: "queue",
-            resume: true,
-          },
-          { signal: message.abort },
-        );
-      } catch (_cause: unknown) {
-        return { kind: "unknown" };
-      }
-      if (
-        isAuthoritativeClientRejection(response, message.abort.aborted, message.targetSessionId)
-      ) {
-        return { kind: "definitive_rejection" };
-      }
-      return parseAdmissionResponse(response, message, now);
-    },
-    async steerRequest(request) {
-      if (request.abort.aborted) return { kind: "unknown" };
-      let response: unknown;
-      try {
-        response = await v2.v2.session.prompt(
-          {
-            sessionID: request.targetSessionId,
-            id: request.nativeMessageId,
-            prompt: { text: request.envelope },
-            delivery: "steer",
-            resume: true,
-          },
+        const response = await legacy.interrupt(
+          { sessionID: request.targetSessionId, directory: input.directory },
           { signal: request.abort },
         );
-      } catch (_cause: unknown) {
-        return { kind: "unknown" };
+        if (request.abort.aborted) return "unknown";
+        return envelopeData(response, "Legacy session interrupt") === true
+          ? "interrupted"
+          : "unknown";
+      } catch {
+        return "unknown";
       }
-      if (
-        isAuthoritativeClientRejection(response, request.abort.aborted, request.targetSessionId)
-      ) {
-        return { kind: "definitive_rejection" };
-      }
-      return parseAdmissionResponse(response, request, now, "steer");
+    },
+    async createRootSession(request) {
+      return createDeterministicRootSession(startSession, input.directory, request);
+    },
+    async reconcileRootSession(request) {
+      return reconcileDeterministicRootSession(startSession, input.directory, request);
+    },
+    async updateSessionTitle(request) {
+      return updateAndVerifySessionTitle(startSession, legacy, input.directory, request);
     },
   };
 }
