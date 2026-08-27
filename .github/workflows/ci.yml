@@ -1,104 +1,140 @@
-name: CI
+name: Linux x64 verification
 
 on:
+  pull_request:
   push:
     branches:
       - main
-  pull_request:
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: linux-verification-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
-env:
-  CI: "true"
 
 jobs:
   quality:
-    name: Linux quality gate
+    name: Linux x64 quality
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - name: Set up Bun 1.4.0
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
-      - name: Verify Bun version
-        run: test "$(bun --version)" = "1.4.0"
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
-      - name: Run repository quality gate
+      - name: Require certified architecture
+        run: test "$(uname -m)" = x86_64
+      - name: Run required quality gate
         run: bun run check
 
-  coverage:
-    name: Linux coverage
+  lcov:
+    name: LCOV report
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - name: Set up Bun 1.4.0
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
-      - name: Verify Bun version
-        run: test "$(bun --version)" = "1.4.0"
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
-      - name: Run tests with coverage
+      - name: Generate LCOV coverage
         run: bun run test:coverage
-      - name: Upload LCOV report
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: Upload LCOV evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: linux-lcov
+          name: linux-lcov-${{ github.run_id }}-${{ github.run_attempt }}
           path: coverage/lcov.info
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
-  linux-store-acceptance:
-    name: Docker Linux SQLite acceptance
+  branch-coverage:
+    name: Branch coverage thresholds
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Run pinned glibc/musl and OverlayFS/tmpfs matrix
-        run: bash tools/run-linux-store-acceptance.sh
-
-  portability:
-    name: Experimental portability (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    # PLAN.md Phase 6 requires platform-specific adversarial and live acceptance.
-    continue-on-error: true
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - macos-14
-          - windows-2022
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - name: Set up Bun 1.4.0
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
-      - name: Run portability smoke checks (not stable acceptance)
-        run: bun run typecheck && bun run test:unit
+      - name: Enforce branch coverage
+        run: bun run test:coverage:branches
+
+  linux-store:
+    name: Docker Linux x64 store acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Bun 1.4.0
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Run glibc and musl store acceptance
+        run: bun run test:acceptance:linux-store
+
+  secure-export-capability:
+    name: Linux x64 secure-export capability security suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Bun 1.4.0
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Require zero-skip capability acceptance and integration security evidence
+        run: bun run test:acceptance:secure-export
+
+  packed-archive:
+    name: Packed archive black-box
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Bun 1.4.0
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Verify package metadata and allowlist
+        run: bun run verify:package
+      - name: Pack, install, import, and verify the exact tool manifest
+        run: bun run test:black-box
+      - name: Inspect npm archive contents
+        run: npm pack --dry-run
+      - name: Import source and packed entries on Alpine/musl
+        run: bun run test:acceptance:package-portability

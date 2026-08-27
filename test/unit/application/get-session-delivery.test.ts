@@ -270,4 +270,22 @@ describe("session_delivery_get authorization", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "ownership_lost" } });
     expect(JSON.stringify(result)).not.toContain("private membership ownership detail");
   });
+
+  test("maps a generic membership rejection to native unavailability", async () => {
+    const fake = lookupFixture();
+    const result = await getSessionDelivery(
+      {
+        ...ports(fake),
+        membership: {
+          readCurrentRoots: async () => {
+            throw new Error("private native detail");
+          },
+        },
+      },
+      { workspaceKey, sourceSessionId },
+      { delivery_id: deliveryId },
+    );
+    expect(result).toMatchObject({ ok: false, error: { code: "native_unavailable" } });
+    expect(JSON.stringify(result)).not.toContain("private native detail");
+  });
 });

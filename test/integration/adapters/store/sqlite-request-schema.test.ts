@@ -72,7 +72,7 @@ function details(
 }
 
 describe("request migration and query plans", () => {
-  test("fresh migration records exact history and pins published v1-v8 checksums", () => {
+  test("fresh migration records exact history and pins v1-v11 checksums", () => {
     const database = migratedDatabase();
     expect(sqliteStoreMigrations.map((migration) => migration.checksum)).toEqual([
       "sha256:929ff898b24a6bfefa276939fee895e41185ed9c58bd59c3f2c3359f4daa8a86",
@@ -83,6 +83,9 @@ describe("request migration and query plans", () => {
       "sha256:74a8aa2ee8e35ffc6632495931db32b83a2708efc496c4db1f8c8952dc5c9f5a",
       "sha256:8543d47872200c45c03a5c201ef943bf6e9f1b25799078e4eb618f005b5882c9",
       "sha256:f05b42c3099f5fe64243b686b1a6b54db715ae81301ed0130079ad8833a13841",
+      "sha256:c05c16d0b653020fc2ed304031f983d67f26edbe9f9f043ee0ffe3fdca0aa04d",
+      "sha256:bd82b5aa40ab8416ab7c1d44b852505880555a1cd2b119c59448157a77f11274",
+      "sha256:ed970b8cd128824271eca05049a889d225a94646c5c0f9a1810bbba788db5cf5",
     ]);
     expect(
       database
@@ -94,8 +97,8 @@ describe("request migration and query plans", () => {
     database.close(true);
   });
 
-  test("upgrades every published schema prefix through v8 without losing legacy rows", () => {
-    for (const prefix of [1, 2, 3, 4, 5, 6, 7]) {
+  test("upgrades every schema prefix through v11 without losing legacy rows", () => {
+    for (const prefix of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
       const database = new Database(":memory:", { strict: true });
       database.exec("PRAGMA foreign_keys = ON");
       database.exec(`CREATE TABLE schema_migrations (
@@ -131,7 +134,7 @@ describe("request migration and query plans", () => {
         database
           .query<{ value: number }, []>("SELECT user_version AS value FROM pragma_user_version")
           .get()?.value,
-      ).toBe(8);
+      ).toBe(11);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM deliveries").get()
           ?.count,

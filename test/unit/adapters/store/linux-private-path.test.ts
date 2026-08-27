@@ -10,6 +10,7 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,8 +39,36 @@ function syscalls(overrides: Partial<LinuxPathSyscalls>): LinuxPathSyscalls {
   return { ...nodeLinuxPathSyscalls, ...overrides };
 }
 
-describe("descriptor-anchored Linux state preparation", () => {
-  test("creates components through parent descriptors and survives a canonical parent swap", () => {
+describe("descriptor-verified Linux state preparation", () => {
+  test("retains the complete descriptor chain and rejects an intermediate replacement", () => {
+    const base = root();
+    const intermediate = join(base, "intermediate");
+    const moved = join(base, "moved");
+    mkdirSync(intermediate, { mode: 0o700 });
+    const openDescriptors = new Set<number>();
+    const calls = syscalls({
+      open: (path, flags, mode) => {
+        const descriptor = nodeLinuxPathSyscalls.open(path, flags, mode);
+        openDescriptors.add(descriptor);
+        return descriptor;
+      },
+      close: (descriptor) => {
+        nodeLinuxPathSyscalls.close(descriptor);
+        openDescriptors.delete(descriptor);
+      },
+    });
+    const prepared = preparePrivateStatePath(join(intermediate, "state"), "db.sqlite3", {
+      syscalls: calls,
+    });
+    expect(openDescriptors.size).toBeGreaterThan(1);
+    renameSync(intermediate, moved);
+    mkdirSync(intermediate, { mode: 0o700 });
+    expect(() => prepared.verifySqliteFiles()).toThrow("canonical state directory");
+    prepared.close();
+    expect(openDescriptors.size).toBe(0);
+  });
+
+  test("fails closed when a canonical parent is swapped during preparation", () => {
     const base = root();
     const parent = join(base, "parent");
     const moved = join(base, "moved");
@@ -57,33 +86,146 @@ describe("descriptor-anchored Linux state preparation", () => {
         return nodeLinuxPathSyscalls.open(path, flags, mode);
       },
     });
-    const prepared = preparePrivateStatePath(join(parent, "state"), "db.sqlite3", {
-      syscalls: calls,
-    });
+    expect(() =>
+      preparePrivateStatePath(join(parent, "state"), "db.sqlite3", {
+        syscalls: calls,
+      }),
+    ).toThrow("canonical state directory");
     expect(swapped).toBeTrue();
-    expect(prepared.canonicalDatabasePath).toBe(join(parent, "state", "db.sqlite3"));
-    expect(existsSync(join(moved, "state", "db.sqlite3"))).toBeTrue();
+    expect(existsSync(join(moved, "state", "db.sqlite3"))).toBeFalse();
     expect(existsSync(join(outside, "state", "db.sqlite3"))).toBeFalse();
-    prepared.close();
   });
 
-  test("remains anchored when a pathname parent is swapped after preparation", () => {
+  test("fails closed when the canonical pathname is swapped after preparation", () => {
     const base = root();
     const state = join(base, "state");
     const moved = join(base, "moved");
     const replacement = join(base, "replacement");
-    const prepared = preparePrivateStatePath(state, "db.sqlite3");
-    renameSync(state, moved);
-    mkdirSync(replacement, { mode: 0o700 });
-    symlinkSync(replacement, state);
-    symlinkSync("attacker", join(replacement, "db.sqlite3-wal"));
-    expect(() => prepared.verifySqliteFiles()).not.toThrow();
+    let armed = false;
+    let swapped = false;
+    const prepared = preparePrivateStatePath(state, "db.sqlite3", {
+      syscalls: syscalls({
+        open: (path, flags, mode) => {
+          if (armed && !swapped && path.startsWith("/proc/self/fd/") && path.endsWith("/state")) {
+            swapped = true;
+            renameSync(state, moved);
+            mkdirSync(replacement, { mode: 0o700 });
+            symlinkSync(replacement, state);
+            symlinkSync("attacker", join(replacement, "db.sqlite3-wal"));
+          }
+          return nodeLinuxPathSyscalls.open(path, flags, mode);
+        },
+      }),
+    });
+    armed = true;
+    expect(() => prepared.verifySqliteFiles()).toThrow("canonical state directory");
+    expect(swapped).toBeTrue();
     expect(existsSync(join(moved, "db.sqlite3"))).toBeTrue();
     prepared.close();
   });
 });
 
-describe("Linux private state validation and fault injection", () => {
+describe("Linux private state input and lifecycle validation", () => {
+  test("rejects a group-writable existing canonical ancestor but permits private roots under /tmp", () => {
+    const base = root();
+    const shared = join(base, "shared");
+    mkdirSync(shared, { mode: 0o770 });
+    chmodSync(shared, 0o770);
+    expect(() => preparePrivateStatePath(join(shared, "state"), "db.sqlite3")).toThrow(
+      "writable canonical ancestor",
+    );
+
+    const prepared = preparePrivateStatePath(join(root(), "state"), "db.sqlite3");
+    prepared.close();
+  });
+
+  test("rejects malformed filenames, relative roots, and an unavailable root descriptor", () => {
+    const base = root();
+    expect(() => preparePrivateStatePath(join(base, "state"), "bad/name")).toThrow(
+      StoreSecurityError,
+    );
+    expect(() => preparePrivateStatePath("relative/state", "db.sqlite3")).toThrow(
+      StoreSecurityError,
+    );
+    expect(() =>
+      preparePrivateStatePath(join(base, "root-fault"), "db.sqlite3", {
+        syscalls: syscalls({
+          open: (path, flags, mode) => {
+            if (path === "/") throw new Error("root unavailable");
+            return nodeLinuxPathSyscalls.open(path, flags, mode);
+          },
+        }),
+      }),
+    ).toThrow(StoreSecurityError);
+  });
+
+  test("sanitizes component creation and reopen failures", () => {
+    for (const stage of ["mkdir", "reopen"] as const) {
+      const base = root();
+      const state = join(base, `state-${stage}`);
+      let missingObserved = false;
+      expect(() =>
+        preparePrivateStatePath(state, "db.sqlite3", {
+          syscalls: syscalls({
+            open: (path, flags, mode) => {
+              if (path.endsWith(`/state-${stage}`)) {
+                if (!missingObserved) {
+                  missingObserved = true;
+                  throw Object.assign(new Error("missing"), { code: "ENOENT" });
+                }
+                if (stage === "reopen") throw new Error("reopen refused");
+              }
+              return nodeLinuxPathSyscalls.open(path, flags, mode);
+            },
+            mkdir: (path, mode) => {
+              if (stage === "mkdir" && path.endsWith("/state-mkdir")) {
+                throw Object.assign(new Error("mkdir refused"), { code: "EACCES" });
+              }
+              nodeLinuxPathSyscalls.mkdir(path, mode);
+            },
+          }),
+        }),
+      ).toThrow(StoreSecurityError);
+    }
+  });
+
+  test("rejects unsafe existing file mode and failed exclusive file creation", () => {
+    const existingBase = root();
+    const existingState = join(existingBase, "state");
+    mkdirSync(existingState, { mode: 0o700 });
+    writeFileSync(join(existingState, "db.sqlite3"), "", { mode: 0o644 });
+    chmodSync(join(existingState, "db.sqlite3"), 0o644);
+    expect(() => preparePrivateStatePath(existingState, "db.sqlite3")).toThrow(StoreSecurityError);
+
+    const createBase = root();
+    let firstDatabaseOpen = true;
+    expect(() =>
+      preparePrivateStatePath(join(createBase, "state"), "db.sqlite3", {
+        syscalls: syscalls({
+          open: (path, flags, mode) => {
+            if (path.endsWith("/db.sqlite3")) {
+              if (firstDatabaseOpen) {
+                firstDatabaseOpen = false;
+                throw Object.assign(new Error("missing"), { code: "ENOENT" });
+              }
+              throw new Error("exclusive create refused");
+            }
+            return nodeLinuxPathSyscalls.open(path, flags, mode);
+          },
+        }),
+      }),
+    ).toThrow(StoreSecurityError);
+  });
+
+  test("supports idempotent close and explicit disposal", () => {
+    const prepared = preparePrivateStatePath(join(root(), "state"), "db.sqlite3");
+    prepared.close();
+    prepared.close();
+    const disposable = preparePrivateStatePath(join(root(), "state"), "db.sqlite3");
+    disposable[Symbol.dispose]();
+    expect(() => disposable.verifySqliteFiles()).toThrow(StoreSecurityError);
+  });
+
   test("rejects root, non-normal paths, unsafe existing targets, and symlink components", () => {
     expect(() => preparePrivateStatePath("/", "db.sqlite3")).toThrow(StoreSecurityError);
     expect(() => preparePrivateStatePath("/tmp/../tmp/state", "db.sqlite3")).toThrow(
@@ -97,6 +239,35 @@ describe("Linux private state validation and fault injection", () => {
     expect(() => preparePrivateStatePath(join(base, "link", "state"), "db.sqlite3")).toThrow(
       StoreSecurityError,
     );
+  });
+});
+
+describe("Linux private state file integrity validation", () => {
+  test("rejects an injected sidecar swap relative to the retained final descriptor", () => {
+    const base = root();
+    const state = join(base, "state");
+    let armed = false;
+    let swapped = false;
+    const prepared = preparePrivateStatePath(state, "db.sqlite3", {
+      syscalls: syscalls({
+        open: (path, flags, mode) => {
+          if (
+            armed &&
+            !swapped &&
+            path.startsWith("/proc/self/fd/") &&
+            path.endsWith("db.sqlite3-wal")
+          ) {
+            swapped = true;
+            symlinkSync("attacker", join(state, "db.sqlite3-wal"));
+          }
+          return nodeLinuxPathSyscalls.open(path, flags, mode);
+        },
+      }),
+    });
+    armed = true;
+    expect(() => prepared.verifySqliteFiles()).toThrow(StoreSecurityError);
+    expect(swapped).toBeTrue();
+    prepared.close();
   });
 
   test("rejects a sticky/shared final directory before any fchmod", () => {

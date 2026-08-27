@@ -501,3 +501,104 @@ test("emits and consumes a next cursor and maps list storage faults", async () =
     });
   }
 });
+
+test("get and list reject malformed membership snapshots before repository access", async () => {
+  const malformedMemberships = [
+    null,
+    {},
+    { sourceTitle: 1, sourceVisible: true, targetVisible: false },
+    { sourceTitle: undefined, sourceVisible: "yes", targetVisible: false },
+    { sourceTitle: undefined, sourceVisible: true, targetVisible: false, extra: true },
+  ];
+  for (const membership of malformedMemberships) {
+    const mock = ports();
+    mock.value.membership.readCurrentRoots = async () => membership as never;
+    expect(await listSessionRequests(mock.value, context)).toMatchObject({
+      ok: false,
+      error: { code: "native_unavailable" },
+    });
+    expect(
+      await getSessionRequest(mock.value, context, { request_id: requestId.value }),
+    ).toMatchObject({ ok: false, error: { code: "native_unavailable" } });
+  }
+});
+
+test("exact get rejects malformed repository shapes, bindings, and terminalization hints", async () => {
+  const pending = {
+    ...metadataBase,
+    participantRole: "source",
+    kind: "wait",
+    resolutionState: "pending",
+    resultState: "none",
+  };
+  const terminal = {
+    ...(await requestFixture(token, 1, "ses_caller", "ses_target", workspace.value)).request,
+    resolutionState: "cancelled",
+    resolvedAtMs: 2,
+    updatedAtMs: 2,
+  };
+  const malformed = [
+    {},
+    { outcome: "metadata", view: "source_pending", metadata: pending, terminalized: "bad" },
+    {
+      outcome: "metadata",
+      view: "source_pending",
+      metadata: { ...pending, requestId: `req_${"b".repeat(32)}` },
+      terminalized: [],
+    },
+    {
+      outcome: "metadata",
+      view: "source_pending",
+      metadata: pending,
+      terminalized: [{ ...terminal, workspaceKey: "foreign" }],
+    },
+    {
+      outcome: "pending_payload",
+      metadata: { ...pending, participantRole: "target" },
+      payload: { kind: "ask", questions: [], timeoutSeconds: 1 },
+      terminalized: [],
+    },
+  ];
+  for (const found of malformed) {
+    const mock = ports({
+      requests: { getParticipantRequest: async () => found as never },
+    });
+    expect(
+      await getSessionRequest(mock.value, context, { request_id: requestId.value }),
+    ).toMatchObject({ ok: false, error: { code: "storage_unavailable" } });
+  }
+});
+
+test("list rejects malformed pages, foreign roles, duplicates, and unstable ordering", async () => {
+  const current = {
+    ...metadataBase,
+    participantRole: "source",
+    kind: "wait",
+    resolutionState: "pending",
+    resultState: "none",
+  } as const;
+  const otherId = validateRequestId(`req_${"b".repeat(32)}`);
+  if (!otherId.ok) throw new Error("bad alternate request fixture");
+  const malformedPages = [
+    null,
+    { items: [], hasMore: "no", terminalized: [] },
+    { items: "bad", hasMore: false, terminalized: [] },
+    { items: [{}], hasMore: false, terminalized: [] },
+    { items: [{ ...current, participantRole: "target" }], hasMore: false, terminalized: [] },
+    { items: [current, current], hasMore: false, terminalized: [] },
+    {
+      items: [current, { ...current, requestId: otherId.value, createdAtMs: 2, updatedAtMs: 2 }],
+      hasMore: false,
+      terminalized: [],
+    },
+  ];
+  for (const page of malformedPages) {
+    const mock = ports({
+      requests: { listForParticipant: async () => page as never },
+    });
+    expect(await listSessionRequests(mock.value, context, { role: "outbox" })).toMatchObject({
+      ok: false,
+      error: { code: "storage_unavailable" },
+    });
+  }
+});

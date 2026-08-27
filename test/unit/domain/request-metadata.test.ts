@@ -562,6 +562,7 @@ describe("request result metadata and semantic transitions", () => {
     if (!isCoherentRequestMetadata(expired)) throw new Error("invalid expired fixture");
     expect(canAcknowledgeRequestResult(expired, expired.resultExpiredAtMs)).toBe(true);
     expect(canAcknowledgeRequestResult(expired, expired.resultExpiredAtMs - 1)).toBe(false);
+    expect(canAcknowledgeRequestResult(expired, Number.NaN)).toBe(false);
     expect(
       isCoherentRequestMetadata({
         ...expired,

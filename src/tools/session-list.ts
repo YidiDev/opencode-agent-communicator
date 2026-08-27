@@ -16,15 +16,25 @@ import { publicSession } from "./public-values";
 export function createSessionListTool(
   ports: SessionListPorts,
   workspaceKey: WorkspaceKey,
+  invocationDeadlineMs?: () => number,
 ): InternalToolContract<SessionListToolArguments> {
   return {
     description:
       "List current visible root sessions. Queue with session_send, inspect status here until busy or retry, then ask or wait.",
     args: sessionListArgumentsSchema,
     async execute(arguments_, context) {
+      const deadlineMs = invocationDeadlineMs?.();
+      if (deadlineMs !== undefined && (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1)) {
+        throw new Error("Session list invocation deadline is invalid.");
+      }
       const result = await listVisibleRootSessions(
         ports,
-        { workspaceKey, sourceSessionId: context.sessionID },
+        {
+          workspaceKey,
+          sourceSessionId: context.sessionID,
+          abort: context.abort,
+          ...(deadlineMs === undefined ? {} : { deadlineMs }),
+        },
         {
           ...(arguments_.status === undefined ? {} : { status: arguments_.status }),
           ...(arguments_.include_archived === undefined

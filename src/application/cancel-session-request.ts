@@ -13,7 +13,7 @@ import {
   notifyTerminalSafely,
 } from "./request-terminal-notification";
 import {
-  assertRequestMutationControl,
+  checkRequestMutationControl,
   hasExactKeys,
   hiddenRequestFailure,
   malformedRequestStoreFailure,
@@ -50,12 +50,13 @@ export async function cancelSessionRequest(
   context: SessionRequestMutationContext,
   args: SessionRequestCancelArguments,
 ): Promise<DomainResult<SessionRequestCancelResult>> {
-  assertCommunicatorReady(ports.readiness);
+  assertCommunicatorReady(ports.readiness, context.fencingToken);
   const identity = validateRequestMutation(context, args.request_id);
   if (!identity.ok) return identity;
   const current = await requireCurrentCaller(ports, context, identity.value.callerSessionId);
   if (!current.ok) return current;
-  assertRequestMutationControl(ports, context);
+  const dispatchControl = checkRequestMutationControl(ports, context);
+  if (!dispatchControl.ok) return dispatchControl;
   try {
     const stored: unknown = await ports.requests.cancelPending({
       fencingToken: context.fencingToken,

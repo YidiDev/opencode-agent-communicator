@@ -1,5 +1,38 @@
 import type { VisibleRootSession } from "../application/list-visible-root-sessions";
+import type {
+  ParticipantRequestGet,
+  ParticipantRequestMetadata,
+} from "../application/request-ports";
 import type { DeliveryMetadata, ParticipantDelivery } from "../domain/deliveries";
+import type { PendingRequestPayload, RetainedRequestResult } from "../domain/request-types";
+import type { SessionExportSummary } from "../domain/session-export";
+import type { StartOperation } from "../domain/session-start";
+
+export function publicSessionExport(value: SessionExportSummary): Record<string, unknown> {
+  return {
+    session_id: value.sessionId,
+    destination: value.destination,
+    sanitized: value.isSanitized,
+    byte_count: value.byteCount,
+    content_sha256: value.contentSha256,
+  };
+}
+
+export function publicStartOperation(value: StartOperation): Record<string, unknown> {
+  return {
+    operation_id: value.id,
+    source_session_id: value.sourceSessionId,
+    session_id: value.sessionId,
+    native_message_id: value.nativeMessageId,
+    idempotency_key: value.idempotencyKey,
+    arguments_sha256: value.argumentsSha256,
+    creation_state: value.creationState,
+    title_state: value.titleState,
+    admission_state: value.admissionState,
+    created_at_ms: value.createdAtMs,
+    updated_at_ms: value.updatedAtMs,
+  };
+}
 
 function publicAdmissionEvidence(delivery: DeliveryMetadata): Record<string, unknown> | undefined {
   const evidence = delivery.admissionEvidence;
@@ -50,5 +83,76 @@ export function publicSession(value: VisibleRootSession): Record<string, unknown
     is_archived: value.isArchived,
     updated_at_ms: value.updatedAtMs,
     status_observed_at_ms: value.statusObservedAtMs,
+  };
+}
+
+export function publicRequestMetadata(value: ParticipantRequestMetadata): Record<string, unknown> {
+  return {
+    request_id: value.requestId,
+    role: value.participantRole,
+    kind: value.kind,
+    resolution_state: value.resolutionState,
+    delivery_state: value.deliveryState,
+    result_state: value.resultState,
+    source_session_id: value.sourceSessionId,
+    target_session_id: value.targetSessionId,
+    created_at_ms: value.createdAtMs,
+    updated_at_ms: value.updatedAtMs,
+    deadline_at_ms: value.deadlineAtMs,
+    acknowledgement_applicable:
+      value.resolutionState === "answered" || value.resolutionState === "reached",
+    ...(value.resolvedAtMs === undefined ? {} : { resolved_at_ms: value.resolvedAtMs }),
+    ...(value.submittedAtMs === undefined ? {} : { submitted_at_ms: value.submittedAtMs }),
+    ...(value.deliveryUnknownAtMs === undefined
+      ? {}
+      : { delivery_unknown_at_ms: value.deliveryUnknownAtMs }),
+    ...(value.admittedAtMs === undefined ? {} : { admitted_at_ms: value.admittedAtMs }),
+    ...(value.promotedAtMs === undefined ? {} : { promoted_at_ms: value.promotedAtMs }),
+    ...(value.deliveryFailedAtMs === undefined
+      ? {}
+      : { delivery_failed_at_ms: value.deliveryFailedAtMs }),
+    ...(value.resultAvailableAtMs === undefined
+      ? {}
+      : { result_available_at_ms: value.resultAvailableAtMs }),
+    ...(value.resultExpiresAtMs === undefined
+      ? {}
+      : { result_expires_at_ms: value.resultExpiresAtMs }),
+    ...(value.resultExpiredAtMs === undefined
+      ? {}
+      : { result_expired_at_ms: value.resultExpiredAtMs }),
+    ...(value.acknowledgedAtMs === undefined ? {} : { acknowledged_at_ms: value.acknowledgedAtMs }),
+  };
+}
+
+function publicRequestPayload(value: PendingRequestPayload): Record<string, unknown> {
+  return value.kind === "ask"
+    ? {
+        kind: "ask",
+        questions: value.questions.map((question) => ({
+          prompt: question.prompt,
+          options: question.options,
+          multiple: question.multiple,
+          allow_custom: question.allowCustom,
+        })),
+        timeout_seconds: value.timeoutSeconds,
+      }
+    : { kind: "wait", milestone: value.milestone, timeout_seconds: value.timeoutSeconds };
+}
+
+function publicRequestResult(value: RetainedRequestResult): Record<string, unknown> {
+  return value.kind === "ask"
+    ? { kind: "ask", answers: value.answers }
+    : { kind: "wait", ...(value.evidence === undefined ? {} : { evidence: value.evidence }) };
+}
+
+export function publicParticipantRequest(value: ParticipantRequestGet): Record<string, unknown> {
+  return {
+    outcome: value.outcome,
+    ...(value.outcome === "metadata" ? { view: value.view } : {}),
+    metadata: publicRequestMetadata(value.metadata),
+    ...(value.outcome === "pending_payload"
+      ? { payload: publicRequestPayload(value.payload) }
+      : {}),
+    ...(value.outcome === "available_result" ? { result: publicRequestResult(value.result) } : {}),
   };
 }

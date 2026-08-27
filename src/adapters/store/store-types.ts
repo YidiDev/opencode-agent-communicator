@@ -9,6 +9,8 @@ import {
 import type { WorkspaceKey } from "../../domain/workspaces";
 
 export interface LinuxFileStat {
+  readonly device?: number;
+  readonly inode?: number;
   readonly uid: number;
   readonly mode: number;
   readonly size: number;

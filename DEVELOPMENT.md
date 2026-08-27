@@ -236,6 +236,16 @@ test/
 - Snapshot tests MAY supplement but MUST NOT replace semantic assertions.
 - Live tests MUST use an isolated, project-pinned OpenCode 1.18.21 harness and
   MUST NOT alter the user's active OpenCode installation.
+- The regular suite has an exact reviewed skip declaration budget enforced by
+  `tools/verify-test-skips.mjs`; adding or moving a skip requires explicit review.
+- Linux CI MUST run `test:acceptance:secure-export` with the capability requirement enabled. That
+  cell runs the two capability acceptance tests and both export integration files, including all
+  eight normally capability-skipped secure-export tests. The separate process-tree integration file
+  has the ninth reviewed skip site. The cell fails when descriptor-backed installation or
+  atomic replacement is absent and parses Bun's JUnit report to require exactly zero skipped tests.
+  It uses a reviewed Debian container with no network, a read-only root, bounded CPU/memory/PIDs,
+  all capabilities dropped except `DAC_READ_SEARCH`, `no-new-privileges`, and a small private tmpfs;
+  this is the minimum privilege required for `linkat(AT_EMPTY_PATH)` evidence on hosted runners.
 
 ### 9.2 Coverage Gates
 
@@ -252,12 +262,13 @@ All other production source requires at least 85% line coverage and 80% branch
 coverage. Generated code and unreachable platform branches MAY be excluded only
 through the reviewed central allowlist.
 
-The bootstrap coverage checker treats `src/domain`, `src/application`, and all
-adapter modules as critical. Bun 1.4.0 LCOV does not contain branch data, so the
-checker enforces the line thresholds plus supplementary 90%/80% function
-thresholds without representing functions as branches. The branch thresholds
-remain a release requirement and MUST be enforced by a proven branch-capable
-runner before v1 is declared ready.
+The coverage checker treats `src/domain`, `src/application`, and native, store,
+and export adapters as critical. `bun run test:coverage:branches` preloads an
+Istanbul instrumentation plugin because Bun 1.4.0 LCOV omits branch data. It
+writes `coverage/coverage-final.json` and enforces the line and branch
+thresholds per runtime-bearing file. Modules containing only erased TypeScript
+declarations and type-only imports/exports are identified structurally and
+excluded. `bun run test:coverage` remains available to generate LCOV evidence.
 
 Coverage is a backstop, not evidence of correctness. A change with weak
 assertions is incomplete even when percentages pass.

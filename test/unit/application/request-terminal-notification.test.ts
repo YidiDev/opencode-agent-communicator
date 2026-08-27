@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import type { CommittedRequestTerminalEvent } from "../../../src/application/request-notification-port";
 import type { RequestTerminalPersistencePort } from "../../../src/application/request-ports";
+import { snapshotCommittedRequestTerminalEvent } from "../../../src/application/request-terminal-notification";
 import { respondToSessionRequest } from "../../../src/application/respond-to-session-request";
 import { signalSessionRequest } from "../../../src/application/signal-session-request";
 import { validateNativeMessageId, validateRequestId } from "../../../src/domain/generated-ids";
@@ -264,4 +265,95 @@ test("sync observer throw is isolated and pending, hidden, and store failures ne
     expect(result.ok).toBe(false);
   }
   expect(notifications).toBe(0);
+});
+
+test("terminal notification snapshot rejects malformed records and terminal correlations", () => {
+  const event = {
+    requestId,
+    kind: "ask",
+    resolutionState: "answered",
+    resolvedAtMs: 8,
+  } as const;
+  const getter = Object.defineProperty({ ...event }, "kind", {
+    enumerable: true,
+    get: () => "ask",
+  });
+  const throwing = new Proxy(event, {
+    ownKeys: () => {
+      throw new Error("hostile reflection");
+    },
+  });
+  for (const malformed of [
+    null,
+    [],
+    { ...event, extra: true },
+    { ...event, requestId: "bad" },
+    { ...event, kind: "other" },
+    { ...event, resolutionState: "pending" },
+    { ...event, resolvedAtMs: -1 },
+    { ...event, kind: "wait" },
+    { ...event, resolutionState: "cancelled", retainedResult: answer },
+    getter,
+    throwing,
+    Object.assign(Object.create({}), event),
+  ]) {
+    expect(snapshotCommittedRequestTerminalEvent(malformed)).toBeUndefined();
+  }
+});
+
+test("terminal notification snapshot strictly copies retained wait and ask results", () => {
+  const base = { requestId, resolvedAtMs: 8 } as const;
+  expect(
+    snapshotCommittedRequestTerminalEvent({
+      ...base,
+      kind: "wait",
+      resolutionState: "reached",
+      retainedResult: { kind: "wait" },
+    }),
+  ).toEqual({
+    ...base,
+    kind: "wait",
+    resolutionState: "reached",
+    retainedResult: { kind: "wait" },
+  });
+  expect(
+    snapshotCommittedRequestTerminalEvent({
+      ...base,
+      kind: "wait",
+      resolutionState: "reached",
+      retainedResult: { kind: "wait", evidence: "done" },
+    }),
+  ).toMatchObject({ retainedResult: { evidence: "done" } });
+  expect(
+    snapshotCommittedRequestTerminalEvent({
+      ...base,
+      kind: "ask",
+      resolutionState: "answered",
+      retainedResult: { kind: "ask", answers: [["yes"], []] },
+    }),
+  ).toMatchObject({ retainedResult: { answers: [["yes"], []] } });
+
+  const sparse = new Array(1);
+  const inherited = Object.setPrototypeOf([], null);
+  for (const retainedResult of [
+    null,
+    { kind: "other" },
+    { kind: "wait", evidence: 1 },
+    { kind: "ask" },
+    { kind: "ask", answers: null },
+    { kind: "ask", answers: sparse },
+    { kind: "ask", answers: inherited },
+    { kind: "ask", answers: [null] },
+    { kind: "ask", answers: [[1]] },
+    { kind: "ask", answers: Array.from({ length: 11 }, () => []) },
+  ]) {
+    expect(
+      snapshotCommittedRequestTerminalEvent({
+        ...base,
+        kind: "ask",
+        resolutionState: "answered",
+        retainedResult,
+      }),
+    ).toBeUndefined();
+  }
 });

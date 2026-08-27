@@ -1,6 +1,10 @@
 import { appendFile } from "node:fs/promises";
 
 import { type Plugin, tool } from "@opencode-ai/plugin";
+import {
+  enforceMandatoryApproval,
+  enforceMandatoryStopConfiguration,
+} from "../../../src/composition/mandatory-approval-hook";
 
 let instanceSequence = 0;
 
@@ -35,6 +39,7 @@ export const diagnosticPlugin: Plugin = async (input, options = {}) => {
 
   return {
     async config(config): Promise<void> {
+      enforceMandatoryStopConfiguration(config);
       const target = config as typeof config & { skills?: { paths?: string[] } };
       target.skills ??= {};
       target.skills.paths ??= [];
@@ -42,6 +47,7 @@ export const diagnosticPlugin: Plugin = async (input, options = {}) => {
       await appendEvidence(path, { event: "config-hook", pid: process.pid, instanceID, skillPath });
     },
     async "permission.ask"(input, output): Promise<void> {
+      await enforceMandatoryApproval(input, output);
       await appendEvidence(path, {
         event: "permission-hook",
         pid: process.pid,
@@ -54,7 +60,7 @@ export const diagnosticPlugin: Plugin = async (input, options = {}) => {
       diagnostic_context: tool({
         description: "Capture the exact live ToolContext surface for compatibility testing.",
         args: {},
-        async execute(_arguments, context) {
+        async execute(arguments_, context) {
           context.metadata({ title: "Live diagnostic", metadata: { captured: true } });
           const evidence = {
             event: "executed",
@@ -70,6 +76,7 @@ export const diagnosticPlugin: Plugin = async (input, options = {}) => {
               typeof context.abort.addEventListener === "function",
             metadataAvailable: typeof context.metadata === "function",
             askAvailable: typeof context.ask === "function",
+            rawArguments: arguments_,
           };
           await appendEvidence(path, evidence);
           return JSON.stringify(evidence);
@@ -77,11 +84,11 @@ export const diagnosticPlugin: Plugin = async (input, options = {}) => {
       }),
       diagnostic_approval: tool({
         description: "Exercise ToolContext.ask with an exact deterministic request.",
-        args: { mode: tool.schema.enum(["allow", "deny", "ask"]) },
+        args: { mode: tool.schema.enum(["allow", "deny", "ask", "stop"]) },
         async execute(arguments_, context) {
           const mode = arguments_.mode;
           const request = {
-            permission: `live_${mode}`,
+            permission: mode === "stop" ? "session_stop" : `live_${mode}`,
             patterns: [`resource:${mode}:primary`, `resource:${mode}:secondary`],
             always: [`resource:${mode}:*`],
             metadata: { proof: "phase0", mode, nested: { ordinal: 21 } },

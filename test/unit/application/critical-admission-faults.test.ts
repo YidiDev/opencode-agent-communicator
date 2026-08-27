@@ -91,7 +91,10 @@ test("message admission maps ownership and persistence faults at each effect bou
         },
       }),
     ),
-  ).toMatchObject({ ok: false, error: { code: "storage_unavailable" } });
+  ).toMatchObject({
+    ok: false,
+    error: { code: "admission_unknown", details: { delivery_id: deliveryId } },
+  });
 
   expect(
     await admitMessage(
@@ -101,7 +104,10 @@ test("message admission maps ownership and persistence faults at each effect bou
         },
       }),
     ),
-  ).toMatchObject({ ok: false, error: { code: "ownership_lost" } });
+  ).toMatchObject({
+    ok: false,
+    error: { code: "admission_unknown", details: { delivery_id: deliveryId } },
+  });
 });
 
 test("message admission rechecks ownership and clock after the native effect", async () => {
@@ -116,7 +122,10 @@ test("message admission rechecks ownership and clock after the native effect", a
         },
       }),
     ),
-  ).toMatchObject({ ok: false, error: { code: "storage_unavailable" } });
+  ).toMatchObject({
+    ok: false,
+    error: { code: "admission_unknown", details: { delivery_id: deliveryId } },
+  });
   expect(
     await admitMessage(
       messagePorts({
@@ -125,7 +134,10 @@ test("message admission rechecks ownership and clock after the native effect", a
         },
       }),
     ),
-  ).toMatchObject({ ok: false, error: { code: "ownership_lost" } });
+  ).toMatchObject({
+    ok: false,
+    error: { code: "admission_unknown", details: { delivery_id: deliveryId } },
+  });
 });
 
 async function requestAdmissionFixture() {

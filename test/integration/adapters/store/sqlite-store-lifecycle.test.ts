@@ -1,6 +1,6 @@
-import { Database } from "bun:sqlite";
+import { Database, constants as sqliteConstants } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -47,6 +47,53 @@ function trackedOptions(stateDirectory: string, openDescriptors: Set<number>) {
 }
 
 describe("deterministic SQLite lifecycle cleanup", () => {
+  test("passes SQLITE_OPEN_NOFOLLOW to Bun SQLite", () => {
+    let observedFlags = 0;
+    let observedPath = "";
+    const store = new LinuxBunSqliteStore({
+      stateDirectory: temporaryState(),
+      workspaceKey: workspace,
+      sqliteDatabaseLifecycle: {
+        open: (path, flags) => {
+          observedPath = path;
+          observedFlags = flags;
+          return new Database(path, flags);
+        },
+        close: (database) => database.close(true),
+      },
+    });
+    try {
+      expect(observedFlags & sqliteConstants.SQLITE_OPEN_NOFOLLOW).toBe(
+        sqliteConstants.SQLITE_OPEN_NOFOLLOW,
+      );
+      expect(observedPath).toBe(store.databasePath);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("fails closed when the final database file becomes a symlink before SQLite open", () => {
+    const state = temporaryState();
+    const outside = join(state, "..", "outside.sqlite3");
+    writeFileSync(outside, "not a database");
+    expect(
+      () =>
+        new LinuxBunSqliteStore({
+          stateDirectory: state,
+          databaseFileName: "state.sqlite3",
+          workspaceKey: workspace,
+          sqliteDatabaseLifecycle: {
+            open: (path, flags) => {
+              unlinkSync(join(state, "state.sqlite3"));
+              symlinkSync(outside, join(state, "state.sqlite3"));
+              return new Database(path, flags);
+            },
+            close: (database) => database.close(true),
+          },
+        }),
+    ).toThrow("The SQLite database could not be opened safely.");
+  });
+
   test("closes every handle when ownership inspection fails", async () => {
     const openDescriptors = new Set<number>();
     const store = new LinuxBunSqliteStore(trackedOptions(temporaryState(), openDescriptors));

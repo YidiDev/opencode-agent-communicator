@@ -13,6 +13,11 @@ import type {
   RecoveryStartupBarrierPort,
   StartupRecoveryBarrier,
 } from "../../application/delivery-ports";
+import type { DeliveryRetentionPersistencePort } from "../../application/delivery-retention";
+import type {
+  DeleteAbsentParticipantRequestsInput,
+  ParticipantDeletionPersistencePort,
+} from "../../application/participant-deletion-ports";
 import type {
   CompleteRequestDeliveryInput,
   ExpireDueRequestsResult,
@@ -31,6 +36,8 @@ import type {
   RequestTerminalPersistencePort,
   RequestTransitionInput,
 } from "../../application/request-ports";
+import type { StartOperationPersistencePort } from "../../application/session-start-ports";
+import type { SessionStopPersistencePort } from "../../application/session-stop-ports";
 import type { DeliveryMetadata, DeliveryParticipantRole } from "../../domain/deliveries";
 import { type FencingToken, OwnershipLostFault } from "../../domain/ownership";
 import type { SessionId } from "../../domain/sessions";
@@ -47,13 +54,18 @@ import { DeliveryRepository } from "./delivery-repository";
 import { type PreparedPrivateState, preparePrivateStatePath } from "./linux-private-path";
 import { applyMigrations, sqliteStoreMigrations } from "./migrations";
 import { OwnershipRepository } from "./ownership-repository";
+import { RequestDeletionRepository } from "./request-deletion-repository";
 import { RequestDeliveryRepository } from "./request-delivery-repository";
 import { RequestParticipantQueryRepository } from "./request-participant-query-repository";
 import { RequestQueryRepository } from "./request-query-repository";
 import { RequestRepository } from "./request-repository";
 import { RequestResultRetentionRepository } from "./request-result-retention-repository";
 import { RequestRetentionRepository } from "./request-retention-repository";
+import { RequestStopRepository } from "./request-stop-repository";
 import { RequestTerminalRepository } from "./request-terminal-repository";
+import { SqliteStoreOperationAccess } from "./sqlite-store-operation-access";
+import { StartOperationRepository } from "./start-operation-repository";
+import { createStartOperationStoreFacade } from "./start-operation-store-facade";
 import {
   StoreMaintenanceRepository,
   type StoreStorageDiagnostics,
@@ -72,6 +84,10 @@ import {
   StoreSecurityError,
 } from "./store-types";
 
+function retainCloseFailure(cause: unknown, pendingError: unknown): unknown {
+  return cause instanceof OwnershipLostFault ? pendingError : cause;
+}
+
 export class LinuxBunSqliteStore
   implements
     OwnershipPort,
@@ -83,7 +99,10 @@ export class LinuxBunSqliteStore
     RequestRetentionPersistencePort,
     RequestTerminalPersistencePort,
     RequestResultRetentionPersistencePort,
-    RequestParticipantQueryPort
+    RequestParticipantQueryPort,
+    SessionStopPersistencePort,
+    ParticipantDeletionPersistencePort,
+    DeliveryRetentionPersistencePort
 {
   readonly databasePath: string;
   readonly schemaVersion = sqliteStoreMigrations.length;
@@ -93,24 +112,25 @@ export class LinuxBunSqliteStore
   private readonly deliveryQueryRepository: DeliveryQueryRepository;
   private readonly requestRepository: RequestRepository;
   private readonly requestDeliveryRepository: RequestDeliveryRepository;
+  private readonly requestDeletionRepository: RequestDeletionRepository;
   private readonly requestQueryRepository: RequestQueryRepository;
   private readonly requestParticipantQueryRepository: RequestParticipantQueryRepository;
   private readonly requestRetentionRepository: RequestRetentionRepository;
   private readonly requestTerminalRepository: RequestTerminalRepository;
   private readonly requestResultRetentionRepository: RequestResultRetentionRepository;
+  private readonly requestStopRepository: RequestStopRepository;
+  readonly starts: StartOperationPersistencePort;
   private readonly maintenanceRepository: StoreMaintenanceRepository;
   private readonly privateState: PreparedPrivateState;
   private readonly maximumDatabaseBytes: number;
   private readonly databaseLifecycle: SqliteDatabaseLifecycle;
-  private readonly workspaceKey: WorkspaceKey;
   private readonly context: StoreContext;
+  private readonly access: SqliteStoreOperationAccess;
   private isClosed = false;
-
   constructor(options: LinuxBunSqliteStoreOptions) {
     const limits = resolveStoreLimits(options.limits);
     const workspace = validateWorkspaceKey(options.workspaceKey);
     if (!workspace.ok) throw new StoreSecurityError("The store workspace key is malformed.");
-    this.workspaceKey = workspace.value;
     const ownerLabel = options.ownerId ?? "backend";
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(ownerLabel)) {
       throw new StoreSecurityError("The backend owner identifier is malformed.");
@@ -160,9 +180,12 @@ export class LinuxBunSqliteStore
       sqliteConstants.SQLITE_OPEN_READWRITE |
       sqliteConstants.SQLITE_OPEN_CREATE |
       sqliteConstants.SQLITE_OPEN_PRIVATECACHE |
-      sqliteConstants.SQLITE_OPEN_EXRESCODE;
+      sqliteConstants.SQLITE_OPEN_EXRESCODE |
+      sqliteConstants.SQLITE_OPEN_NOFOLLOW;
     try {
+      this.privateState.assertPathIdentity();
       this.database = this.databaseLifecycle.open(this.privateState.sqliteDatabasePath, flags);
+      this.privateState.assertPathIdentity();
     } catch {
       this.privateState.close();
       throw new StoreSecurityError("The SQLite database could not be opened safely.");
@@ -178,7 +201,6 @@ export class LinuxBunSqliteStore
       try {
         this.databaseLifecycle.close(this.database);
       } catch {
-        // Initialization's primary sanitized failure wins over cleanup failure.
       } finally {
         this.privateState.close();
         this.isClosed = true;
@@ -202,11 +224,22 @@ export class LinuxBunSqliteStore
       startupBlockedToken: undefined,
     };
     this.context = context;
+    this.access = new SqliteStoreOperationAccess(
+      context,
+      this.privateState,
+      this.maximumDatabaseBytes,
+      (operation) => this.accessOperation(operation),
+      retainCloseFailure,
+    );
     this.ownershipRepository = new OwnershipRepository(context);
     this.deliveryRepository = new DeliveryRepository(context, this.ownershipRepository);
     this.deliveryQueryRepository = new DeliveryQueryRepository(context, this.ownershipRepository);
     this.requestRepository = new RequestRepository(context, this.ownershipRepository);
     this.requestDeliveryRepository = new RequestDeliveryRepository(
+      context,
+      this.ownershipRepository,
+    );
+    this.requestDeletionRepository = new RequestDeletionRepository(
       context,
       this.ownershipRepository,
     );
@@ -223,6 +256,11 @@ export class LinuxBunSqliteStore
       context,
       this.ownershipRepository,
     );
+    this.requestStopRepository = new RequestStopRepository(context, this.ownershipRepository);
+    this.starts = createStartOperationStoreFacade(
+      new StartOperationRepository(context, this.ownershipRepository),
+      (operation) => this.access.mutate(operation),
+    );
     this.requestParticipantQueryRepository = new RequestParticipantQueryRepository(
       context,
       this.ownershipRepository,
@@ -231,14 +269,11 @@ export class LinuxBunSqliteStore
     );
     this.maintenanceRepository = new StoreMaintenanceRepository(context, this.ownershipRepository);
   }
-
   async acquire(): Promise<FencingToken> {
     this.assertOpen();
     try {
       const token = this.ownershipRepository.acquire();
       try {
-        // These settings affect the database file or other connections. They are deliberately
-        // delayed until after the serialized lease acquisition.
         this.privateState.assertMutationCapacity(this.maximumDatabaseBytes, () =>
           checkpointDatabase(this.database),
         );
@@ -248,7 +283,6 @@ export class LinuxBunSqliteStore
         this.privateState.verifySqliteFiles();
         return token;
       } catch (cause: unknown) {
-        // Explicit release bypasses takeover grace and is the final SQLite mutation in this path.
         this.ownershipRepository.relinquish();
         throw cause;
       }
@@ -256,17 +290,14 @@ export class LinuxBunSqliteStore
       rethrowSanitizedStorageError(cause, "SQLite ownership acquisition failed.");
     }
   }
-
   async isCurrent(token: FencingToken): Promise<boolean> {
     this.assertOpen();
-    return this.mutate(() => this.ownershipRepository.isCurrent(token));
+    return this.access.mutate(() => this.ownershipRepository.isCurrent(token));
   }
-
   async establish(token: FencingToken, control: OperationControl): Promise<StartupRecoveryBarrier> {
     this.assertOpen();
-    return this.inspect(() => this.ownershipRepository.establish(token, control));
+    return this.access.inspect(() => this.ownershipRepository.establish(token, control));
   }
-
   async createPrepared(input: PrepareDeliveryInput): Promise<DeliveryStoreResult>;
   async createPrepared(input: PrepareRequestInput): Promise<RequestStoreResult>;
   async createPrepared(
@@ -274,22 +305,19 @@ export class LinuxBunSqliteStore
   ): Promise<DeliveryStoreResult | RequestStoreResult> {
     this.assertOpen();
     return "request" in input
-      ? this.mutate(() => this.requestRepository.createPrepared(input))
-      : this.mutate(() => this.deliveryRepository.createPrepared(input));
+      ? this.access.mutate(() => this.requestRepository.createPrepared(input))
+      : this.access.mutate(() => this.deliveryRepository.createPrepared(input));
   }
-
   async reconcilePreparedCreation(
     input: PrepareRequestInput,
   ): Promise<RequestCreationReconciliation> {
     this.assertOpen();
-    return this.inspect(() => this.requestRepository.reconcilePreparedCreation(input));
+    return this.access.inspect(() => this.requestRepository.reconcilePreparedCreation(input));
   }
-
   async cancelPrepared(input: DeliveryTransitionInput): Promise<DeliveryStoreResult> {
     this.assertOpen();
-    return this.mutate(() => this.deliveryRepository.cancelPrepared(input));
+    return this.access.mutate(() => this.deliveryRepository.cancelPrepared(input));
   }
-
   async claimPrepared(input: DeliveryTransitionInput): Promise<DeliveryClaimResult>;
   async claimPrepared(input: RequestTransitionInput): Promise<RequestClaimResult>;
   async claimPrepared(
@@ -297,107 +325,127 @@ export class LinuxBunSqliteStore
   ): Promise<DeliveryClaimResult | RequestClaimResult> {
     this.assertOpen();
     return "requestId" in input
-      ? this.mutate(() => this.requestRepository.claimPrepared(input))
-      : this.mutate(() => this.deliveryRepository.claimPrepared(input));
+      ? this.access.mutate(() => this.requestRepository.claimPrepared(input))
+      : this.access.mutate(() => this.deliveryRepository.claimPrepared(input));
   }
-
   async reconcilePreparedClaim(input: RequestTransitionInput): Promise<RequestClaimReconciliation> {
     this.assertOpen();
-    return this.inspect(() => this.requestRepository.reconcilePreparedClaim(input));
+    return this.access.inspect(() => this.requestRepository.reconcilePreparedClaim(input));
   }
-
   async completeDelivery(input: CompleteRequestDeliveryInput): Promise<RequestStoreResult> {
     this.assertOpen();
-    return this.mutate(() => this.requestDeliveryRepository.completeDelivery(input));
+    return this.access.mutate(() => this.requestDeliveryRepository.completeDelivery(input));
   }
 
   async expireDueRequests(
     input: Parameters<RequestAdmissionPersistencePort["expireDueRequests"]>[0],
   ): Promise<ExpireDueRequestsResult> {
     this.assertOpen();
-    return this.mutate(() => this.requestRepository.expireDueRequests(input));
+    return this.access.mutate(() => this.requestRepository.expireDueRequests(input));
   }
 
   async readNextPendingDeadline(
     input: Parameters<RequestDeadlineSchedulePort["readNextPendingDeadline"]>[0],
   ): ReturnType<RequestDeadlineSchedulePort["readNextPendingDeadline"]> {
     this.assertOpen();
-    return this.inspect(() => this.requestQueryRepository.readNextPendingDeadline(input));
+    return this.access.inspect(() => this.requestQueryRepository.readNextPendingDeadline(input));
   }
 
   async listRecoverableRequests(
     input: Parameters<RequestRecoveryPersistencePort["listRecoverableRequests"]>[0],
   ): Promise<readonly import("../../domain/request-types").RequestMetadata[]> {
     this.assertOpen();
-    return this.inspect(() => this.requestQueryRepository.listRecoverable(input));
+    return this.access.inspect(() => this.requestQueryRepository.listRecoverable(input));
   }
 
   async listForParticipant(
     input: Parameters<RequestParticipantQueryPort["listForParticipant"]>[0],
   ): ReturnType<RequestParticipantQueryPort["listForParticipant"]> {
     this.assertOpen();
-    return this.inspect(() => this.requestParticipantQueryRepository.list(input));
+    return this.access.inspect(() => this.requestParticipantQueryRepository.list(input));
   }
 
   async getParticipantRequest(
     input: Parameters<RequestParticipantQueryPort["getParticipantRequest"]>[0],
   ): ReturnType<RequestParticipantQueryPort["getParticipantRequest"]> {
     this.assertOpen();
-    return this.inspect(() => this.requestParticipantQueryRepository.get(input));
+    return this.access.inspect(() => this.requestParticipantQueryRepository.get(input));
   }
 
   async collectRequestRetention(
     input: Parameters<RequestRetentionPersistencePort["collectRequestRetention"]>[0],
   ): Promise<RequestRetentionResult> {
     this.assertOpen();
-    return this.mutate(() => this.requestRetentionRepository.collect(input));
+    return this.access.mutate(() => this.requestRetentionRepository.collect(input));
   }
 
   async answerAsk(
     input: Parameters<RequestTerminalPersistencePort["answerAsk"]>[0],
   ): ReturnType<RequestTerminalPersistencePort["answerAsk"]> {
     this.assertOpen();
-    return this.mutate(() => this.requestTerminalRepository.answerAsk(input));
+    return this.access.mutate(() => this.requestTerminalRepository.answerAsk(input));
   }
 
   async signalWait(
     input: Parameters<RequestTerminalPersistencePort["signalWait"]>[0],
   ): ReturnType<RequestTerminalPersistencePort["signalWait"]> {
     this.assertOpen();
-    return this.mutate(() => this.requestTerminalRepository.signalWait(input));
+    return this.access.mutate(() => this.requestTerminalRepository.signalWait(input));
   }
 
   async cancelPending(
     input: Parameters<RequestTerminalPersistencePort["cancelPending"]>[0],
   ): ReturnType<RequestTerminalPersistencePort["cancelPending"]> {
     this.assertOpen();
-    return this.mutate(() => this.requestTerminalRepository.cancelPending(input));
+    return this.access.mutate(() => this.requestTerminalRepository.cancelPending(input));
   }
-
   async acknowledgeResult(
     input: Parameters<RequestTerminalPersistencePort["acknowledgeResult"]>[0],
   ): ReturnType<RequestTerminalPersistencePort["acknowledgeResult"]> {
     this.assertOpen();
-    return this.mutate(() => this.requestTerminalRepository.acknowledgeResult(input));
+    return this.access.mutate(() => this.requestTerminalRepository.acknowledgeResult(input));
   }
-
   async expireAvailableResults(
     input: Parameters<RequestResultRetentionPersistencePort["expireAvailableResults"]>[0],
   ): ReturnType<RequestResultRetentionPersistencePort["expireAvailableResults"]> {
     this.assertOpen();
-    return this.mutate(() => this.requestResultRetentionRepository.expireAvailable(input));
+    return this.access.mutate(() => this.requestResultRetentionRepository.expireAvailable(input));
   }
-
+  async stopPendingRequests(
+    input: Parameters<SessionStopPersistencePort["stopPendingRequests"]>[0],
+  ): ReturnType<SessionStopPersistencePort["stopPendingRequests"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.requestStopRepository.stopPendingRequests(input));
+  }
+  async deleteParticipantRequests(
+    input: Parameters<ParticipantDeletionPersistencePort["deleteParticipantRequests"]>[0],
+  ): ReturnType<ParticipantDeletionPersistencePort["deleteParticipantRequests"]> {
+    this.assertOpen();
+    return this.access.mutate(() =>
+      this.requestDeletionRepository.deleteParticipantRequests(input),
+    );
+  }
+  async deleteAbsentParticipantRequests(input: DeleteAbsentParticipantRequestsInput) {
+    this.assertOpen();
+    return this.access.mutate(() => this.requestDeletionRepository.deleteAbsent(input));
+  }
+  async listParticipantDeletionCandidates(
+    input: Parameters<ParticipantDeletionPersistencePort["listParticipantDeletionCandidates"]>[0],
+  ): ReturnType<ParticipantDeletionPersistencePort["listParticipantDeletionCandidates"]> {
+    this.assertOpen();
+    return this.access.inspect(() =>
+      this.requestDeletionRepository.listParticipantDeletionCandidates(input),
+    );
+  }
   async completeSubmission(input: CompleteSubmissionInput): Promise<DeliveryStoreResult> {
     this.assertOpen();
-    return this.mutate(() => this.deliveryRepository.completeSubmission(input));
+    return this.access.mutate(() => this.deliveryRepository.completeSubmission(input));
   }
-
   async listRecoverable(
     input: Parameters<DeliveryPersistencePort["listRecoverable"]>[0],
   ): Promise<readonly DeliveryMetadata[]> {
     this.assertOpen();
-    return this.inspect(() => this.deliveryQueryRepository.listRecoverable(input));
+    return this.access.inspect(() => this.deliveryQueryRepository.listRecoverable(input));
   }
 
   async getForParticipant(input: {
@@ -408,81 +456,37 @@ export class LinuxBunSqliteStore
     { readonly role: DeliveryParticipantRole; readonly delivery: DeliveryMetadata } | undefined
   > {
     this.assertOpen();
-    return this.inspect(() => this.deliveryQueryRepository.getForParticipant(input));
+    return this.access.inspect(() => this.deliveryQueryRepository.getForParticipant(input));
   }
 
   async garbageCollectMetadata(input: {
     readonly fencingToken: FencingToken;
-    readonly nowMs: number;
+    readonly workspaceKey: WorkspaceKey;
     readonly limit: number;
-  }): Promise<number> {
+  }): Promise<unknown> {
     this.assertOpen();
-    return this.mutate(() => this.maintenanceRepository.garbageCollectDeliveryMetadata(input));
+    return this.access.mutate(() =>
+      this.maintenanceRepository.garbageCollectDeliveryMetadata(input),
+    );
   }
 
   async readStorageDiagnostics(): Promise<StoreStorageDiagnostics> {
     this.assertOpen();
-    return this.mutate(() => this.maintenanceRepository.readStorageDiagnostics());
+    return this.access.mutate(() => this.maintenanceRepository.readStorageDiagnostics());
   }
 
   close(): void {
     if (this.isClosed) return;
     this.isClosed = true;
-    let pendingError: unknown;
-    let hasCurrentLease = false;
-    try {
-      hasCurrentLease = this.ownershipRepository.hasCurrentLease();
-    } catch (cause: unknown) {
-      pendingError = cause;
-    }
-    if (hasCurrentLease) {
-      try {
-        this.privateState.assertMutationCapacity(this.maximumDatabaseBytes, () =>
-          checkpointDatabase(this.database),
-        );
-        checkpointDatabase(this.database);
-      } catch (cause: unknown) {
-        if (!(cause instanceof OwnershipLostFault)) pendingError = cause;
-      }
-      try {
-        // Final SQLite mutation. Everything below only closes already-open handles.
-        this.ownershipRepository.relinquish();
-      } catch (cause: unknown) {
-        if (!(cause instanceof OwnershipLostFault)) pendingError ??= cause;
-      }
-    }
-    try {
-      this.databaseLifecycle.close(this.database);
-    } catch (cause: unknown) {
-      pendingError ??= cause;
-    } finally {
-      this.privateState.close();
-    }
-    if (pendingError !== undefined) {
-      rethrowSanitizedStorageError(pendingError, "The SQLite store could not be closed safely.");
-    }
+    this.access.close(this.ownershipRepository, this.databaseLifecycle);
   }
 
   private assertOpen(): void {
     if (this.isClosed) throw new OwnershipLostFault("The SQLite store is closed.");
   }
 
-  private mutate<Value>(operation: () => Value): Value {
+  private accessOperation<Value>(operation: () => Value): Value {
     try {
-      this.privateState.assertMutationCapacity(this.maximumDatabaseBytes, () =>
-        checkpointDatabase(this.database),
-      );
-      const result = operation();
-      this.privateState.verifySqliteFiles();
-      return result;
-    } catch (cause: unknown) {
-      rethrowSanitizedStorageError(cause, "SQLite storage operation failed.");
-    }
-  }
-
-  private inspect<Value>(operation: () => Value): Value {
-    try {
-      // Reads fence through isCurrent(), which may renew and therefore mutate ownership.
       this.privateState.assertMutationCapacity(this.maximumDatabaseBytes, () =>
         checkpointDatabase(this.database),
       );

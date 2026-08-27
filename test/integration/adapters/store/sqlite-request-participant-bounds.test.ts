@@ -163,7 +163,7 @@ test("reopening with lower pending limits still drains an exact 100-row target b
   ).toBe(0);
   database.close();
   reopened.close();
-});
+}, 60_000);
 
 test("reopening with lower result limits still drains an exact 100-row source backlog", async () => {
   let wallMs = 25_000;

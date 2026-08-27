@@ -1,8 +1,9 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
-import { realpath } from "node:fs/promises";
+import { realpath, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { validateNativeExport } from "../../src/adapters/export/native-export-validation";
 import { cleanupAll } from "./harness/cleanup";
 import { resolveExactProjectCli } from "./harness/cli";
 import {
@@ -175,12 +176,27 @@ test("validates the isolated exact OpenCode 1.18.21 live surface", async () => {
     expect(rawInfo.id).toBe(sessionID);
     expect(safeInfo.id).toBe(sessionID);
     expect(rawInfo.title).toBe("Live harness sensitive title");
+    expect(safeInfo.title).toBe(`[redacted:session-title:${sessionID}]`);
+    expect(safeInfo.directory).toBe(`[redacted:session-directory:${sessionID}]`);
     expect(safeInfo.title).not.toBe(rawInfo.title);
     expect(safeInfo.directory).not.toBe(rawInfo.directory);
     expect(array(unsanitized.messages, "unsanitized messages").length).toBeGreaterThan(0);
     expect(array(sanitized.messages, "sanitized messages").length).toBe(
       array(unsanitized.messages, "unsanitized messages").length,
     );
+    const serializedSanitized = JSON.stringify(sanitized);
+    expect(
+      validateNativeExport(new TextEncoder().encode(serializedSanitized), sessionID as never, true),
+    ).toEqual({ ok: true });
+    const importPath = join(isolation.root, "sanitized-round-trip.json");
+    await writeFile(importPath, serializedSanitized, { mode: 0o600 });
+    const imported = await runBoundedProcess({
+      command: cliPath,
+      arguments: ["import", importPath],
+      cwd: isolation.project,
+      environment: isolation.environment,
+    });
+    expect(imported.exitCode).toBe(0);
 
     const serverPID = serve.child.pid;
     if (serverPID === undefined) throw new Error("server process ID is absent");

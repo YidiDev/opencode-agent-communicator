@@ -16,3 +16,6 @@ export const requestLimits = {
 } as const;
 
 export const requestProtocol = "opencode-session-communicator/v1" as const;
+
+/** Reserved before durable creation and after the durable deadline for bounded external I/O. */
+export const blockingRequestDeadlineMarginMs = 30_000;

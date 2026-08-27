@@ -4,3 +4,20 @@ export const pendingRequestsPerWorkspaceHardCeiling = 1_024;
 /** Includes pending and terminal request metadata whose delivery is still submitting. */
 export const submittingRequestsPerWorkspaceHardCeiling = 4_096;
 export const availableResultsPerWorkspaceHardCeiling = 4_096;
+export const managedSessionsPerWorkspaceHardCeiling = 1_024;
+/** Distinct deletion candidates from two pending roles, available-result sources, and provenance. */
+export const participantDeletionCandidatesHardCeiling =
+  pendingRequestsPerWorkspaceHardCeiling * 2 +
+  availableResultsPerWorkspaceHardCeiling +
+  managedSessionsPerWorkspaceHardCeiling;
+/** Ambiguous deterministic creates are isolated from the ordinary managed-session budget. */
+export const unresolvedStartProvenancePerWorkspaceHardCeiling = 128;
+export const startOperationsRecoveryHardCeiling = 1_024;
+export const startRecoveryScanHardCeiling =
+  startOperationsRecoveryHardCeiling + unresolvedStartProvenancePerWorkspaceHardCeiling;
+export const startOperationsPerWorkspaceHardCeiling = 4_096;
+export const startPayloadBytesPerWorkspaceHardCeiling = 32 * 1_024 * 1_024;
+export const startRateEventsPerWorkspaceHardCeiling = 1_000;
+export const startsPerSourceWindowHardCeiling = 100;
+export const startsPerWorkspaceWindowHardCeiling = 1_000;
+export const startTerminalRetentionMsHardCeiling = 30 * 24 * 60 * 60 * 1_000;

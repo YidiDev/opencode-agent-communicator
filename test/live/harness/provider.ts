@@ -55,7 +55,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hasToolResult(body: unknown): boolean {
   if (!isRecord(body) || !Array.isArray(body.messages)) return false;
-  return body.messages.some((message) => isRecord(message) && message.role === "tool");
+  const message = body.messages.at(-1);
+  return isRecord(message) && message.role === "tool";
+}
+
+function lastMessageSerialized(body: unknown): string {
+  if (!isRecord(body) || !Array.isArray(body.messages)) return JSON.stringify(body);
+  return JSON.stringify(body.messages.at(-1));
 }
 
 function chunk(delta: Record<string, unknown>, finishReason: string | null = null): unknown {
@@ -96,6 +102,171 @@ function textResponse(): Response {
     chunk({ content: "diagnostic complete" }),
     chunk({}, "stop"),
   ]);
+}
+
+function productionToolResponse(serialized: string): Response | undefined {
+  if (serialized.includes("production-session-list")) return toolResponse("session_list");
+  const send = serialized.match(/production-session-send:(ses_[A-Za-z0-9]+)/)?.[1];
+  if (send) {
+    return toolResponse(
+      "session_send",
+      JSON.stringify({ session_id: send, content: "packed live delivery" }),
+    );
+  }
+  const delivery = serialized.match(/production-delivery-get:(dlv_[a-z0-9]+)/)?.[1];
+  if (delivery) {
+    return toolResponse("session_delivery_get", JSON.stringify({ delivery_id: delivery }));
+  }
+  if (serialized.includes("production-request-list")) return toolResponse("session_request_list");
+  const ask = serialized.match(/production-session-ask:(ses_[A-Za-z0-9]+)/)?.[1];
+  if (ask) {
+    return toolResponse(
+      "session_ask",
+      JSON.stringify({
+        session_id: ask,
+        questions: [{ prompt: "Ship packed acceptance?", options: ["yes", "no"] }],
+        timeout_seconds: 30,
+      }),
+    );
+  }
+  const wait = serialized.match(/production-session-wait:(ses_[A-Za-z0-9]+):([a-z-]+)/);
+  if (wait) {
+    return toolResponse(
+      "session_wait",
+      JSON.stringify({ session_id: wait[1], milestone: wait[2], timeout_seconds: 30 }),
+    );
+  }
+  const respond = serialized.match(/production-session-respond:(req_[a-z0-9]+)/)?.[1];
+  if (respond) {
+    return toolResponse(
+      "session_respond",
+      JSON.stringify({ request_id: respond, answers: [["yes"]] }),
+    );
+  }
+  const signal = serialized.match(/production-session-signal:(req_[a-z0-9]+)/)?.[1];
+  if (signal) {
+    return toolResponse(
+      "session_signal",
+      JSON.stringify({ request_id: signal, evidence: "artifact://packed-live" }),
+    );
+  }
+  const request = serialized.match(/production-request-(get|ack|cancel):(req_[a-z0-9]+)/);
+  if (request)
+    return toolResponse(
+      `session_request_${request[1]}`,
+      JSON.stringify({ request_id: request[2] }),
+    );
+  if (serialized.includes("production-session-start")) {
+    return toolResponse(
+      "session_start",
+      JSON.stringify({
+        idempotency_key: "packed-live-start",
+        initial_message: "Packed managed session ready check",
+        title: "Packed managed target",
+      }),
+    );
+  }
+  const stop = serialized.match(/production-session-stop:(ses_[A-Za-z0-9]+)/)?.[1];
+  if (stop)
+    return toolResponse(
+      "session_stop",
+      JSON.stringify({ session_id: stop, reason: "packed acceptance" }),
+    );
+  if (serialized.includes("production-export-unavailable")) {
+    return toolResponse("session_export", JSON.stringify({ destination: "live.json" }));
+  }
+  return undefined;
+}
+
+function communicatorEnvelope(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (isRecord(parsed) && parsed.protocol === "opencode-session-communicator/v1") return parsed;
+    } catch {}
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = communicatorEnvelope(item);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (!isRecord(value)) return undefined;
+  for (const item of Object.values(value)) {
+    const found = communicatorEnvelope(item);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function advertisesTool(body: unknown, name: string): boolean {
+  if (!isRecord(body) || !Array.isArray(body.tools)) return false;
+  return body.tools.some((candidate) => {
+    if (!isRecord(candidate) || !isRecord(candidate.function)) return false;
+    return candidate.function.name === name;
+  });
+}
+
+function productionRequestResponse(body: unknown): Response | undefined {
+  const envelope = communicatorEnvelope(body);
+  if (!envelope || typeof envelope.request_id !== "string") return undefined;
+  const serialized = JSON.stringify(body);
+  if (envelope.operation === "ask") {
+    if (
+      !serialized.includes("production-process-ask-request") ||
+      !advertisesTool(body, "session_respond")
+    ) {
+      return textResponse();
+    }
+    return toolResponse(
+      "session_respond",
+      JSON.stringify({ request_id: envelope.request_id, answers: [["yes"]] }),
+    );
+  }
+  if (envelope.operation === "wait") {
+    if (
+      !serialized.includes("production-process-wait-request") ||
+      !advertisesTool(body, "session_signal")
+    ) {
+      return textResponse();
+    }
+    const payload = isRecord(envelope.payload) ? envelope.payload : undefined;
+    if (payload?.milestone === "production-cancel") return textResponse();
+    return toolResponse(
+      "session_signal",
+      JSON.stringify({ request_id: envelope.request_id, evidence: "artifact://packed-live" }),
+    );
+  }
+  return undefined;
+}
+
+function requestedToolResponse(serialized: string): Response {
+  const approval = serialized.match(/tool-approval-(allow|deny|ask|stop)/)?.[1];
+  if (approval) return toolResponse("diagnostic_approval", JSON.stringify({ mode: approval }));
+  if (serialized.includes("tool-unknown-key")) {
+    return toolResponse("diagnostic_context", JSON.stringify({ unknown_key: true }));
+  }
+  if (serialized.includes("tool-cancellation")) return toolResponse("diagnostic_cancellation");
+  return productionToolResponse(serialized) ?? toolResponse();
+}
+
+function shouldGateRequest(
+  options: { readonly gated?: boolean; readonly gateText?: string },
+  body: unknown,
+): boolean {
+  if (options.gated) return true;
+  if (options.gateText === undefined || !isRecord(body) || !Array.isArray(body.messages)) {
+    return false;
+  }
+  const message = body.messages.at(-1);
+  return isRecord(message) && String(message.content).includes(options.gateText);
+}
+
+function completedProviderResponse(body: unknown): Response {
+  if (hasToolResult(body)) return textResponse();
+  return productionRequestResponse(body) ?? requestedToolResponse(lastMessageSerialized(body));
 }
 
 function withDeadline<T>(promise: Promise<T>, label: string): Promise<T> {
@@ -140,7 +311,9 @@ function gatedTextResponse(release: Promise<string>, cancelled: Deferred<void>):
   );
 }
 
-export function launchDeterministicProvider(options: { gated?: boolean } = {}): ProviderHarness {
+export function launchDeterministicProvider(
+  options: { gated?: boolean; gateText?: string } = {},
+): ProviderHarness {
   const requests: unknown[] = [];
   const observations: ProviderRequestObservation[] = [];
   const gates: ProviderRequestGate[] = [];
@@ -167,7 +340,7 @@ export function launchDeterministicProvider(options: { gated?: boolean } = {}): 
           { status: 503, headers: { "retry-after-ms": "60000" } },
         );
       }
-      if (options.gated) {
+      if (shouldGateRequest(options, body)) {
         const release = deferred<string>();
         const cancelled = deferred<void>();
         const sequence = requests.length;
@@ -185,11 +358,7 @@ export function launchDeterministicProvider(options: { gated?: boolean } = {}): 
         gateArrivals.clear();
         return gatedTextResponse(release.promise, cancelled);
       }
-      if (hasToolResult(body)) return textResponse();
-      const approval = serialized.match(/tool-approval-(allow|deny|ask)/)?.[1];
-      if (approval) return toolResponse("diagnostic_approval", JSON.stringify({ mode: approval }));
-      if (serialized.includes("tool-cancellation")) return toolResponse("diagnostic_cancellation");
-      return toolResponse();
+      return completedProviderResponse(body);
     },
   });
 

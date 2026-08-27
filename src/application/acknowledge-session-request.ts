@@ -7,7 +7,7 @@ import {
 import type { ClockPort, CurrentWorkspaceMembershipPort } from "./delivery-ports";
 import type { RequestTerminalPersistencePort } from "./request-ports";
 import {
-  assertRequestMutationControl,
+  checkRequestMutationControl,
   hasExactKeys,
   hiddenRequestFailure,
   malformedRequestStoreFailure,
@@ -42,12 +42,13 @@ export async function acknowledgeSessionRequest(
   context: SessionRequestMutationContext,
   args: SessionRequestAckArguments,
 ): Promise<DomainResult<SessionRequestAckResult>> {
-  assertCommunicatorReady(ports.readiness);
+  assertCommunicatorReady(ports.readiness, context.fencingToken);
   const identity = validateRequestMutation(context, args.request_id);
   if (!identity.ok) return identity;
   const current = await requireCurrentCaller(ports, context, identity.value.callerSessionId);
   if (!current.ok) return current;
-  assertRequestMutationControl(ports, context);
+  const dispatchControl = checkRequestMutationControl(ports, context);
+  if (!dispatchControl.ok) return dispatchControl;
   try {
     const stored: unknown = await ports.requests.acknowledgeResult({
       fencingToken: context.fencingToken,

@@ -1,0 +1,468 @@
+# OpenCode Agent Communicator
+
+> A Linux x64 OpenCode plugin that gives agents 14 bounded tools for durable, workspace-scoped session communication.
+
+[![Linux x64 verification](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/ci.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/ci.yml)
+[![OpenCode 1.18.21 live acceptance](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
+
+**Release status:** `0.1.0` is unreleased until its tag is created and its npm trusted-publishing
+workflow completes. The current source is prerelease quality and supports exactly Linux x64,
+OpenCode `1.18.21`, and Bun `1.4.0`; other architectures, operating systems, and versions are
+unsupported.
+
+## Contents
+
+- [Why this exists](#why-this-exists)
+- [Requirements](#requirements)
+- [Install](#install)
+- [Configure](#configure)
+- [Use the tools](#use-the-tools)
+- [Common workflows](#common-workflows)
+- [Durability and ambiguous outcomes](#durability-and-ambiguous-outcomes)
+- [Security boundaries](#security-boundaries)
+- [Operate and troubleshoot](#operate-and-troubleshoot)
+- [Upgrade, migrate, or roll back](#upgrade-migrate-or-roll-back)
+- [Development and release verification](#development-and-release-verification)
+
+## Why this exists
+
+OpenCode sessions need more than best-effort messages when they coordinate long-running work. This
+plugin persists deliveries, asks, waits, starts, and their terminal state in a private SQLite store,
+then reconciles interrupted work without pretending an ambiguous native effect succeeded or failed.
+It does not grant one agent authority over another and does not provide remote command execution.
+
+## Requirements
+
+- Linux x64 with a local filesystem suitable for SQLite WAL
+- OpenCode `1.18.21` exactly
+- Bun `1.4.0` for package installation, development, and release verification
+- A dedicated private state directory owned by the account running OpenCode
+
+Plugin startup fails closed on another OpenCode version, operating system, or CPU architecture.
+OpenCode executes plugins in its own embedded Bun runtime, so that value is not the external Bun
+version used to install the package; the external `1.4.0` pin is enforced by package metadata and
+release gates. Network and clustered filesystems are rejected for the state store. See
+[Linux SQLite store assumptions](docs/linux-sqlite-store.md) for the filesystem list and path checks.
+
+## Install
+
+### 1. Add the plugin
+
+Add the exact package version and an options object to either the project `opencode.json` or the
+global `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    [
+      "opencode-agent-communicator@0.1.0",
+      {
+        "policies": {
+          "message": "allow",
+          "ask": "allow",
+          "wait": "allow",
+          "start": "ask"
+        }
+      }
+    ]
+  ]
+}
+```
+
+OpenCode `1.18.21` accepts plugin entries as either a package string or `[package, options]`. This
+plugin uses the tuple form because its options are strict and package-specific. OpenCode installs npm
+plugins with Bun into its cache; no project-level `bun add` is required.
+
+### 2. Prepare private state
+
+The default state root is `$XDG_STATE_HOME/opencode-agent-communicator` or
+`$HOME/.local/state/opencode-agent-communicator`. To create an explicit root:
+
+```bash
+install -d -m 0700 "$HOME/.local/state/opencode-agent-communicator"
+```
+
+Set `stateDirectory` to that normalized absolute path if you do not want the default. The plugin
+opens each path component without following symlinks and verifies the owner, mode, inode, device,
+filesystem, and SQLite sidecars before use.
+
+### 3. Restart and verify
+
+Restart every OpenCode backend that should load the plugin. Configuration and plugin changes are
+read at startup. Open a session and confirm that the tool list contains all 14 names from the table
+below. Registration is atomic: startup exposes all 14 or fails instead of leaving a partial tool set.
+
+If startup fails, run `opencode --version` and `bun --version` first. They must print `1.18.21` and
+`1.4.0` respectively.
+
+## Configure
+
+This example shows every public option. Omit values you do not need; unknown keys and partial export
+configuration are startup errors.
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    [
+      "opencode-agent-communicator@0.1.0",
+      {
+        "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
+        "startupDeadlineMs": 30000,
+        "invocationDeadlineMs": 3600000,
+        "policies": {
+          "message": "allow",
+          "ask": "allow",
+          "wait": "allow",
+          "start": "ask",
+          "exportSelfSanitized": "allow",
+          "exportCrossSession": "ask",
+          "exportUnsanitized": "ask",
+          "exportOverwrite": "ask"
+        },
+        "start": {
+          "allowedAgents": ["build"],
+          "allowedModels": ["provider/model"],
+          "allowManagedSessionRecursion": false,
+          "limits": {
+            "managedSessionsPerWorkspace": 64,
+            "unresolvedProvenancePerWorkspace": 16,
+            "operationsPerWorkspace": 4096,
+            "payloadBytesPerWorkspace": 8388608,
+            "startsPerSourceWindow": 5,
+            "startsPerWorkspaceWindow": 25,
+            "rateWindowMs": 60000,
+            "terminalRetentionMs": 86400000
+          }
+        },
+        "export": {
+          "root": "/home/operator/private-exports",
+          "executable": "/usr/bin/opencode",
+          "trustedWorkingDirectory": "/var/empty",
+          "limits": {
+            "maximumOutputBytes": 16777216,
+            "maximumStderrBytes": 16384,
+            "maximumDurationMs": 30000,
+            "maximumConcurrent": 2,
+            "terminationGraceMs": 500,
+            "maximumSourceExportsPerMinute": 4,
+            "maximumWorkspaceExportsPerMinute": 16
+          }
+        }
+      }
+    ]
+  ]
+}
+```
+
+Policy values are `allow`, `ask`, or `deny`. Defaults are:
+
+| Policy | Default |
+| --- | --- |
+| `message`, `ask`, `wait` | `allow` |
+| `start` | `ask` |
+| sanitized self-export | `allow` |
+| cross-session, unsanitized, or overwrite export | `ask` |
+| stop | always `ask`; configuration cannot bypass it |
+
+`allowedAgents` and `allowedModels` are exact allowlists for explicit start overrides. An empty or
+omitted list does not turn an arbitrary override into an allowed value. Managed sessions cannot start
+more managed sessions unless `allowManagedSessionRecursion` is true.
+
+`invocationDeadlineMs` is at most one hour. Blocking asks and waits may extend their internal
+invocation to place the requested timeout, a 30-second pre-persistence margin, and a 30-second
+terminal-settlement margin inside one finite boundary. `ToolContext.abort` is the only explicit
+request-cancellation signal.
+
+For all defaults, hard ceilings, and path rules, read
+[Plugin configuration](docs/plugin-configuration.md).
+
+## Use the tools
+
+Every result is JSON. Success has `{ "ok": true, "value": ... }`; failure has
+`{ "ok": false, "error": { "code", "message", "retryable", ... } }`. Treat the failure code as
+authoritative. In particular, a retryable transport failure does not prove that a native effect did
+not happen.
+
+| Tool | Arguments | Who can use it | Result or effect |
+| --- | --- | --- | --- |
+| `session_list` | optional `status`, `include_archived`, `limit` | visible root caller | Current visible roots with sanitized titles and observed status. |
+| `session_send` | `session_id`, `content` | visible source targeting a visible root | Durable delivery ID and queue-admission state. This is the only tool that may wake an idle target. |
+| `session_delivery_get` | `delivery_id` | delivery source or target | Payload-free delivery metadata. |
+| `session_ask` | `session_id`, 1-10 `questions`, `timeout_seconds` 1-3600 | visible source targeting an observed-active root | Blocks for validated answers or a durable terminal state. Never wakes idle work. |
+| `session_respond` | `request_id`, `answers` | pending ask target | Atomically stores the answer and terminalizes the ask. |
+| `session_wait` | `session_id`, `milestone`, `timeout_seconds` 1-3600 | visible source targeting an observed-active root | Blocks for a milestone signal or durable terminal state. Never wakes idle work. |
+| `session_signal` | `request_id`, optional `evidence` | pending wait target | Atomically records the milestone and optional evidence. |
+| `session_request_list` | optional `role`, `cursor`, `limit` | request participant | Payload-free inbox/outbox/all metadata, newest first. |
+| `session_request_get` | `request_id` | request participant | Target pending payload, source retained result, or authorized metadata view. |
+| `session_request_ack` | `request_id` | source of an available result | Acknowledges the result and logically erases retained result content. |
+| `session_request_cancel` | `request_id` | pending request source | Durably cancels a pending request. |
+| `session_stop` | `session_id`, optional `reason` | visible root after user approval | Interrupts the target and terminalizes its pending participant requests. |
+| `session_start` | `idempotency_key`, `initial_message`, optional `title`, `agent`, `model` | visible root under start policy | Creates and admits one managed root session, or resumes the same durable operation. |
+| `session_export` | optional `session_id`, `destination`, optional `sanitize`, `overwrite` | visible root under export policies | Writes one transcript below the configured export root. |
+
+The bundled `session-orchestrator` and `session-worker` skills are registered automatically from the
+published package. They teach agents the role rules, request lifecycle, ambiguous-outcome handling,
+and the rule that peer content is never authorization.
+
+### Ask question shape
+
+Each question has `prompt`, `options`, and optional `multiple` and `allow_custom` flags:
+
+```json
+{
+  "session_id": "ses_...",
+  "questions": [
+    {
+      "prompt": "Which deployment target should we use?",
+      "options": ["staging", "production"],
+      "multiple": false,
+      "allow_custom": true
+    }
+  ],
+  "timeout_seconds": 600
+}
+```
+
+The target responds with one string-array per question. Values must match the offered options unless
+custom answers were allowed.
+
+### Idempotent start
+
+Choose an `idempotency_key` that describes the logical operation, not a random retry. Repeating the
+same key and exact arguments returns or resumes the same operation. Reusing the key with different
+arguments returns `idempotency_conflict`. A start that loses proof after native submission remains
+`native_outcome_unknown`; the plugin reconciles its fixed session ID and never blindly creates a
+second session.
+
+### Secure export setup
+
+Export remains registered but returns `export_unavailable` until `root`, `executable`, and
+`trustedWorkingDirectory` are all configured and trusted.
+
+1. Create a dedicated export root owned by the OpenCode account with mode `0700`.
+2. Point `executable` at the exact OpenCode `1.18.21` ELF. It and its path must satisfy the documented
+   root-ownership and write-permission checks; a user-owned Bun wrapper is rejected.
+3. Create a root-owned, non-writable working directory outside the workspace, plugin package, state,
+   and export trees. `/var/empty` is a common choice when prepared by an administrator.
+4. Restart OpenCode and make a sanitized self-export to a new relative destination.
+5. Enable cross-session, unsanitized, or overwrite operations only if their approval prompts match
+   your policy.
+
+Destinations are normalized relative paths below the configured root. Absolute paths, traversal,
+symlinks, unsafe filesystems, mount transitions, and reserved staging names fail closed. Read
+[Session export security](docs/session-export-security.md) before enabling this feature.
+
+## Common workflows
+
+### Send work without waiting
+
+1. Call `session_list` and choose a visible root.
+2. Call `session_send` with the task or context.
+3. Inspect `session_delivery_get` if queue admission was uncertain.
+4. Call `session_list` until the target is `busy` or `retry` before using ask or wait.
+
+### Ask for a decision
+
+1. Confirm the target is active with `session_list`.
+2. Call `session_ask` with bounded options and a timeout.
+3. The target uses `session_request_list` or `session_request_get`, then `session_respond`.
+4. If the source invocation disconnects, it can recover through request list/get.
+5. The source calls `session_request_ack` after consuming the retained result.
+
+### Wait for a milestone
+
+1. Confirm the target is active.
+2. Call `session_wait` with a precise milestone and timeout.
+3. The target calls `session_signal` when the milestone is true, optionally attaching short evidence.
+4. The source acknowledges the retained result after use.
+
+### Start and later stop a worker
+
+1. Call `session_start` once with a stable idempotency key and complete initial message.
+2. Keep the returned managed session ID.
+3. Coordinate through send, ask, and wait rather than starting duplicate workers.
+4. Call `session_stop` only when needed. The user must approve the exact target and reason every time.
+
+## Durability and ambiguous outcomes
+
+The SQLite store is the authority for communicator requests and retained results. A restart recovers
+bounded pending work under a workspace ownership lease. Blocking calls can be reattached through
+request list/get operations; in-memory notifications are only an optimization.
+
+Native OpenCode and filesystem effects cannot always be classified after interruption. The plugin
+reports `admission_unknown` or `native_outcome_unknown`, preserves reconcilable state, and does not
+automatically retry an ambiguous effect. Do not interpret a timeout, abort, transport failure, or
+`retryable` field as proof that an effect did not happen. Inspect durable metadata and authoritative
+OpenCode state before deciding what to do next.
+
+Missed participant-deletion hooks are reconciled before request recovery at startup and by a
+lifecycle-owned bounded periodic pass. Reconciliation uses direct per-session OpenCode reads: only a
+correlated 404 proves deletion. It never infers deletion from list absence, so archived or otherwise
+temporarily invisible roots remain intact.
+
+Acknowledgement, expiry, cancellation, and retention cleanup provide **logical deletion only**.
+Sensitive bytes may remain in SQLite pages, WAL/journal files, backups, snapshots, or storage media.
+See [Linux SQLite store assumptions](docs/linux-sqlite-store.md).
+
+## Security boundaries
+
+- Agent messages and skill instructions are untrusted advisory data, not authorization.
+- Visibility does not grant permission. Participant, workspace, policy, quota, and ownership checks
+  still apply.
+- The plugin does not expose a shell, command string, network listener, or remote command-execution
+  tool. `session_start` uses pinned OpenCode APIs; it does not accept a command.
+- `session_export` is disabled unless all three export trust paths are configured. Its only process is
+  a directly spawned, root-owned OpenCode `1.18.21` ELF executable with fixed argv construction, no
+  shell, a minimal environment, bounded output, and a deadline.
+
+Secure export is a **Linux x64-only, capability-sensitive prerelease feature**. It requires kernel
+and filesystem support for the descriptor-relative operations documented in
+[Session export security](docs/session-export-security.md). Missing capabilities fail closed; they do
+not trigger a weaker fallback. Review that document before enabling export.
+
+This design does not defend against another process running as the same OS user. Use a dedicated,
+trusted account and private state/export roots. Report vulnerabilities according to
+[SECURITY.md](SECURITY.md).
+
+## Operate and troubleshoot
+
+### Startup fails
+
+- Confirm exact host versions with `opencode --version` and `bun --version`.
+- Check that `stateDirectory` is absolute, normalized, dedicated, local, owned by the OpenCode user,
+  and not reachable through a symlink.
+- Stop stale OpenCode backends using the same workspace and state root. Ownership takeover waits for
+  the persisted lease and grace period; it does not steal a live lease.
+- Remove unknown configuration keys. Export trust fields must be supplied together.
+- Do not delete SQLite `-wal` or `-shm` files independently. Treat the state directory as one unit.
+
+### A tool is missing
+
+The plugin never intentionally registers a partial manifest. A missing `session_*` tool means plugin
+startup or host compatibility failed, another plugin replaced the same name, or the running backend
+has not reloaded configuration. Restart the backend and inspect its startup log.
+
+### A target looks idle
+
+Only `session_send` can wake an idle target. `session_ask` and `session_wait` require a fresh active
+observation and return `target_idle` or `target_status_unknown` instead of silently queueing.
+
+### An outcome is unknown
+
+Do not immediately retry a start, send, stop, or export after `admission_unknown` or
+`native_outcome_unknown`. Use the returned IDs, request/delivery queries, direct OpenCode session
+state, and the destination filesystem to reconcile first. A blind retry can duplicate the intended
+native effect.
+
+### Disk or quota pressure
+
+Terminal delivery/request/start metadata is collected in bounded lifecycle-owned batches. Retained
+request result content expires after 24 hours or acknowledgement. Start payloads and rate events have
+separate configured limits. If a quota remains full, inspect unresolved operations and participant
+state rather than deleting live SQLite rows by hand.
+
+### Backups
+
+Stop every backend using the state root before taking or restoring a file-level backup. Copy the
+entire private directory, including SQLite sidecars. Application-level acknowledgement and retention
+are logical deletion, not secure erasure from old pages, snapshots, or media.
+
+## Upgrade, migrate, or roll back
+
+### Upgrade to 0.1.0
+
+This is the first public release, so there is no supported migration from an earlier published
+version. Before replacing a development build:
+
+1. Stop every OpenCode backend that uses the state directory.
+2. Back up the entire private state directory, including SQLite sidecars, while no backend is running.
+3. Pin `opencode-agent-communicator@0.1.0` and OpenCode `1.18.21` in configuration.
+4. Restart OpenCode and verify plugin startup and the 14-tool manifest.
+
+Startup applies forward SQLite migrations atomically. Production never runs migration `downSql`.
+
+### Roll back
+
+1. Stop every OpenCode backend using the store.
+2. Restore the complete pre-upgrade state-directory backup.
+3. Restore the previous plugin reference and its matching OpenCode version, or remove the plugin
+   entry to disable it.
+4. Clear only the affected OpenCode package cache if OpenCode retained the unwanted package, then
+   restart OpenCode.
+
+Do not open a store migrated by a newer release with older plugin code. Removing the plugin does not
+erase its state or exports; delete them only under your retention and backup policy.
+
+## Development and release verification
+
+Install exact dependencies and run the ordinary quality gate:
+
+```bash
+bun install --frozen-lockfile
+bun run check
+```
+
+Run the remaining release evidence separately:
+
+```bash
+bun run test:coverage:branches
+bun run test:coverage
+bun run test:live
+bun run test:acceptance:linux-store
+bun run test:acceptance:secure-export
+bun run test:acceptance:package-portability
+bun run verify:package
+```
+
+The Docker acceptance commands require Docker. Store acceptance covers glibc/musl, OverlayFS,
+tmpfs, read-only behavior, adversarial path objects, process interruption, and ENOSPC. Secure export
+acceptance must complete all capability tests with zero skips on both glibc and musl.
+
+### Package verification
+
+The npm entry is the TypeScript source module `src/index.ts`. OpenCode `1.18.21` installs plugins with
+Bun and supports source-loaded TypeScript modules. The archive includes only runtime source, bundled
+skills, operational documentation, and release/legal files.
+
+```bash
+bun run verify:package
+npm pack --dry-run
+bun run test:black-box
+```
+
+`prepack` verifies the entry, Linux x64 package scope, exact host pins, exact ordered 14-tool
+manifest, and a reviewed
+fingerprint of every path npm will pack. It rejects path-policy drift, symlinks, executable entries,
+secret-like names, and generated/test output. The black-box test creates an archive without
+publishing it, installs it into an isolated Bun project, imports the package by name, and checks
+packaged runtime assets. The release workflow builds one archive and binds its SHA-256 to the build
+job output independently of the uploaded archive. The protected `release` environment rechecks both
+digests and publishes that same archive through npm trusted publishing/OIDC with the npm `11.5.1`
+CLI bundled in pinned Node `24.6.0`; the privileged job installs no packages and uses no long-lived
+npm token.
+
+Live compatibility tests are separate because they launch the pinned OpenCode executable:
+
+```bash
+bun run test:live
+```
+
+The live suite preserves the diagnostic Phase 0 capability tests and separately packs, installs,
+and loads the published production entry without a loader shim or modified `PluginInput`. The packed
+acceptance invokes all 14 tools through OpenCode: successful list/send/delivery, ask/respond/get/ack,
+wait/signal, and approved start/stop paths; an authoritative cancel role rejection; request listing;
+and the configured export-unavailable result. It asserts the exact manifest (so partial registration
+fails), bundled skills, correlated outputs, consumed permissions, and disposal. This is pinned local
+harness evidence, not a claim that every failure, recovery, retention, or secure-export branch is
+live-proven.
+
+See the
+[development conventions](https://github.com/YidiDev/opencode-agent-communicator/blob/main/DEVELOPMENT.md)
+in the source repository.
+
+## License
+
+[MIT](LICENSE) © 2026 YidiDev

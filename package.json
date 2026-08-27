@@ -1,8 +1,49 @@
 {
   "name": "opencode-agent-communicator",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Durable, workspace-scoped session communication tools for OpenCode 1.18.21.",
+  "license": "MIT",
+  "author": "YidiDev",
+  "homepage": "https://github.com/YidiDev/opencode-agent-communicator#readme",
+  "bugs": {
+    "url": "https://github.com/YidiDev/opencode-agent-communicator/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YidiDev/opencode-agent-communicator.git"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "agent",
+    "multi-agent",
+    "session"
+  ],
   "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src/",
+    "skills/",
+    "docs/plugin-configuration.md",
+    "docs/session-export-security.md",
+    "docs/linux-sqlite-store.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md"
+  ],
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "engines": {
+    "bun": "1.4.0"
+  },
   "packageManager": "bun@1.4.0",
   "scripts": {
     "format": "biome format --write .",
@@ -11,13 +52,19 @@
     "check:conventions": "bun tools/run-conventions.ts",
     "check:coverage": "bun tools/run-coverage.ts",
     "typecheck": "tsc --noEmit",
-    "check": "bun run format:check && bun run lint && bun run check:conventions && bun run typecheck && bun test test/unit test/integration test/black-box",
+    "check": "bun run format:check && bun run lint && bun run check:conventions && node tools/verify-test-skips.mjs && bun run typecheck && bun test test/unit test/integration test/black-box",
     "test": "bun test test/unit test/integration test/black-box",
     "test:unit": "bun test test/unit",
     "test:integration": "bun test test/integration",
     "test:acceptance:linux-store": "bash tools/run-linux-store-acceptance.sh",
-    "test:coverage": "bun test test/unit test/integration test/black-box --coverage --coverage-reporter=lcov && bun run check:coverage",
-    "test:live": "bun test test/live"
+    "test:acceptance:secure-export": "bash tools/run-secure-export-acceptance.sh",
+    "test:acceptance:package-portability": "bash tools/run-package-portability.sh",
+    "test:coverage": "bun test test/unit test/integration test/black-box --coverage --coverage-reporter=lcov",
+    "test:coverage:branches": "bun tools/run-branch-coverage.ts",
+    "test:live": "bun test test/live",
+    "verify:package": "node tools/verify-package.mjs",
+    "test:black-box": "bun test test/black-box",
+    "prepack": "node tools/verify-package.mjs"
   },
   "dependencies": {
     "@opencode-ai/plugin": "1.18.21",
@@ -27,7 +74,14 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.10",
     "@types/bun": "1.4.0",
+    "@types/istanbul-lib-coverage": "2.0.6",
+    "@types/istanbul-lib-instrument": "1.7.8",
+    "istanbul-lib-coverage": "3.2.2",
+    "istanbul-lib-instrument": "6.0.3",
     "opencode-ai": "1.18.21",
     "typescript": "5.9.3"
+  },
+  "peerDependencies": {
+    "opencode-ai": "1.18.21"
   }
 }

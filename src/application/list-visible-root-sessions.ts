@@ -8,6 +8,7 @@ import type {
 } from "../domain/sessions";
 import { validateSessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
+import { boundedExternalCall } from "./bounded-external-call";
 import {
   assertCommunicatorReady,
   type CommunicatorReadinessPort,
@@ -26,6 +27,23 @@ export interface SessionListQuery {
 export interface SessionListContext {
   readonly workspaceKey: WorkspaceKey;
   readonly sourceSessionId: unknown;
+  readonly abort?: AbortSignal;
+  readonly deadlineMs?: number;
+}
+
+// biome-ignore format: the explicit union documents every bounded settlement.
+async function invoke<Value>(
+  context: SessionListContext,
+  operation: () => Promise<Value>,
+): Promise<{ readonly kind: "value"; readonly value: Value } | { readonly kind: "expired" } | { readonly kind: "rejected"; readonly cause: unknown }> {
+  if (context.abort && context.deadlineMs !== undefined) {
+    return boundedExternalCall(operation, context.abort, context.deadlineMs);
+  }
+  try {
+    return { kind: "value", value: await operation() };
+  } catch (cause: unknown) {
+    return { kind: "rejected", cause };
+  }
 }
 
 export interface SessionListPorts {
@@ -62,6 +80,7 @@ function invalidLimit(): DomainResult<readonly VisibleRootSession[]> {
   );
 }
 
+// biome-ignore format: keep each native port beside its exact failure mapping.
 export async function listVisibleRootSessions(
   ports: SessionListPorts,
   context: SessionListContext,
@@ -74,12 +93,19 @@ export async function listVisibleRootSessions(
   if (!Number.isInteger(limit) || limit < 1 || limit > maximumSessionLimit) return invalidLimit();
   const includeArchived = query.includeArchived ?? false;
   const status = query.status ?? "all";
-  try {
-    const membership = await ports.membership.readCurrentRoots(
+  {
+    const membershipCall = await invoke(context, () => ports.membership.readCurrentRoots(
       context.workspaceKey,
       source.value,
       source.value,
-    );
+    ));
+    if (membershipCall.kind === "expired") {
+      return domainFailure("deadline_expired", "Session list invocation deadline expired.", false);
+    }
+    if (membershipCall.kind === "rejected") {
+      return domainFailure("native_unavailable", "Current session membership is unavailable.", true);
+    }
+    const membership = membershipCall.value;
     if (!membership.sourceVisible) {
       return domainFailure(
         "caller_not_visible",
@@ -87,11 +113,20 @@ export async function listVisibleRootSessions(
         false,
       );
     }
-  } catch (_cause: unknown) {
-    return domainFailure("native_unavailable", "Current session membership is unavailable.", true);
   }
-  try {
-    const sessions = await ports.sessions.readVisibleRoots(includeArchived);
+  {
+    const sessionCall = await invoke(context, () => ports.sessions.readVisibleRoots(includeArchived));
+    if (sessionCall.kind === "expired") {
+      return domainFailure("deadline_expired", "Session list invocation deadline expired.", false);
+    }
+    if (sessionCall.kind === "rejected") {
+      return domainFailure(
+        "native_unavailable",
+        "Visible session state is temporarily unavailable.",
+        true,
+      );
+    }
+    const sessions = sessionCall.value;
     const visible = sessions
       .filter((session) => includeArchived || !session.isArchived)
       .map((session) => ({
@@ -107,11 +142,5 @@ export async function listVisibleRootSessions(
       .sort(compareNewest)
       .slice(0, limit);
     return { ok: true, value: visible };
-  } catch (_cause: unknown) {
-    return domainFailure(
-      "native_unavailable",
-      "Visible session state is temporarily unavailable.",
-      true,
-    );
   }
 }

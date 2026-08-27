@@ -145,12 +145,12 @@ describe("Linux private SQLite initialization", () => {
     first.close();
 
     const second = openStore({ state: location.state, ownerId: "owner-reopen", time });
-    expect(second.schemaVersion).toBe(8);
+    expect(second.schemaVersion).toBe(11);
     const migrationCount = inspect<{ count: number }>(
       second.databasePath,
       "SELECT count(*) AS count FROM schema_migrations",
     );
-    expect(migrationCount?.count).toBe(8);
+    expect(migrationCount?.count).toBe(11);
     expect(Number(await second.acquire())).toBe(Number(token) + 1);
     expect(await second.readStorageDiagnostics()).toEqual({
       journalMode: "wal",
@@ -170,39 +170,39 @@ describe("Linux private SQLite initialization", () => {
     second.close();
   });
 
-  test("repairs private modes and rejects symlinked state paths", () => {
+  test("rejects broad existing modes without changing them and rejects symlinked paths", () => {
     const location = temporaryState();
     const store = openStore({ state: location.state });
     chmodSync(location.state, 0o755);
     chmodSync(store.databasePath, 0o644);
     store.close();
-    const reopened = openStore({ state: location.state });
-    expect(lstatSync(location.state).mode & 0o777).toBe(0o700);
-    expect(lstatSync(reopened.databasePath).mode & 0o777).toBe(0o600);
-    reopened.close();
+    expect(() => openStore({ state: location.state })).toThrow(StoreSecurityError);
+    expect(lstatSync(location.state).mode & 0o777).toBe(0o755);
+    expect(lstatSync(store.databasePath).mode & 0o777).toBe(0o644);
 
     const linked = join(location.root, "linked");
     symlinkSync(location.state, linked);
     expect(() => openStore({ state: linked })).toThrow(StoreSecurityError);
   });
 
-  test("keeps SQLite and sidecars anchored when the canonical directory is renamed", async () => {
+  test("fails closed when the canonical SQLite directory identity changes", async () => {
     const location = temporaryState();
     const store = openStore({ state: location.state });
     const token = await store.acquire();
     const moved = join(location.root, "moved-state");
     renameSync(location.state, moved);
     mkdirSync(location.state, { mode: 0o700 });
-    expect(await store.createPrepared(prepared(token, 60, 10_000))).toMatchObject({ ok: true });
-    expect(existsSync(join(moved, "communicator.sqlite3-wal"))).toBeTrue();
+    await expect(store.createPrepared(prepared(token, 60, 10_000))).rejects.toThrow(
+      StoreSecurityError,
+    );
     expect(existsSync(join(location.state, "communicator.sqlite3"))).toBeFalse();
     expect(
       inspect<{ count: number }>(
         join(moved, "communicator.sqlite3"),
         "SELECT count(*) AS count FROM deliveries",
       )?.count,
-    ).toBe(1);
-    store.close();
+    ).toBe(0);
+    expect(() => store.close()).toThrow(StoreSecurityError);
   });
 
   test("rejects configured limits above immutable ceilings and deterministic tiny databases", () => {
@@ -276,7 +276,7 @@ describe("Linux private SQLite initialization", () => {
     );
     time.advance(2);
     const migrated = openStore({ state: location.state, ownerId: "expired-bootstrap", time });
-    expect(migrated.schemaVersion).toBe(8);
+    expect(migrated.schemaVersion).toBe(11);
     migrated.close();
     first.close();
   });

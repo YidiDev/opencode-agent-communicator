@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-
 import { admitClaimedSessionRequest } from "../../../src/application/admit-claimed-session-request";
 import {
   type CommunicatorStartupRecoveryLifecycle,
@@ -22,15 +21,11 @@ import type { RequestMetadata } from "../../../src/domain/request-types";
 import { requestFixture } from "../../support/request-store";
 import { expectFinalReadinessRaces } from "../../support/startup-readiness-races";
 
-function valid<Value>(
-  result: { readonly ok: true; readonly value: Value } | { readonly ok: false },
-): Value {
+function valid<Value>(result: { ok: true; value: Value } | { ok: false }): Value {
   if (!result.ok) throw new Error("invalid fixture");
   return result.value;
 }
-
 const token = valid(validateFencingToken(7));
-
 async function submittingFixture(createdAtMs = 1_000) {
   const prepared = await requestFixture(token, createdAtMs);
   const request: RequestMetadata & { readonly deliveryState: "submitting" } = {
@@ -41,7 +36,6 @@ async function submittingFixture(createdAtMs = 1_000) {
   };
   return { ...prepared, request };
 }
-
 function completion(
   request: RequestMetadata & { readonly deliveryState: "submitting" },
   native: NativeSteerAdmission,
@@ -95,7 +89,6 @@ function completion(
     updatedAtMs: Math.max(now, native.observedAtMs),
   };
 }
-
 function admissionPorts(
   request: RequestMetadata & { readonly deliveryState: "submitting" },
   native: NativeSteerAdmission,
@@ -536,7 +529,6 @@ describe("request startup strict boundaries", () => {
     });
   });
 });
-
 async function expectInitialSchedulerFailures(
   ports: CommunicatorStartupRecoveryPorts,
   request: RequestMetadata,
@@ -583,8 +575,7 @@ async function expectInitialSchedulerFailures(
     });
   }
 }
-
-test("startup coordinator acquires one barrier, starts scheduler last, and stops without closing composition", async () => {
+async function startupCoordinatorFixture() {
   const prepared = await requestFixture(token, 5_000);
   const events: string[] = [];
   let exposedLifecycle: CommunicatorStartupRecoveryLifecycle | undefined;
@@ -594,6 +585,8 @@ test("startup coordinator acquires one barrier, starts scheduler last, and stops
   };
   const runtime = new RequestRuntime();
   const store = {
+    listParticipantDeletionCandidates: async () => ({ ok: true as const, sessionIds: [] }),
+    deleteAbsentParticipantRequests: async () => ({ ok: true as const, terminalized: [] }),
     async listRecoverableRequests() {
       expect(() => simulateOrdinaryCreation()).toThrow("not ready");
       return [];
@@ -623,6 +616,11 @@ test("startup coordinator acquires one barrier, starts scheduler last, and stops
         expect(() => simulateOrdinaryCreation()).toThrow("not ready");
         return [];
       },
+      async garbageCollectMetadata() {
+        expect(() => simulateOrdinaryCreation()).toThrow("not ready");
+        events.push("delivery-retention");
+        return { ok: true as const, deletedDeliveries: 0, deletedRateEvents: 0 };
+      },
     },
     nativeQueue: {
       async queueMessage() {
@@ -630,6 +628,7 @@ test("startup coordinator acquires one barrier, starts scheduler last, and stops
       },
     },
     requests: store,
+    participantPresence: { readParticipantPresence: async () => "present" as const },
     activity: {
       async observeRequestParticipants() {
         return { sourceVisible: true, targetVisible: true, targetStatus: "idle" as const };
@@ -671,29 +670,41 @@ test("startup coordinator acquires one barrier, starts scheduler last, and stops
         return { ok: true as const, deletedRequests: 0, deletedRateEvents: 0 };
       },
     },
+    starts: { listRecoverable: async () => [] } as never,
   } as unknown as CommunicatorStartupRecoveryPorts;
-  const result = await recoverCommunicatorStartup(ports, {
-    workspaceKey: prepared.request.workspaceKey,
-    abort: new AbortController().signal,
-    deadlineMs: 9_000,
-    limit: 100,
-    timers: {
-      set() {
-        events.push("timer");
-        return 1;
-      },
-      clear() {},
+  return {
+    prepared,
+    events,
+    ports,
+    exposeLifecycle(lifecycle: CommunicatorStartupRecoveryLifecycle) {
+      exposedLifecycle = lifecycle;
     },
-    nowMonotonicMs: () => 1,
-  });
-  expect(result.ok).toBe(true);
-  expect(events.slice(0, 2)).toEqual(["acquire", "barrier"]);
-
-  await expectFinalReadinessRaces(ports, prepared.request);
-
-  if (result.ok) {
-    exposedLifecycle = result.value;
-    expect(() => simulateOrdinaryCreation()).not.toThrow();
+    simulateOrdinaryCreation,
+  };
+}
+describe("startup coordinator lifecycle", () => {
+  test("acquires one barrier, starts scheduler last, and stops without closing composition", async () => {
+    const fixture = await startupCoordinatorFixture();
+    const result = await recoverCommunicatorStartup(fixture.ports, {
+      workspaceKey: fixture.prepared.request.workspaceKey,
+      abort: new AbortController().signal,
+      deadlineMs: 9_000,
+      limit: 100,
+      timers: {
+        set() {
+          fixture.events.push("timer");
+          return 1;
+        },
+        clear() {},
+      },
+      nowMonotonicMs: () => 1,
+    });
+    expect(result.ok).toBe(true);
+    expect(fixture.events.slice(0, 2)).toEqual(["acquire", "barrier"]);
+    await expectFinalReadinessRaces(fixture.ports, fixture.prepared.request);
+    if (!result.ok) return;
+    fixture.exposeLifecycle(result.value);
+    expect(() => fixture.simulateOrdinaryCreation()).not.toThrow();
     expect(result.value.status).toBe("ready");
     expect(() => result.value.assertReady()).not.toThrow();
     expect(result.value.stopReason).toBeUndefined();
@@ -703,80 +714,87 @@ test("startup coordinator acquires one barrier, starts scheduler last, and stops
     expect(result.value.stopReason).toBe("shutdown");
     expect(result.value.status).toBe("stopped");
     expect(() => result.value.assertReady()).toThrow("not ready");
-  }
-
-  const stopped = new RequestRuntime();
-  const invalid = await recoverCommunicatorStartup(
-    { ...ports, runtime: stopped },
-    {
-      workspaceKey: prepared.request.workspaceKey,
-      abort: new AbortController().signal,
-      deadlineMs: 0,
-      limit: 0,
-    },
-  );
-  expect(invalid).toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
-  expect(
-    await stopped.attach({
-      requestId: prepared.request.id,
-      expectedKind: "wait",
-      sourceSessionId: prepared.request.sourceSessionId,
-      workspaceKey: prepared.request.workspaceKey,
-    }).outcome,
-  ).toEqual({
-    outcome: "shutdown",
   });
-
-  const lostRuntime = new RequestRuntime();
-  const lost = await recoverCommunicatorStartup(
-    {
-      ...ports,
-      runtime: lostRuntime,
-      ownership: {
-        ...ports.ownership,
-        async isCurrent() {
-          return false;
+  test("stops the runtime when startup arguments are invalid", async () => {
+    const fixture = await startupCoordinatorFixture();
+    const stopped = new RequestRuntime();
+    const invalid = await recoverCommunicatorStartup(
+      { ...fixture.ports, runtime: stopped },
+      {
+        workspaceKey: fixture.prepared.request.workspaceKey,
+        abort: new AbortController().signal,
+        deadlineMs: 0,
+        limit: 0,
+      },
+    );
+    expect(invalid).toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
+    expect(
+      await stopped.attach({
+        requestId: fixture.prepared.request.id,
+        expectedKind: "wait",
+        sourceSessionId: fixture.prepared.request.sourceSessionId,
+        workspaceKey: fixture.prepared.request.workspaceKey,
+      }).outcome,
+    ).toEqual({ outcome: "shutdown" });
+  });
+});
+describe("startup coordinator scheduler failures", () => {
+  test("reports ownership loss after recovery", async () => {
+    const fixture = await startupCoordinatorFixture();
+    const lost = await recoverCommunicatorStartup(
+      {
+        ...fixture.ports,
+        runtime: new RequestRuntime(),
+        ownership: {
+          ...fixture.ports.ownership,
+          async isCurrent() {
+            return false;
+          },
         },
       },
-    },
-    {
-      workspaceKey: prepared.request.workspaceKey,
-      abort: new AbortController().signal,
-      deadlineMs: 9_000,
-      limit: 100,
-    },
-  );
-  expect(lost).toMatchObject({ ok: false, error: { code: "ownership_lost" } });
-
-  const faultRuntime = new RequestRuntime();
-  const faulted = await recoverCommunicatorStartup(
-    {
-      ...ports,
-      runtime: faultRuntime,
-      requests: {
-        ...ports.requests,
-        async readNextPendingDeadline() {
-          return { malformed: true } as never;
+      {
+        workspaceKey: fixture.prepared.request.workspaceKey,
+        abort: new AbortController().signal,
+        deadlineMs: 9_000,
+        limit: 100,
+      },
+    );
+    expect(lost).toMatchObject({ ok: false, error: { code: "ownership_lost" } });
+  });
+  test("shuts down the runtime after an initial malformed scheduler read", async () => {
+    const fixture = await startupCoordinatorFixture();
+    const faultRuntime = new RequestRuntime();
+    const faulted = await recoverCommunicatorStartup(
+      {
+        ...fixture.ports,
+        runtime: faultRuntime,
+        requests: {
+          ...fixture.ports.requests,
+          async readNextPendingDeadline() {
+            return { malformed: true } as never;
+          },
         },
       },
-    },
-    {
-      workspaceKey: prepared.request.workspaceKey,
-      abort: new AbortController().signal,
-      deadlineMs: 9_000,
-      limit: 100,
-      nowMonotonicMs: () => 1,
-    },
-  );
-  expect(faulted).toMatchObject({ ok: false, error: { code: "storage_unavailable" } });
-  expect(
-    await faultRuntime.attach({
-      requestId: prepared.request.id,
-      expectedKind: "wait",
-      sourceSessionId: prepared.request.sourceSessionId,
-      workspaceKey: prepared.request.workspaceKey,
-    }).outcome,
-  ).toEqual({ outcome: "shutdown" });
-
-  await expectInitialSchedulerFailures(ports, prepared.request);
+      {
+        workspaceKey: fixture.prepared.request.workspaceKey,
+        abort: new AbortController().signal,
+        deadlineMs: 9_000,
+        limit: 100,
+        nowMonotonicMs: () => 1,
+      },
+    );
+    expect(faulted).toMatchObject({ ok: false, error: { code: "storage_unavailable" } });
+    expect(
+      await faultRuntime.attach({
+        requestId: fixture.prepared.request.id,
+        expectedKind: "wait",
+        sourceSessionId: fixture.prepared.request.sourceSessionId,
+        workspaceKey: fixture.prepared.request.workspaceKey,
+      }).outcome,
+    ).toEqual({ outcome: "shutdown" });
+  });
+  test("maps initial scheduler persistence failures", async () => {
+    const fixture = await startupCoordinatorFixture();
+    await expectInitialSchedulerFailures(fixture.ports, fixture.prepared.request);
+  });
 });
