@@ -8,6 +8,7 @@ import type { Sha256Digest } from "../domain/message-payload";
 import type { FencingToken } from "../domain/ownership";
 import type { SessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
+import { snapshotDataRecord } from "./strict-port-boundaries";
 
 export interface CurrentRootMembership {
   readonly sourceTitle: string | undefined;
@@ -51,6 +52,18 @@ export type MessageAuthorizationDecision =
   | { readonly kind: "allow" }
   | { readonly kind: "deny" }
   | { readonly kind: "approval_rejected" };
+
+/** Accepts only an exact plain one-field authorization decision without invoking accessors. */
+export function inspectMessageAuthorizationDecision(
+  value: unknown,
+): MessageAuthorizationDecision | undefined {
+  const decision = snapshotDataRecord(value, 1);
+  return decision &&
+    Object.keys(decision).length === 1 &&
+    (decision.kind === "allow" || decision.kind === "deny" || decision.kind === "approval_rejected")
+    ? { kind: decision.kind }
+    : undefined;
+}
 
 export interface MessageAuthorizationPort {
   authorizeMessage(

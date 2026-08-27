@@ -90,6 +90,7 @@ describe("internal session tool contracts", () => {
     expect(sessionListFailureCodes).toEqual([
       "invalid_arguments",
       "caller_not_visible",
+      "deadline_expired",
       "native_unavailable",
     ]);
     expect(new Set(sessionSendFailureCodes)).toEqual(
@@ -99,6 +100,7 @@ describe("internal session tool contracts", () => {
         "target_not_visible",
         "permission_denied",
         "approval_rejected",
+        "deadline_expired",
         "quota_exceeded",
         "rate_limited",
         "state_conflict",
@@ -113,6 +115,7 @@ describe("internal session tool contracts", () => {
       "invalid_arguments",
       "not_found_or_unauthorized",
       "caller_not_visible",
+      "deadline_expired",
       "native_unavailable",
       "ownership_lost",
       "storage_unavailable",

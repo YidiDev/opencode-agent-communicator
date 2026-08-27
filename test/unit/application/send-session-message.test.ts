@@ -199,6 +199,7 @@ interface Fixture {
     readonly control: Parameters<MessageAuthorizationPort["authorizeMessage"]>[1];
   }>;
   acquireCalls: number;
+  lifecycleStops: number;
 }
 
 function fixture(): Fixture {
@@ -208,7 +209,7 @@ function fixture(): Fixture {
     { sourceVisible: true, targetVisible: true, sourceTitle: "Source" },
     { sourceVisible: true, targetVisible: true, sourceTitle: "Source" },
   ];
-  const ownerStates = [true, true, true];
+  const ownerStates = [true, true, true, true];
   const nativeCalls: Fixture["nativeCalls"] = [];
   const authorizationBindings: Fixture["authorizationBindings"] = [];
   const result: Fixture = {
@@ -220,8 +221,15 @@ function fixture(): Fixture {
     authorizationDecision: "allow",
     authorizationBindings,
     acquireCalls: 0,
+    lifecycleStops: 0,
     ports: {
-      readiness: { assertReady() {} },
+      readiness: {
+        fencingToken,
+        assertReady() {},
+        ownershipLost() {
+          result.lifecycleStops += 1;
+        },
+      },
       membership: {
         async readCurrentRoots() {
           const membership = memberships.shift();
@@ -333,7 +341,7 @@ describe("session_send orchestration", () => {
     });
     expect(fake.nativeCalls).toHaveLength(1);
     expect(fake.nativeCalls[0]?.abort).toBe(invocation.abort);
-    expect(fake.acquireCalls).toBe(1);
+    expect(fake.acquireCalls).toBe(0);
     expect(fake.authorizationBindings).toEqual([
       {
         binding: {
@@ -425,20 +433,21 @@ describe("session_send orchestration", () => {
       contentSha256: "ab".repeat(32),
     });
     expect(fake.store.events).toEqual([]);
-    expect(fake.acquireCalls).toBe(1);
+    expect(fake.acquireCalls).toBe(0);
     expect(fake.nativeCalls).toEqual([]);
   });
 
   test("passes operation abort and deadline to an approval decision", async () => {
     const fake = fixture();
-    const invocation = { ...context(), deadlineMs: 12_345 };
+    const deadlineMs = Date.now() + 12_345;
+    const invocation = { ...context(), deadlineMs };
     await sendSessionMessage(fake.ports, invocation, {
       session_id: targetSessionId,
       content: "hello",
     });
     expect(fake.authorizationBindings[0]?.control).toEqual({
       abort: invocation.abort,
-      deadlineMs: 12_345,
+      deadlineMs,
     });
   });
 
@@ -544,7 +553,7 @@ describe("session_send prepared claim and abort races", () => {
       fake.store.events.indexOf("cancel-attempt"),
     );
     expect(fake.store.record?.state).toBe("admission_unknown");
-    expect(fake.nativeCalls).toHaveLength(1);
+    expect(fake.nativeCalls).toHaveLength(0);
   });
 
   test("commits submitting and erases content before native admission", async () => {
@@ -601,7 +610,7 @@ describe("session_send native outcomes", () => {
     expect(calls).toBe(1);
   });
 
-  test("an abort after submitting does not retract or cancel admission", async () => {
+  test("an abort after submitting reports ambiguity even if admission settles late", async () => {
     const controller = new AbortController();
     const fake = fixture();
     fake.nativeEffect = () => controller.abort();
@@ -609,7 +618,10 @@ describe("session_send native outcomes", () => {
       session_id: targetSessionId,
       content: "hello",
     });
-    expect(result).toMatchObject({ ok: true, value: { state: "admitted" } });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "admission_unknown", details: { delivery_id: deliveryId } },
+    });
     expect(fake.store.events).not.toContain("cancelled");
   });
 
@@ -688,15 +700,16 @@ describe("session_send native outcomes", () => {
       });
       expect(result).toMatchObject({
         ok: false,
-        error: { code, details: { delivery_id: deliveryId } },
+        error: { code: "admission_unknown", details: { delivery_id: deliveryId } },
       });
     },
   );
 
   test.each([
-    [[false], "cancelled", 0],
-    [[true, false], "submitting", 0],
-    [[true, true, false], "submitting", 1],
+    [[false], undefined, 0],
+    [[true, false], "cancelled", 0],
+    [[true, true, false], "submitting", 0],
+    [[true, true, true, false], "admission_unknown", 1],
   ] as const)("fails closed on ownership loss around the effect", async (owners, state, calls) => {
     const fake = fixture();
     fake.ownerStates.splice(0, fake.ownerStates.length, ...owners);
@@ -704,8 +717,11 @@ describe("session_send native outcomes", () => {
       session_id: targetSessionId,
       content: "hello",
     });
-    expect(result).toMatchObject({ ok: false, error: { code: "ownership_lost" } });
-    if (state === "submitting") {
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: calls === 1 ? "admission_unknown" : "ownership_lost" },
+    });
+    if (state === "submitting" || state === "admission_unknown") {
       expect(result).toMatchObject({
         ok: false,
         error: { details: { delivery_id: deliveryId } },
@@ -713,5 +729,6 @@ describe("session_send native outcomes", () => {
     }
     expect(fake.store.record?.state).toBe(state);
     expect(fake.nativeCalls).toHaveLength(calls);
+    expect(fake.lifecycleStops).toBe(calls === 1 ? 0 : 1);
   });
 });

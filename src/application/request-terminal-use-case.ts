@@ -8,6 +8,7 @@ import { type DomainResult, domainFailure } from "../domain/results";
 import type { SessionId } from "../domain/sessions";
 import { validateSessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
+import { runUntilAborted } from "./abortable-operation";
 import type { CommunicatorReadinessPort } from "./communicator-readiness-port";
 import type { ClockPort, CurrentWorkspaceMembershipPort } from "./delivery-ports";
 import type { CommittedRequestNotificationPort } from "./request-notification-port";
@@ -16,6 +17,7 @@ import {
   createTerminalNotificationEvent,
   notifyTerminalSafely,
 } from "./request-terminal-notification";
+import { createLinkedEffectControl } from "./startup-effect-control";
 
 export type RequestMutationStopReason =
   | "aborted"
@@ -114,43 +116,75 @@ export function assertRequestMutationControl(
   }
 }
 
+function requestMutationDeadlineFailure(): DomainResult<never> {
+  return domainFailure("deadline_expired", "Request mutation invocation deadline expired.", false);
+}
+
+export function checkRequestMutationControl(
+  ports: Pick<RequestMutationControlPorts, "clock">,
+  context: Pick<SessionRequestMutationContext, "abort" | "deadlineMs">,
+): DomainResult<undefined> {
+  try {
+    assertRequestMutationControl(ports, context);
+    return { ok: true, value: undefined };
+  } catch (cause: unknown) {
+    if (
+      cause instanceof RequestMutationControlFault &&
+      (cause.reason === "aborted" || cause.reason === "deadline_exceeded")
+    ) {
+      return requestMutationDeadlineFailure();
+    }
+    throw cause;
+  }
+}
+
 export async function requireCurrentCaller(
   ports: RequestMutationControlPorts,
   context: SessionRequestMutationContext,
   callerSessionId: SessionId,
 ): Promise<DomainResult<undefined>> {
-  assertRequestMutationControl(ports, context);
-  let current: unknown;
+  const initialControl = checkRequestMutationControl(ports, context);
+  if (!initialControl.ok) return initialControl;
+  const control = createLinkedEffectControl({
+    signals: [context.abort],
+    deadlineMs: context.deadlineMs,
+    clock: ports.clock,
+  });
+  if (!control) return requestMutationDeadlineFailure();
+  let current: Awaited<ReturnType<typeof runUntilAborted<unknown>>>;
   try {
-    current = await ports.membership.readCurrentRoots(
-      context.workspaceKey,
-      callerSessionId,
-      callerSessionId,
+    current = await runUntilAborted(control.signal, () =>
+      ports.membership.readCurrentRoots(context.workspaceKey, callerSessionId, callerSessionId),
     );
-  } catch (cause: unknown) {
-    assertRequestMutationControl(ports, context);
-    return cause instanceof OwnershipLostFault
+  } finally {
+    control.dispose();
+  }
+  if (current.kind === "aborted") return requestMutationDeadlineFailure();
+  if (current.kind === "rejected") {
+    return current.cause instanceof OwnershipLostFault
       ? domainFailure("ownership_lost", "Coordinator ownership was lost.", false)
       : domainFailure("native_unavailable", "Current session membership is unavailable.", true);
   }
-  assertRequestMutationControl(ports, context);
+  const settledControl = checkRequestMutationControl(ports, context);
+  if (!settledControl.ok) return settledControl;
   let sourceVisible: boolean | undefined;
   try {
     if (
-      !isRecord(current) ||
-      !exactKeys(current, ["sourceTitle", "sourceVisible", "targetVisible"]) ||
-      (current.sourceTitle !== undefined && typeof current.sourceTitle !== "string") ||
-      typeof current.sourceVisible !== "boolean" ||
-      typeof current.targetVisible !== "boolean"
+      !isRecord(current.value) ||
+      !exactKeys(current.value, ["sourceTitle", "sourceVisible", "targetVisible"]) ||
+      (current.value.sourceTitle !== undefined && typeof current.value.sourceTitle !== "string") ||
+      typeof current.value.sourceVisible !== "boolean" ||
+      typeof current.value.targetVisible !== "boolean"
     ) {
       sourceVisible = undefined;
     } else {
-      sourceVisible = current.sourceVisible;
+      sourceVisible = current.value.sourceVisible;
     }
   } catch {
     sourceVisible = undefined;
   }
-  assertRequestMutationControl(ports, context);
+  const parsedControl = checkRequestMutationControl(ports, context);
+  if (!parsedControl.ok) return parsedControl;
   if (sourceVisible === undefined) {
     return domainFailure("native_unavailable", "Current session membership is unavailable.", true);
   }

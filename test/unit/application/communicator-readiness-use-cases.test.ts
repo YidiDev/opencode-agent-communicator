@@ -32,7 +32,7 @@ import {
   type SessionSignalPorts,
   signalSessionRequest,
 } from "../../../src/application/signal-session-request";
-import type { FencingToken } from "../../../src/domain/ownership";
+import { type FencingToken, OwnershipLostFault } from "../../../src/domain/ownership";
 import { validateSessionId } from "../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 
@@ -157,4 +157,38 @@ test("readiness blocks every terminal mutation before validation, clock, or effe
     lifecycleFault,
   );
   expect(effects.count).toBe(0);
+});
+
+test("request work rejects a lifecycle epoch mismatch and stops lifecycle ownership", async () => {
+  const effects = { count: 0 };
+  let stopped = 0;
+  const touch = async (): Promise<never> => {
+    effects.count += 1;
+    throw new Error("request effect must not run");
+  };
+  const ports = {
+    readiness: {
+      fencingToken: 2 as FencingToken,
+      assertReady() {},
+      ownershipLost() {
+        stopped += 1;
+      },
+    },
+    membership: { readCurrentRoots: touch },
+    notifications: { notifyTerminal: () => undefined },
+    requests: { listForParticipant: touch, getParticipantRequest: touch },
+  } satisfies SessionRequestListPorts;
+
+  await expect(
+    listSessionRequests(
+      ports,
+      {
+        workspaceKey: workspace.value,
+        callerSessionId: caller.value,
+        fencingToken: 1 as FencingToken,
+      },
+      {},
+    ),
+  ).rejects.toBeInstanceOf(OwnershipLostFault);
+  expect({ stopped, effects: effects.count }).toEqual({ stopped: 1, effects: 0 });
 });

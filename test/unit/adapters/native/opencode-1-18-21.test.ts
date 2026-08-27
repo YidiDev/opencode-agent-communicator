@@ -4,7 +4,10 @@ import {
   createOpenCode11821NativeAdapter,
   type OpenCodeNativeAdapterDependencies,
 } from "../../../../src/adapters/native/opencode-1-18-21";
-import { validateNativeMessageId } from "../../../../src/domain/generated-ids";
+import {
+  validateManagedSessionId,
+  validateNativeMessageId,
+} from "../../../../src/domain/generated-ids";
 import { validateSessionId } from "../../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../../src/domain/workspaces";
 
@@ -18,6 +21,11 @@ interface FixtureOptions {
   readonly promptResponse?: unknown;
   readonly promptThrows?: boolean;
   readonly onPrompt?: () => void;
+  readonly interruptResponse?: unknown;
+  readonly interruptThrows?: boolean;
+  readonly startGets?: unknown[];
+  readonly startCreateResponse?: unknown;
+  readonly titleUpdateResponse?: unknown;
 }
 
 function envelope(data: unknown): { readonly data: unknown } {
@@ -35,6 +43,7 @@ const workspaceKey = valid(validateWorkspaceKey("workspace:one"));
 const sourceSessionId = valid(validateSessionId("ses_source"));
 const targetSessionId = valid(validateSessionId("ses_target"));
 const nativeMessageId = valid(validateNativeMessageId(`msg_${"a".repeat(32)}`));
+const managedSessionId = valid(validateManagedSessionId(`ses_${"b".repeat(32)}`));
 
 function fixture(options: FixtureOptions = {}) {
   const calls: Array<{ readonly surface: string; readonly input?: unknown }> = [];
@@ -47,6 +56,20 @@ function fixture(options: FixtureOptions = {}) {
           async health(): Promise<unknown> {
             calls.push({ surface: "health" });
             return envelope(options.health ?? { healthy: true, version: "1.18.21" });
+          },
+        },
+        experimental: {
+          session: {
+            async list(input: unknown): Promise<unknown> {
+              calls.push({ surface: "legacy.roots", input });
+              const isArchived =
+                typeof input === "object" &&
+                input !== null &&
+                Reflect.get(input, "archived") === true;
+              return envelope(
+                isArchived ? (options.archivedRoots ?? []) : (options.visibleRoots ?? []),
+              );
+            },
           },
         },
         v2: {
@@ -65,28 +88,37 @@ function fixture(options: FixtureOptions = {}) {
               options.onPrompt?.();
               return options.promptResponse ?? envelope({ data: {} });
             },
+            async create(input, requestOptions): Promise<unknown> {
+              calls.push({ surface: "v2.create", input: [input, requestOptions] });
+              return options.startCreateResponse;
+            },
+            async get(input, requestOptions): Promise<unknown> {
+              calls.push({ surface: "v2.get", input: [input, requestOptions] });
+              return options.startGets?.shift();
+            },
           },
         },
       };
     },
   };
   const client = {
-    experimental: {
-      session: {
-        async list(input: unknown): Promise<unknown> {
-          calls.push({ surface: "legacy.roots", input });
-          const isArchived =
-            typeof input === "object" && input !== null && Reflect.get(input, "archived") === true;
-          return envelope(
-            isArchived ? (options.archivedRoots ?? []) : (options.visibleRoots ?? []),
-          );
-        },
-      },
-    },
     session: {
+      async list(input: unknown): Promise<unknown> {
+        calls.push({ surface: "legacy.roots", input });
+        return envelope(options.visibleRoots ?? []);
+      },
       async status(input: unknown): Promise<unknown> {
         calls.push({ surface: "legacy.status", input });
         return envelope(options.statuses ?? {});
+      },
+      async abort(input: unknown, requestOptions: unknown): Promise<unknown> {
+        calls.push({ surface: "legacy.abort", input: [input, requestOptions] });
+        if (options.interruptThrows) throw new Error("private interrupt transport detail");
+        return options.interruptResponse ?? envelope(true);
+      },
+      async update(input: unknown, requestOptions: unknown): Promise<unknown> {
+        calls.push({ surface: "legacy.update", input: [input, requestOptions] });
+        return options.titleUpdateResponse;
       },
     },
   };
@@ -109,6 +141,45 @@ function nativeSession(id: string, title: string, updated: number, archived?: nu
     ? { id, title, time: { created: 1, updated } }
     : { id, title, time: { created: 1, updated, archived } };
 }
+
+function startedSession(title = "Worker") {
+  return {
+    id: managedSessionId,
+    title,
+    location: { directory: "/workspace" },
+    time: { created: 1, updated: 1 },
+  };
+}
+
+test("interrupts through the exact 1.18.21 legacy abort surface and preserves ambiguity", async () => {
+  const successful = fixture();
+  expect(
+    await successful.adapter.interruptSession({
+      targetSessionId,
+      abort: new AbortController().signal,
+    }),
+  ).toBe("interrupted");
+  const call = successful.calls.at(-1);
+  expect(call?.surface).toBe("legacy.abort");
+  if (!call || !Array.isArray(call.input)) throw new Error("interrupt call was not captured");
+  expect(call.input[0]).toEqual({ sessionID: "ses_target", directory: "/workspace" });
+  for (const options of [{ interruptResponse: envelope(false) }, { interruptThrows: true }]) {
+    const ambiguous = fixture(options);
+    expect(
+      await ambiguous.adapter.interruptSession({
+        targetSessionId,
+        abort: new AbortController().signal,
+      }),
+    ).toBe("unknown");
+  }
+  const timedOut = fixture();
+  const timeout = new AbortController();
+  timeout.abort("deadline");
+  expect(await timedOut.adapter.interruptSession({ targetSessionId, abort: timeout.signal })).toBe(
+    "unknown",
+  );
+  expect(timedOut.calls.some((item) => item.surface === "legacy.abort")).toBe(false);
+});
 
 describe("OpenCode 1.18.21 native adapter", () => {
   test("observes exact request participants and merged target activity without listing V2 metadata", async () => {
@@ -243,7 +314,7 @@ describe("OpenCode 1.18.21 native adapter", () => {
     });
     expect(fake.calls).toContainEqual({
       surface: "legacy.roots",
-      input: { roots: true, archived: false, directory: "/workspace" },
+      input: { roots: true, directory: "/workspace" },
     });
     expect(fake.calls.filter((call) => call.surface === "legacy.roots")).toHaveLength(2);
     expect(fake.calls).toContainEqual({
@@ -298,7 +369,7 @@ describe("OpenCode 1.18.21 native adapter", () => {
     ]);
     expect(fake.calls).toContainEqual({
       surface: "legacy.roots",
-      input: { roots: true, archived: false, directory: "/workspace" },
+      input: { roots: true, directory: "/workspace" },
     });
     expect(fake.calls.filter((call) => call.surface === "legacy.roots")).toHaveLength(1);
   });
@@ -334,7 +405,10 @@ describe("OpenCode 1.18.21 native adapter failure boundaries and membership", ()
     };
     const client = {
       experimental: { session: { list: async () => envelope([]) } },
-      session: { status: async () => envelope({}) },
+      session: {
+        status: async () => envelope({}),
+        abort: async () => envelope(true),
+      },
     };
     const adapter = createOpenCode11821NativeAdapter(
       {
@@ -418,11 +492,95 @@ describe("OpenCode 1.18.21 native adapter failure boundaries and membership", ()
     });
     expect(fake.calls.at(-1)).toEqual({
       surface: "legacy.roots",
-      input: { roots: true, archived: false, directory: "/workspace" },
+      input: { roots: true, directory: "/workspace" },
     });
     const foreign = valid(validateWorkspaceKey("workspace:foreign"));
     await expect(fake.adapter.readCurrentRoots(foreign, source, targetSessionId)).rejects.toThrow();
     expect(fake.calls.filter((call) => call.surface === "legacy.roots")).toHaveLength(1);
+  });
+});
+
+describe("OpenCode 1.18.21 native adapter start and validation boundaries", () => {
+  test("rejects invalid observation clocks and malformed participant requests", async () => {
+    const badClock = fixture({ visibleRoots: [nativeSession("ses_source", "Source", 1)] });
+    const dependencies = { now: () => Number.NaN };
+    const clockAdapter = createOpenCode11821NativeAdapter(
+      {
+        client: {
+          experimental: { session: { list: async () => envelope([]) } },
+          session: {
+            list: async () => envelope([]),
+            status: async () => envelope({}),
+            abort: async () => envelope(true),
+          },
+        },
+        directory: "/workspace",
+        serverUrl: new URL("http://localhost/"),
+        workspaceKey,
+      },
+      {
+        ...dependencies,
+        createV2Client: () => ({
+          global: { health: async () => envelope({ healthy: true }) },
+          experimental: { session: { list: async () => envelope([]) } },
+          v2: {
+            session: {
+              active: async () => envelope({ data: {} }),
+              list: async () => envelope({ data: [], cursor: {} }),
+              prompt: async () => envelope({ data: {} }),
+            },
+          },
+        }),
+      },
+    );
+    await expect(clockAdapter.readVisibleRoots(false)).rejects.toThrow("clock");
+    const foreign = valid(validateWorkspaceKey("workspace:foreign"));
+    await expect(
+      badClock.adapter.observeRequestParticipants(
+        foreign,
+        sourceSessionId,
+        targetSessionId,
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("Workspace binding");
+    await expect(
+      badClock.adapter.observeRequestParticipants(
+        workspaceKey,
+        "bad" as never,
+        targetSessionId,
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("identity");
+  });
+
+  test("delegates deterministic creation and verified title update to the pinned surfaces", async () => {
+    const absent = {
+      error: {
+        _tag: "SessionNotFoundError",
+        sessionID: managedSessionId,
+        message: "not found",
+      },
+      response: new Response(null, { status: 404 }),
+    };
+    const created = { data: { data: startedSession() } };
+    const fake = fixture({
+      startGets: [absent, created, { data: { data: startedSession("Renamed") } }],
+      startCreateResponse: created,
+      titleUpdateResponse: { data: true },
+    });
+    const abort = new AbortController().signal;
+    expect(await fake.adapter.createRootSession({ sessionId: managedSessionId, abort })).toBe(
+      "created",
+    );
+    expect(
+      await fake.adapter.updateSessionTitle({
+        sessionId: managedSessionId,
+        title: "Renamed",
+        abort,
+      }),
+    ).toBe("updated");
+    expect(fake.calls.some((call) => call.surface === "v2.create")).toBe(true);
+    expect(fake.calls.some((call) => call.surface === "legacy.update")).toBe(true);
   });
 });
 

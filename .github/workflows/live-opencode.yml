@@ -1,0 +1,48 @@
+name: Exact OpenCode live gate
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  opencode-1-18-21:
+    name: OpenCode 1.18.21 live compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Bun 1.4.0
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Verify live-gate prerequisites
+        run: |
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+          test "$(bun --version)" = 1.4.0
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const packageJson = JSON.parse(await readFile("package.json", "utf8"));
+          const exact = "1.18.21";
+          for (const [group, name] of [
+            ["dependencies", "@opencode-ai/plugin"],
+            ["dependencies", "@opencode-ai/sdk"],
+            ["devDependencies", "opencode-ai"],
+            ["peerDependencies", "opencode-ai"],
+          ]) {
+            if (packageJson[group]?.[name] !== exact) {
+              throw new Error(`${group}.${name} must equal ${exact}`);
+            }
+          }
+          NODE
+          test "$(./node_modules/.bin/opencode --version)" = 1.18.21
+      - name: Run isolated exact-version live harness
+        run: bun run test:live

@@ -256,7 +256,7 @@ async function waitForDurableEvent(
 
 async function proveSubscriptionDisposal(fixture: LiveFixture): Promise<void> {
   const result = await fixture.client.v2.session.events({
-    sessionID: "ses_01PHASE0000000000000000001",
+    sessionID: "ses_01PHASE0000000000000000006",
     after: "0",
   });
   const iterator = result.stream[Symbol.asyncIterator]();
@@ -333,6 +333,30 @@ async function proveIdentityAndListing(fixture: LiveFixture): Promise<void> {
   );
   expect(visible.map((item) => item.id)).not.toContain(rootID);
   expect(archived.find((item) => item.id === rootID)?.time.archived).toBe(archivedAt);
+  expect(
+    successful(await fixture.client.v2.session.get({ sessionID: rootID }), "archived direct get")
+      .data.id,
+  ).toBe(rootID);
+  const alternateClient = createOpencodeClient({
+    baseUrl: fixture.baseUrl,
+    directory: fixture.isolation.alternateProject,
+  });
+  expect(
+    successful(
+      await alternateClient.v2.session.get({ sessionID: rootID }),
+      "alternate-location archived direct get",
+    ).data.id,
+  ).toBe(rootID);
+  expect(
+    successful(await fixture.client.session.delete({ sessionID: rootID }), "root deletion"),
+  ).toBe(true);
+  for (const direct of [fixture.client, alternateClient]) {
+    const deleted = await direct.v2.session.get({ sessionID: rootID });
+    expect(deleted.response.status).toBe(404);
+    expect(Object.keys(deleted.error ?? {}).sort()).toEqual(["_tag", "message", "sessionID"]);
+    expect(deleted.error).toMatchObject({ _tag: "SessionNotFoundError", sessionID: rootID });
+    expect(deleted.data).toBeUndefined();
+  }
 }
 
 async function proveStatusSeparation(fixture: LiveFixture): Promise<void> {

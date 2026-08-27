@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 
 import type { RequestTerminalPersistencePort } from "../../../src/application/request-ports";
-import { RequestMutationControlFault } from "../../../src/application/request-terminal-use-case";
 import { respondToSessionRequest } from "../../../src/application/respond-to-session-request";
 import { signalSessionRequest } from "../../../src/application/signal-session-request";
 import { validateRequestId } from "../../../src/domain/generated-ids";
@@ -117,12 +116,27 @@ test("abort and deadline are rechecked after an asynchronous digest", async () =
     if (stop === "abort") controller.abort();
     else now = 100;
     release?.(new Uint8Array(32));
-    await expect(invocation).rejects.toMatchObject({
-      name: "RequestMutationControlFault",
-      reason: stop === "abort" ? "aborted" : "deadline_exceeded",
+    await expect(invocation).resolves.toMatchObject({
+      ok: false,
+      error: { code: "deadline_expired" },
     });
     expect(mock.counts).toEqual({ digest: 1, membership: 0, store: 0 });
   }
+});
+
+test("a nonsettling digest is bounded by the invocation deadline", async () => {
+  const mock = harness({
+    digest: async () => new Promise<never>(() => undefined),
+    now: Date.now,
+  });
+  await expect(
+    signalSessionRequest(
+      mock.ports,
+      { ...context(), deadlineMs: Date.now() + 15 },
+      { request_id: requestId },
+    ),
+  ).resolves.toMatchObject({ ok: false, error: { code: "deadline_expired" } });
+  expect(mock.counts).toEqual({ digest: 1, membership: 0, store: 0 });
 });
 
 test("pre-aborted control prevents digest invocation", async () => {
@@ -131,6 +145,6 @@ test("pre-aborted control prevents digest invocation", async () => {
   const mock = harness({ digest: async () => new Uint8Array(32) });
   await expect(
     signalSessionRequest(mock.ports, context(controller.signal), { request_id: requestId }),
-  ).rejects.toBeInstanceOf(RequestMutationControlFault);
+  ).resolves.toMatchObject({ ok: false, error: { code: "deadline_expired" } });
   expect(mock.counts).toEqual({ digest: 0, membership: 0, store: 0 });
 });

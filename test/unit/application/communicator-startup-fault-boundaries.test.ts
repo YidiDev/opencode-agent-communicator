@@ -21,6 +21,7 @@ type StartupOverrides = Readonly<{
   current: () => Promise<boolean>;
   expireResults: () => Promise<unknown>;
   readDeadline: () => Promise<unknown>;
+  retainDeliveries: () => Promise<unknown>;
 }>;
 
 function startupPorts(overrides: Partial<StartupOverrides> = {}): CommunicatorStartupRecoveryPorts {
@@ -32,14 +33,22 @@ function startupPorts(overrides: Partial<StartupOverrides> = {}): CommunicatorSt
         sourceTitle: "source",
       }),
     },
-    deliveries: { listRecoverable: async () => [] } as never,
+    deliveries: {
+      listRecoverable: async () => [],
+      garbageCollectMetadata:
+        overrides.retainDeliveries ??
+        (async () => ({ ok: true, deletedDeliveries: 0, deletedRateEvents: 0 })),
+    } as never,
     nativeQueue: { queueMessage: async () => ({ kind: "unknown" as const }) },
     requests: {
+      listParticipantDeletionCandidates: async () => ({ ok: true, sessionIds: [] }),
+      deleteAbsentParticipantRequests: async () => ({ ok: true, terminalized: [] }),
       listRecoverableRequests: async () => [],
       expireDueRequests: async () => ({ ok: true as const, requests: [] }),
       readNextPendingDeadline:
         overrides.readDeadline ?? (async () => ({ storeObservedAtMs: 1, maximumSleepMs: 10 })),
     } as never,
+    participantPresence: { readParticipantPresence: async () => "present" },
     activity: {
       observeRequestParticipants: async () => ({
         sourceVisible: true,
@@ -69,6 +78,8 @@ function startupPorts(overrides: Partial<StartupOverrides> = {}): CommunicatorSt
         deletedRateEvents: 0,
       }),
     },
+    starts: { listRecoverable: async () => [] } as never,
+    nativeStart: { reconcileRootSession: async () => "unknown" } as never,
   } as CommunicatorStartupRecoveryPorts;
 }
 
@@ -83,6 +94,27 @@ function startupInput(abort = new AbortController().signal) {
     nowMonotonicMs: () => 1,
   };
 }
+
+test("maps participant deletion candidate reconciliation failures before native recovery", async () => {
+  for (const [candidate, expected] of [
+    [{ ok: false, code: "ownership_lost" }, "ownership_lost"],
+    [{ ok: false, code: "storage_unavailable" }, "storage_unavailable"],
+    [{ ok: true, sessionIds: "malformed" }, "storage_unavailable"],
+  ] as const) {
+    const ports = startupPorts();
+    const result = await recoverCommunicatorStartup(
+      {
+        ...ports,
+        requests: {
+          ...ports.requests,
+          listParticipantDeletionCandidates: async () => candidate as never,
+        },
+      },
+      startupInput(),
+    );
+    expect(result).toMatchObject({ ok: false, error: { code: expected } });
+  }
+});
 
 test("startup acquisition maps ownership and private adapter faults", async () => {
   for (const cause of [new OwnershipLostFault("stale lease"), new Error("private store failure")]) {
@@ -147,6 +179,21 @@ test("startup rejects malformed barriers and failed maintenance hygiene", async 
       startupInput(),
     ),
   ).toMatchObject({ ok: false, error: { code: "storage_unavailable" } });
+});
+
+test("startup fails closed on malformed delivery-retention port results", async () => {
+  for (const returned of [
+    null,
+    { ok: true, deletedDeliveries: -1, deletedRateEvents: 0 },
+    { ok: true, deletedDeliveries: 0, deletedRateEvents: 0, extra: true },
+  ]) {
+    expect(
+      await recoverCommunicatorStartup(
+        startupPorts({ retainDeliveries: async () => returned }),
+        startupInput(),
+      ),
+    ).toMatchObject({ ok: false, error: { code: "storage_unavailable" } });
+  }
 });
 
 test("startup ownership verification distinguishes phase and final-check failures", async () => {

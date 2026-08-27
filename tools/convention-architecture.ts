@@ -12,7 +12,9 @@ export interface ArchitectureFinding {
 }
 
 function getLayer(projectPath: string): Layer | undefined {
-  if (projectPath === "src/index.ts") return "composition";
+  if (projectPath === "src/index.ts" || projectPath.startsWith("src/composition/")) {
+    return "composition";
+  }
   if (projectPath.startsWith("src/domain/")) return "domain";
   if (projectPath.startsWith("src/application/")) return "application";
   if (projectPath.startsWith("src/tools/")) return "tools";

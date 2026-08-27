@@ -142,6 +142,21 @@ function invokeTool(fixture: Fixture, sessionID: string, marker: string, toolID:
   });
 }
 
+async function proveHostRawArgumentStripping(fixture: Fixture): Promise<void> {
+  const sessionID = await createLegacySession(fixture, "Host raw argument strictness");
+  successful(
+    await invokeTool(fixture, sessionID, "tool-unknown-key", "diagnostic_context"),
+    "unknown-key host execution",
+  );
+  const evidence = await waitForEvidence(
+    fixture.isolation.evidencePath,
+    (item) => item.event === "executed" && item.sessionID === sessionID,
+  );
+  // Pinned 1.18.21 preserves undeclared keys through execute, so composition's strict parse can
+  // authoritatively reject them rather than relying only on the advertised tool schema.
+  expect(evidence.rawArguments).toEqual({ unknown_key: true });
+}
+
 async function waitForLegacyStatus<T extends "retry" | "busy" | "idle">(
   fixture: Fixture,
   sessionID: string,
@@ -211,7 +226,9 @@ test("proves ToolContext.ask allow, deny, ask, exact metadata, cancellation, and
     );
     expect(configHook.skillPath).toBe(fixture.isolation.skillPath);
 
-    for (const mode of ["allow", "deny", "ask"] as const) {
+    await proveHostRawArgumentStripping(fixture);
+
+    for (const mode of ["allow", "deny", "ask", "stop"] as const) {
       const sessionID = await createLegacySession(fixture, `ToolContext.ask ${mode}`);
       const providerStart = fixture.provider.requests.length;
       const run = invokeTool(fixture, sessionID, `tool-approval-${mode}`, "diagnostic_approval");
@@ -220,7 +237,7 @@ test("proves ToolContext.ask allow, deny, ask, exact metadata, cancellation, and
         (item) => item.event === "ask-entered" && item.sessionID === sessionID,
       );
       const expectedRequest = {
-        permission: `live_${mode}`,
+        permission: mode === "stop" ? "session_stop" : `live_${mode}`,
         patterns: [`resource:${mode}:primary`, `resource:${mode}:secondary`],
         always: [`resource:${mode}:*`],
         metadata: { proof: "phase0", mode, nested: { ordinal: 21 } },
@@ -231,7 +248,7 @@ test("proves ToolContext.ask allow, deny, ask, exact metadata, cancellation, and
         (item) => item.event === "ask-invoked" && item.sessionID === sessionID,
       );
 
-      if (mode === "ask") {
+      if (mode === "ask" || mode === "stop") {
         const pending = await waitForPermission(fixture, sessionID);
         expect(pending).toMatchObject({
           sessionID,

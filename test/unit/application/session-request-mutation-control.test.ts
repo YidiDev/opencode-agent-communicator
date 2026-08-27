@@ -124,17 +124,16 @@ function ports(options: {
   };
 }
 
-test("rejects invalid, elapsed, and aborted control before membership for every operation", async () => {
+test("rejects invalid control and structures elapsed or aborted control for every operation", async () => {
   const controller = new AbortController();
   controller.abort();
-  const controls = [
+  const invalidControls = [
     { ...context(), deadlineMs: Number.NaN },
     { ...context(), deadlineMs: Number.POSITIVE_INFINITY },
     { ...context(), deadlineMs: -1 },
-    { ...context(), deadlineMs: 0 },
-    context(controller.signal),
   ];
-  for (const control of controls) {
+  const stoppedControls = [{ ...context(), deadlineMs: 0 }, context(controller.signal)];
+  for (const control of [...invalidControls, ...stoppedControls]) {
     const mock = ports({});
     const invocations = [
       () => respondToSessionRequest(mock.value, control, { request_id: requestId, answers: [[]] }),
@@ -157,7 +156,14 @@ test("rejects invalid, elapsed, and aborted control before membership for every 
         ),
     ];
     for (const invoke of invocations) {
-      await expect(invoke()).rejects.toBeInstanceOf(RequestMutationControlFault);
+      if (invalidControls.includes(control)) {
+        await expect(invoke()).rejects.toBeInstanceOf(RequestMutationControlFault);
+      } else {
+        await expect(invoke()).resolves.toMatchObject({
+          ok: false,
+          error: { code: "deadline_expired" },
+        });
+      }
     }
     expect(mock.counts).toMatchObject({ membership: 0, store: 0 });
   }
@@ -207,7 +213,7 @@ test("invalid or throwing clocks and reentrant abort stop before membership", as
   });
   await expect(
     signalSessionRequest(reentrant.value, context(controller.signal), { request_id: requestId }),
-  ).rejects.toMatchObject({ reason: "aborted" });
+  ).resolves.toMatchObject({ ok: false, error: { code: "deadline_expired" } });
   expect(reentrant.counts).toMatchObject({ membership: 0, store: 0 });
 });
 
@@ -244,8 +250,9 @@ test("late membership completion cannot dispatch store after abort or deadline",
     if (stop === "abort") controller.abort();
     else now = 100;
     release?.({ sourceTitle: undefined, sourceVisible: true, targetVisible: false });
-    await expect(invocation).rejects.toMatchObject({
-      reason: stop === "abort" ? "aborted" : "deadline_exceeded",
+    await expect(invocation).resolves.toMatchObject({
+      ok: false,
+      error: { code: "deadline_expired" },
     });
     expect(mock.counts.membership).toBe(1);
     expect(mock.counts.store).toBe(0);
@@ -319,7 +326,10 @@ test("every operation performs a final control check immediately before store di
                 { ...control, callerSessionId: sourceId },
                 { request_id: requestId },
               );
-    await expect(invocation).rejects.toMatchObject({ reason: "aborted" });
+    await expect(invocation).resolves.toMatchObject({
+      ok: false,
+      error: { code: "deadline_expired" },
+    });
     expect(reads).toBe(abortOnRead);
     expect(mock.counts.membership).toBe(1);
     expect(mock.counts.store).toBe(0);

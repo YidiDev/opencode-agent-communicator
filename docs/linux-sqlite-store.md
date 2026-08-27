@@ -13,32 +13,35 @@ transaction; creation, claim, and delivery completion use fenced exact reconcili
 thrown or malformed settlement.
 
 The configured state directory must be an absolute, normalized, non-root path on
-Linux. Preparation opens `/`, walks one component at a time through
-`/proc/self/fd/<parent-fd>/<component>`, and opens every child with
-`O_DIRECTORY|O_NOFOLLOW`. Missing children are created through that anchored parent
-and then opened and verified. The final directory remains open for the complete
-SQLite lifetime. Its owner and type are checked with `fstat`, and mode `0700` is
-applied and rechecked with `fchmod` on that same descriptor. Existing unsafe final
-directories and all symlink/non-directory traversal are rejected.
+Linux. Preparation opens `/`, walks one component at a time relative to each retained
+parent descriptor, and opens every child with `O_DIRECTORY|O_NOFOLLOW`. Missing
+children are created through that anchored parent and then opened and verified. Every
+existing canonical ancestor must be a directory owned by root or the current UID and
+must not be group/world writable. A root-owned
+sticky traversal directory (for example `/tmp`) is the sole shared-write exception,
+which permits private temporary test/deployment roots without trusting preplaced
+children. The complete descriptor chain, not only the final directory, remains open
+for the SQLite lifetime. The final directory's owner and type are checked with `fstat`,
+and mode `0700` is applied and rechecked with `fchmod` on that same descriptor.
+Existing unsafe final directories and all symlink/non-directory traversal are rejected.
 
-The database is precreated and verified through the final descriptor with
+The database is precreated and verified relative to the final descriptor with
 `O_NOFOLLOW`; database, WAL, SHM, and rollback-journal objects are owner/type
 verified, required to have exactly one hard link, and set to `0600` using `fchmod`
-on their open descriptors. Bun SQLite is
-given `/proc/self/fd/<dir-fd>/<validated-name>`, not the canonical pathname, so its
-database and sidecar lookup stays attached to the opened directory if canonical
-parents are subsequently renamed. `databasePath` is canonical-path metadata only.
-The directory descriptor is closed only after SQLite closes. A process of another
-UID cannot redirect this traversal or later sidecar creation. A malicious process
-running as the same UID can access `/proc/<pid>/fd` and the private files and is
-explicitly outside the confidentiality and integrity boundary.
+on their open descriptors. Bun SQLite receives the validated canonical absolute
+database path and opens it with `SQLITE_OPEN_NOFOLLOW`; a descriptor path is not used
+because that flag rejects the descriptor symlink. Before initialization and each
+store operation, every retained child is reopened relative to its retained parent and
+must keep the same device/inode identity. This detects replacement of any canonical
+ancestor before SQLite work. The complete descriptor chain is closed only after
+SQLite closes. A process of another UID cannot access the private directory through
+ordinary permissions. A malicious process running as the same UID can access the
+private files and is explicitly outside the confidentiality and integrity boundary.
 
-`SQLITE_OPEN_NOFOLLOW` cannot be combined with this Bun-compatible design because
-SQLite treats the intentional `/proc/self/fd/<dir-fd>` descriptor link as a
-symlink. No untrusted pathname is delegated to that flag: the filename is strictly
-validated and preopened with kernel `O_NOFOLLOW`, and the held `0700` directory
-descriptor anchors every SQLite and sidecar path. This is the strongest practical
-descriptor anchoring available through Bun's current filename-only SQLite API.
+The filename is strictly validated and preopened with kernel `O_NOFOLLOW`, while the
+held `0700` directory descriptor anchors database and sidecar verification. If SQLite
+cannot safely resolve the canonical absolute path without following a disallowed
+final symlink, startup fails closed.
 
 Descriptor-anchored `statfs` rejects known NFS, SMB/CIFS, 9P, AFS, Coda, Ceph,
 Lustre, OCFS2, GFS2, GPFS, BeeGFS, PanFS, and OrangeFS/PVFS2 Linux magic values.
@@ -81,6 +84,14 @@ workers. The barrier object is process-local and cannot be forged into the store
 stale-token recovery query. Recovery drains repeated bounded stale batches before
 it reads prepared work and stops on abort, deadline, or ownership loss.
 
+Session-start recovery also scans bounded `outcome_unknown` creation records. Requested agent/model
+identity and whether a title was requested remain in bounded non-message columns independently of the
+erasable initial-message payload. Native read-back must prove the deterministic ID is an exact root
+in the pinned directory with the requested overrides. Exact matches atomically confirm provenance;
+proven stable absence and collisions atomically release it. The pinned API's exact 404 is not stable
+absence after submission because an accepted create may commit later. Uncertain observations stay in
+a separate hard-bounded `unresolved` provenance class and do not consume ordinary managed-session quota.
+
 All pending schema migrations run in one `BEGIN IMMEDIATE` bootstrap transaction.
 Before its first DDL statement, startup inspects both legacy (pre-v3) and current
 ownership rows and refuses migration beneath any non-released lease until
@@ -101,6 +112,17 @@ and pre-install audit use `requests_submitting_recovery`; request claim checks t
 indexed count in its immediate transaction. Stale-submitting startup recovery uses
 that exact 4096 bound and a residual probe, while pending prepared and expiry work
 remain bounded at 1024.
+
+Participant-deletion reconciliation uses no schema migration. A fenced query unions distinct
+pending target/source IDs, available-result source IDs, and `created` managed-session provenance,
+with a compiled 7168-row hard ceiling. Presence is classified for the complete candidate snapshot
+before mutation. One immediate transaction receives the validated absent-ID set as a single JSON1
+value, retires matching created provenance, erases results owned by absent sources, validates and
+erases affected pending private state, and terminalizes all affected requests. Target membership is
+tested before source membership, so crossed roles and cycles always resolve as `target_deleted`
+when both endpoints are absent. Empty sets are no-ops; duplicate, malformed, sparse, accessor-backed,
+or over-ceiling sets fail closed. The single-session live-event API safely reuses the same transaction.
+Committed terminal notifications are emitted only after the transaction returns successfully.
 
 Schema v8 adds the private nullable `creation_operation_id` column and a partial unique
 workspace/operation index. Repository-created requests always carry a validated `op_…` value;

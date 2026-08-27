@@ -8,6 +8,7 @@ import {
   checkCoverage,
   isCriticalProductionPath,
 } from "../../../tools/check-coverage";
+import { sourceHasRuntimeCode } from "../../../tools/coverage-source-files";
 
 const temporaryRoots: string[] = [];
 
@@ -20,29 +21,54 @@ function write(root: string, projectPath: string, contents: string): void {
 function createRepository(): string {
   const root = mkdtempSync(join(tmpdir(), "coverage-checker-"));
   temporaryRoots.push(root);
-  write(root, "quality-exceptions.json", JSON.stringify({ exceptions: [] }));
   return root;
 }
 
-function record(
+function locations(count: number): Record<string, unknown> {
+  return Object.fromEntries(
+    Array.from({ length: count }, (_, index) => [
+      String(index),
+      {
+        start: { line: index + 1, column: 0 },
+        end: { line: index + 1, column: 1 },
+      },
+    ]),
+  );
+}
+
+function coverageRecord(
   path: string,
   linesHit: number,
   linesFound: number,
-  functionsHit = linesHit,
-  functionsFound = linesFound,
-): string {
-  return [
-    `SF:${path}`,
-    `FNF:${functionsFound}`,
-    `FNH:${functionsHit}`,
-    `LF:${linesFound}`,
-    `LH:${linesHit}`,
-    "end_of_record",
-  ].join("\n");
+  branchesHit = linesHit,
+  branchesFound = linesFound,
+): Record<string, unknown> {
+  const branchLocations = locations(branchesFound);
+  return {
+    path,
+    statementMap: locations(linesFound),
+    s: Object.fromEntries(
+      Array.from({ length: linesFound }, (_, index) => [String(index), index < linesHit ? 1 : 0]),
+    ),
+    fnMap: {},
+    f: {},
+    branchMap: Object.fromEntries(
+      Object.entries(branchLocations).map(([key, location]) => [
+        key,
+        { type: "cond-expr", line: Number(key) + 1, locations: [location] },
+      ]),
+    ),
+    b: Object.fromEntries(
+      Array.from({ length: branchesFound }, (_, index) => [
+        String(index),
+        [index < branchesHit ? 1 : 0],
+      ]),
+    ),
+  };
 }
 
-function findings(root: string, lcov: string): CoverageDiagnostic[] {
-  write(root, "coverage/lcov.info", lcov);
+function findings(root: string, records: Record<string, unknown>): CoverageDiagnostic[] {
+  write(root, "coverage/coverage-final.json", JSON.stringify(records));
   return checkCoverage({ rootDirectory: root });
 }
 
@@ -51,134 +77,86 @@ afterEach(() => {
 });
 
 describe("coverage thresholds", () => {
-  test("classifies invariant-bearing layers as critical", () => {
+  test("classifies the specified invariant-bearing layers as critical", () => {
     expect(isCriticalProductionPath("src/domain/state.ts")).toBeTrue();
     expect(isCriticalProductionPath("src/application/approve.ts")).toBeTrue();
     expect(isCriticalProductionPath("src/adapters/native/process.ts")).toBeTrue();
     expect(isCriticalProductionPath("src/adapters/store/ownership.ts")).toBeTrue();
     expect(isCriticalProductionPath("src/adapters/export/log.ts")).toBeTrue();
-    expect(isCriticalProductionPath("src/index.ts")).toBeFalse();
+    expect(isCriticalProductionPath("src/composition/plugin.ts")).toBeFalse();
   });
 
-  test("enforces per-file line and function thresholds", () => {
+  test("enforces per-file line and real branch thresholds", () => {
     const root = createRepository();
     write(root, "src/domain/state.ts", "export const state = 1;");
     write(root, "src/index.ts", "export const plugin = () => {};\n");
+    const criticalPath = join(root, "src/domain/state.ts");
+    const generalPath = join(root, "src/index.ts");
 
-    const diagnostics = findings(
-      root,
-      [
-        record("src/domain/state.ts", 94, 100, 90, 100),
-        record("src/index.ts", 84, 100, 80, 100),
-      ].join("\n"),
-    );
-
-    expect(diagnostics).toEqual([
+    expect(
+      findings(root, {
+        [criticalPath]: coverageRecord(criticalPath, 94, 100, 89, 100),
+        [generalPath]: coverageRecord(generalPath, 85, 100, 79, 100),
+      }),
+    ).toEqual([
+      {
+        path: "src/domain/state.ts",
+        message: "branches coverage 89.00% (89/100) is below 90%.",
+      },
       {
         path: "src/domain/state.ts",
         message: "lines coverage 94.00% (94/100) is below 95%.",
       },
-      { path: "src/index.ts", message: "lines coverage 84.00% (84/100) is below 85%." },
+      { path: "src/index.ts", message: "branches coverage 79.00% (79/100) is below 80%." },
     ]);
   });
 
-  test("treats a file with no functions as fully function-covered", () => {
+  test("rejects reports with no branch instrumentation", () => {
     const root = createRepository();
     write(root, "src/index.ts", "export const value = 1;\n");
+    const path = join(root, "src/index.ts");
 
-    expect(findings(root, record("src/index.ts", 1, 1, 0, 0))).toEqual([]);
-  });
-
-  test("rejects production files omitted from LCOV", () => {
-    const root = createRepository();
-    write(root, "src/index.ts", "export const value = 1;\n");
-
-    expect(findings(root, "TN:\n")).toEqual([
-      { path: "src/index.ts", message: "Production source has no LCOV record." },
-    ]);
+    expect(findings(root, { [path]: coverageRecord(path, 1, 1, 0, 0) })).toContainEqual({
+      path: "coverage/coverage-final.json",
+      message: "Coverage contains no instrumented branches; the branch gate is not valid.",
+    });
   });
 });
 
-describe("LCOV validation", () => {
-  test("accepts absolute source paths inside the repository", () => {
-    const root = createRepository();
-    write(root, "src/index.ts", "export const value = 1;\n");
-
-    expect(findings(root, record(join(root, "src/index.ts"), 1, 1))).toEqual([]);
-  });
-
-  test("rejects incomplete and impossible summaries", () => {
-    const root = createRepository();
-    write(root, "src/index.ts", "export const value = 1;\n");
-
-    expect(findings(root, "SF:src/index.ts\nLF:1\nLH:1\nend_of_record")[0]?.message).toContain(
-      "missing FNF, FNH, LF, or LH",
-    );
-    expect(findings(root, record("src/index.ts", 2, 1))[0]?.message).toContain(
-      "more covered items than found items",
-    );
-  });
-
-  test("rejects duplicate source records", () => {
-    const root = createRepository();
-    write(root, "src/index.ts", "export const value = 1;\n");
-
+describe("runtime source discovery", () => {
+  test("structurally excludes erased type-only modules", () => {
     expect(
-      findings(root, `${record("src/index.ts", 1, 1)}\n${record("src/index.ts", 1, 1)}`)[0]
-        ?.message,
-    ).toContain("duplicate record");
+      sourceHasRuntimeCode(
+        "ports.ts",
+        'import type { Input } from "./input";\nexport interface Port { run(x: Input): void }\nexport type Id = string;\n',
+      ),
+    ).toBeFalse();
+    expect(
+      sourceHasRuntimeCode("ambient.ts", "export declare const version: string;\n"),
+    ).toBeFalse();
+    expect(sourceHasRuntimeCode("runtime.ts", "export const version = '1';\n")).toBeTrue();
+    expect(sourceHasRuntimeCode("side-effect.ts", 'import "./register";\n')).toBeTrue();
+  });
+
+  test("requires records for runtime files but not type-only files", () => {
+    const root = createRepository();
+    write(root, "src/ports.ts", "export interface Port { run(): void }\n");
+    write(root, "src/index.ts", "export const value = 1;\n");
+    const unrelatedPath = join(root, "src/executed.ts");
+
+    expect(findings(root, { [unrelatedPath]: coverageRecord(unrelatedPath, 1, 1, 1, 1) })).toEqual([
+      { path: "src/index.ts", message: "Runtime production source has no coverage record." },
+    ]);
   });
 });
 
-describe("coverage exceptions", () => {
-  test("uses an exact metric exception only for a failing file", () => {
+describe("Istanbul input validation", () => {
+  test("reports malformed JSON without throwing", () => {
     const root = createRepository();
-    write(root, "src/index.ts", "export const plugin = () => {};\n");
-    write(
-      root,
-      "quality-exceptions.json",
-      JSON.stringify({
-        exceptions: [
-          {
-            path: "src/index.ts",
-            rule: "coverage-lines",
-            reason: "The generated bootstrap cannot be exercised in process.",
-            removalCondition: "Remove when bootstrap generation is replaced.",
-          },
-        ],
-      }),
-    );
+    write(root, "coverage/coverage-final.json", "{");
 
-    expect(findings(root, record("src/index.ts", 84, 100, 80, 100))).toEqual([]);
-  });
-
-  test("rejects stale and wrong-metric exceptions", () => {
-    const root = createRepository();
-    write(root, "src/index.ts", "export const plugin = () => {};\n");
-    write(
-      root,
-      "quality-exceptions.json",
-      JSON.stringify({
-        exceptions: [
-          {
-            path: "src/index.ts",
-            rule: "coverage-lines",
-            reason: "A temporary generated-code exception.",
-            removalCondition: "Remove when generated code changes.",
-          },
-        ],
-      }),
-    );
-
-    expect(findings(root, record("src/index.ts", 100, 100, 79, 100))).toEqual([
-      {
-        path: "quality-exceptions.json",
-        message: "Unused exception for src/index.ts (coverage-lines).",
-      },
-      {
-        path: "src/index.ts",
-        message: "functions coverage 79.00% (79/100) is below 80%.",
-      },
-    ]);
+    expect(checkCoverage({ rootDirectory: root })[0]).toMatchObject({
+      path: "coverage/coverage-final.json",
+    });
   });
 });

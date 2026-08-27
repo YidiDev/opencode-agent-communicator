@@ -349,7 +349,7 @@ generated schemas. At minimum they cover:
 | `session_request_ack` | `state_conflict` |
 | `session_request_cancel` | provisional `state_conflict` for a persistence conflict without an authoritative winner; `request_not_pending`, `delivery_failed`, `deadline_expired`, `target_stopped`, `source_stopped`, `target_deleted`, `source_deleted`; repeated `cancelled` is success |
 | `session_stop` | `approval_rejected`, `native_unavailable`, `native_outcome_unknown` |
-| `session_start` | `approval_rejected`, `idempotency_conflict`, `admission_failed`, `admission_unknown`, `native_outcome_unknown`, `native_unavailable` |
+| `session_start` | `approval_rejected`, `idempotency_conflict`, `admission_failed`, `admission_unknown`, `native_outcome_unknown`, `native_unavailable`, `start_payload_unavailable`, `unresolved_provenance_quota_exceeded` |
 | `session_export` | `approval_rejected`, `export_unavailable`, `unsafe_path`, `destination_exists`, `export_limit_exceeded`, `native_outcome_unknown` |
 
 Before schema freeze, implementation and tests must refine this provisional table into an
@@ -699,17 +699,17 @@ type SessionStartArgs = {
 Start creates only root sessions and requires operation-specific approval by
 default. With no configured allowlist, callers must omit `agent` and `model` so
 host defaults are used. Explicit overrides must exactly match administrator
-allowlists. Source and workspace start rates and managed-session counts are
-bounded.
+allowlists. Source and workspace start rates, managed-session counts, retained
+operation records, and private start-payload bytes are bounded.
 
 The coordinator persists a source-scoped start operation before external work.
 It fixes the generated session ID, initial native message ID, arguments digest,
 and independent sub-operation states:
 
 ```text
-creation: prepared | submitting | created | failed | outcome_unknown
-title: not_started | prepared | submitting | updated | failed | outcome_unknown | skipped
-admission: not_started | prepared | submitting | admitted | admission_unknown | failed
+creation: prepared | submitting | created | failed | policy_denied | approval_rejected | outcome_unknown
+title: not_started | prepared | submitting | updated | failed | outcome_unknown | payload_unavailable | skipped
+admission: not_started | prepared | submitting | admitted | admission_unknown | payload_unavailable | failed
 ```
 
 For each external step, `prepared` proves the call has not begun and may be
@@ -724,6 +724,26 @@ Repeating the same source, idempotency key, and arguments returns or resumes the
 same operation with the same IDs. Reusing the key with different arguments
 returns `idempotency_conflict`. Recovery must never adopt an unrelated existing
 session solely because an ID collides.
+
+Startup and same-key retries reconcile ambiguous creation by bounded authoritative reads of the fixed
+session ID; they never retry create. The pinned adapter distinguishes an exact root match (directory
+plus requested agent/model), collision, and unknown. A direct 404 after submission is unknown because
+the pinned API supplies no bounded proof that an accepted create cannot still commit; absence may be
+returned only by a native port with such a proof. Bounded non-message creation
+identity survives private payload erasure. A match confirms provenance and resumes title/admission
+only when their payload is still available; otherwise `start_payload_unavailable` reports the exact
+partial state. Proven absence and collision terminalize failure and release the reservation without
+adoption. Remaining unknown provenance has a separate configurable quota and immutable hard ceiling,
+does not consume ordinary managed-session quota, and reports
+`unresolved_provenance_quota_exceeded` when operator action is required.
+
+Policy denial and invocation-approval rejection atomically erase the private
+start payload, release the reserved managed-session identity, and commit the
+corresponding terminal creation state. Same-key retries therefore reproduce the
+same denial without requesting approval again while that terminal metadata is
+retained. Startup and recurring fenced maintenance delete aged unreserved
+terminal metadata and expired start-rate events in bounded batches; after the
+configured retention window, a collected key is a new operation.
 
 The result exposes the durable operation and partial state rather than hiding
 title or admission failures. No ambiguous external step is automatically
@@ -863,6 +883,23 @@ Source deletion transitions its pending outbound requests to `source_deleted`,
 logically erases content because no authorized source remains to retrieve a
 result, and removes local waiters after commit. Deletion reconciliation is
 idempotent. Late actions return the mapped stored terminal outcome.
+
+Deletion does not rely on root-list absence. Under the current fencing token the
+store returns one bounded candidate union: pending targets, pending
+sources, available-result sources, and only `created` managed provenance.
+`reserved`, `unresolved`, and `deleted` provenance are excluded. Each candidate
+is checked with the pinned OpenCode 1.18.21 direct V2 per-ID get and classified
+`present`, `absent`, or `unknown`; only an exact response-correlated
+`SessionNotFoundError` 404 proves absence. Archived roots and roots directly
+retrievable through another supported location remain present. Unknown evidence
+does not mutate state. Startup performs this pass before request native recovery
+or effects, and a lifecycle-owned 30-second bounded anti-entropy pass closes the
+startup-to-hook installation race. The native deletion hook remains a low-latency
+path. Reconciliation first classifies the complete candidate snapshot, then passes
+the validated absent set to one fenced atomic transaction. The transaction tests
+target membership before source membership, preserving `target_deleted` for crossed
+roles and cycles when both endpoints are absent. The live hook safely reuses that
+transaction with a singleton set. Both paths use strict post-commit notification validation.
 
 ### 9.7 Result Retention
 
@@ -1031,7 +1068,7 @@ root, not through string-prefix or check-then-use path validation.
 The state path receives equivalent handle/descriptor-relative no-follow and
 privacy treatment.
 
-Full adversarial Linux handling is required before the prerelease. Linux,
+Full adversarial Linux x64 handling is required before the prerelease. Additional architectures on Linux,
 macOS, and Windows implementations and race matrices are required before stable.
 
 ### 13.2 CLI Invocation
@@ -1049,8 +1086,10 @@ Export uses `Bun.spawn`, never `PluginInput.$` or a shell. Per invocation it:
 8. Treats timeout, ownership loss, or uncertain child termination as explicit
    failure/ambiguity and never retries automatically.
 
-There is no long-lived trust in a PATH-resolved executable. Exact provisional
-limits are measured and frozen after Phase 0 and stress testing.
+There is no long-lived trust in a PATH-resolved executable. For the pinned 1.18.21 adapter, bounded
+fixture and allocation stress measurements freeze a 16 MiB default and 64 MiB immutable stdout
+ceiling, a 16 KiB default and 64 KiB immutable stderr ceiling, and at most four concurrent exports.
+Configuration may only lower these bounds.
 
 ### 13.3 Output Validation
 
@@ -1339,6 +1378,9 @@ support. It contains no remote command or synthetic wake experiments.
   and terminalize confirmed admission failure as `delivery_failed`.
 - Target later idle creates no wake and leaves request in inbox.
 - Source/target stop and deletion reasons remain distinguishable.
+- Missed deletion hooks reconcile at startup and by bounded periodic anti-entropy
+  from direct per-ID evidence; list absence and malformed/uncorrelated 404s do not
+  delete. Archived and alternate-location direct retrieval remain present.
 - Ack idempotency, immediate result erasure, 24-hour expiry, and
   `result_expired` retrieval.
 - Thirty-day payload-free metadata retention and bounded GC.
@@ -1382,7 +1424,7 @@ support. It contains no remote command or synthetic wake experiments.
 - Parent/destination symlink swaps, junction/reparse points, path traversal,
   no-replace races, overwrite rules, temp-file attacks, and durability faults.
 - Equivalent adversarial tests for state/database/WAL/SHM paths.
-- Linux matrix before prerelease; Linux/macOS/Windows matrix before stable.
+- Linux x64 matrix before prerelease; additional architecture and Linux/macOS/Windows matrices before stable.
 
 ### 19.7 Skills and Live Acceptance
 
@@ -1432,10 +1474,10 @@ The first prerelease requires:
    provenance, and recursion protection.
 9. Shared discriminated domain errors and constant-shape sensitive lookups.
 10. Source, target, and workspace quotas under immutable hard ceilings.
-11. Private local state with verified Linux no-follow protections and logical
+11. Private local state with verified Linux x64 no-follow protections and logical
     deletion language.
 12. Bounded exact-path `Bun.spawn` export, native sanitizer, validated output,
-    overwrite approval, and adversarial Linux containment tests.
+    overwrite approval, and adversarial Linux x64 containment tests.
 13. Both skills available through a proven registration or explicit installer.
 14. No command execution, synthetic wake/reminder subsystem, system-transform
     dependency, restart orphaning, or exactly-once external-effect claim.
@@ -1498,7 +1540,7 @@ and timers, start approval/allowlists, and recursion disabled by default.
 ### 22.9 Platform Differences
 
 Filesystem, process-tree, ACL, and durability primitives differ. Mitigation:
-Linux-only prerelease dogfooding after complete Linux hardening, no stable
+Linux x64-only prerelease dogfooding after complete Linux x64 hardening, no stable
 release until Linux/macOS/Windows matrices pass, and fail closed on unsupported
 semantics.
 

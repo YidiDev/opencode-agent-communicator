@@ -7,8 +7,16 @@ import type {
 import type { RequestRuntime, RequestRuntimeStopReason } from "./request-runtime";
 
 export interface CommunicatorStartupRecoverySummary {
+  readonly participantDeletionCandidates: number;
+  readonly participantDeletionsObserved: number;
+  readonly participantDeletionUnknown: number;
+  readonly participantRequestsTerminalized: number;
   readonly staleMessages: number;
   readonly staleRequests: number;
+  readonly preparedStartsAwaitingApproval: number;
+  readonly startCreationOutcomesUnknown: number;
+  readonly startTitleOutcomesUnknown: number;
+  readonly startAdmissionsUnknown: number;
   readonly dueRequestsBeforePrepared: number;
   readonly preparedMessagesSubmitted: number;
   readonly preparedMessagesCancelled: number;
@@ -20,6 +28,10 @@ export interface CommunicatorStartupRecoverySummary {
   readonly expiredResults: number;
   readonly retainedRequestsDeleted: number;
   readonly retainedRateEventsDeleted: number;
+  readonly retainedStartOperationsDeleted: number;
+  readonly retainedStartRateEventsDeleted: number;
+  readonly retainedDeliveriesDeleted: number;
+  readonly retainedDeliveryRateEventsDeleted: number;
 }
 
 const readyAuthority = Symbol("communicator-startup-ready");
@@ -53,6 +65,10 @@ export class CommunicatorStartupRecoveryLifecycle implements CommunicatorReadine
     if (this.status !== "ready") {
       throw new Error("Communicator application lifecycle is not ready for ordinary work.");
     }
+  }
+
+  ownershipLost(): void {
+    this.stop("ownership_lost");
   }
 
   markReady(authority: symbol): void {

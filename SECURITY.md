@@ -1,0 +1,54 @@
+# Security policy
+
+## Supported versions
+
+This project is prerelease software. Security fixes are provided only for the current release line.
+
+| Version | Supported | Required host |
+| --- | --- | --- |
+| 0.1.x | Yes | Linux x64, OpenCode 1.18.21; Bun 1.4.0 for install and verification |
+| Earlier development builds | No | Not applicable |
+
+Exact host compatibility is part of the security boundary. Do not use this release on another
+operating system or CPU architecture, or with another OpenCode version. Bun `1.4.0` is the supported
+package installation and verification runtime; OpenCode executes the plugin in its own embedded Bun.
+
+## Report a vulnerability
+
+Use GitHub's private vulnerability reporting for this repository:
+
+<https://github.com/YidiDev/opencode-agent-communicator/security/advisories/new>
+
+Do not open a public issue, discussion, or pull request for an undisclosed vulnerability. Include:
+
+- the affected plugin, OpenCode, Bun, kernel, and filesystem versions;
+- the configuration involved, with secrets and personal paths removed;
+- reproducible steps or a minimal proof of concept;
+- the impact and whether a native or filesystem outcome may be ambiguous; and
+- any evidence that sensitive content was exposed.
+
+You should receive an acknowledgement within 7 days. The maintainer will coordinate validation,
+remediation, disclosure, and credit with you. Do not access data you do not own or run tests against
+systems without permission.
+
+## Scope and known boundaries
+
+High-impact reports include authorization bypass, cross-workspace disclosure, unsafe path traversal,
+unbounded resource use, arbitrary process execution, approval bypass, or incorrect retry of an
+ambiguous external effect.
+
+The following documented constraints are not vulnerabilities by themselves:
+
+- Only Linux x64 is supported. ARM64 code retained for possible future certification is untested and
+  outside the `0.1.x` support boundary. Secure export additionally depends on specific
+  kernel/filesystem capabilities and fails closed when they are absent.
+- The same-OS-user adversary is outside the state and export confidentiality boundary.
+- Process-local export rates reset after restart.
+- Deletion is logical, not guaranteed forensic erasure from SQLite, WAL, journals, backups,
+  snapshots, or media.
+- A reported `admission_unknown` or `native_outcome_unknown` is an intentional refusal to invent an
+  outcome after an interrupted effect.
+
+The plugin has no remote command-execution feature. Its optional export adapter directly invokes only
+the configured, verified OpenCode executable without a shell. See
+[Session export security](docs/session-export-security.md) for the complete boundary.

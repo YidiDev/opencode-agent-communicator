@@ -8,6 +8,7 @@ import {
 import { type DomainResult, domainFailure } from "../domain/results";
 import { validateSessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
+import { boundedExternalCall } from "./bounded-external-call";
 import {
   assertCommunicatorReady,
   type CommunicatorReadinessPort,
@@ -109,6 +110,7 @@ function validParticipantBinding(
   );
 }
 
+// biome-ignore-all format: keep strict projection validation inside its bounded query branch.
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one strict boundary correlates exact get shape, terminalization relevance, participant identity, and public projection.
 export async function getSessionRequest(
   ports: SessionRequestGetPorts,
@@ -116,10 +118,12 @@ export async function getSessionRequest(
     readonly workspaceKey: WorkspaceKey;
     readonly callerSessionId: unknown;
     readonly fencingToken: FencingToken;
+    readonly abort?: AbortSignal;
+    readonly deadlineMs?: number;
   },
   args: unknown,
 ): Promise<DomainResult<ParticipantRequestGet>> {
-  assertCommunicatorReady(ports.readiness);
+  assertCommunicatorReady(ports.readiness, context.fencingToken);
   const caller = validateSessionId(context.callerSessionId);
   if (!caller.ok) return domainFailure("invalid_arguments", caller.message, false);
   const data = snapshotDataRecord(args, 1);
@@ -132,12 +136,33 @@ export async function getSessionRequest(
   }
   const requestId = validateRequestId(data.request_id);
   if (!requestId.ok) return domainFailure("invalid_arguments", requestId.message, false);
-  try {
-    const rawMembership = await ports.membership.readCurrentRoots(
+  const invoke = async <Value>(operation: () => Promise<Value>) => {
+    if (context.abort && context.deadlineMs !== undefined) {
+      return boundedExternalCall(operation, context.abort, context.deadlineMs);
+    }
+    try {
+      return { kind: "value" as const, value: await operation() };
+    } catch (cause: unknown) {
+      return { kind: "rejected" as const, cause };
+    }
+  };
+  {
+    const membershipCall = await invoke(() => ports.membership.readCurrentRoots(
       context.workspaceKey,
       caller.value,
       caller.value,
-    );
+    ));
+    if (membershipCall.kind === "expired") {
+      return domainFailure("deadline_expired", "Request query invocation deadline expired.", false);
+    }
+    if (membershipCall.kind === "rejected") {
+      if (membershipCall.cause instanceof OwnershipLostFault) {
+        return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+      }
+      return domainFailure("native_unavailable", "Current session membership is unavailable.", true);
+    }
+    const rawMembership = membershipCall.value;
+    try {
     const membership = snapshotDataRecord(rawMembership, 3);
     if (
       !membership ||
@@ -158,19 +183,28 @@ export async function getSessionRequest(
         false,
       );
     }
-  } catch (cause: unknown) {
-    if (cause instanceof OwnershipLostFault) {
-      return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+    } catch {
+      return domainFailure("native_unavailable", "Current session membership is unavailable.", true);
     }
-    return domainFailure("native_unavailable", "Current session membership is unavailable.", true);
   }
-  try {
-    const rawFound = await ports.requests.getParticipantRequest({
+  {
+    const foundCall = await invoke(() => ports.requests.getParticipantRequest({
       fencingToken: context.fencingToken,
       workspaceKey: context.workspaceKey,
       requestId: requestId.value,
       callerSessionId: caller.value,
-    });
+    }));
+    if (foundCall.kind === "expired") {
+      return domainFailure("deadline_expired", "Request query invocation deadline expired.", false);
+    }
+    if (foundCall.kind === "rejected") {
+      if (foundCall.cause instanceof OwnershipLostFault) {
+        return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+      }
+      return domainFailure("storage_unavailable", "Request storage is unavailable.", true);
+    }
+    const rawFound = foundCall.value;
+    try {
     if (!rawFound) return hiddenFailure();
     const found = snapshotDataRecord(rawFound, 4);
     if (!found || typeof found.outcome !== "string") {
@@ -221,10 +255,8 @@ export async function getSessionRequest(
       );
     }
     return { ok: true, value: projection };
-  } catch (cause: unknown) {
-    if (cause instanceof OwnershipLostFault) {
-      return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+    } catch {
+      return domainFailure("storage_unavailable", "Request storage is unavailable.", true);
     }
-    return domainFailure("storage_unavailable", "Request storage is unavailable.", true);
   }
 }

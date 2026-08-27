@@ -1,5 +1,6 @@
 import type { NativeMessageId, RequestId, StartOperationId } from "../domain/generated-ids";
 import { OwnershipLostFault } from "../domain/ownership";
+import { blockingRequestDeadlineMarginMs } from "../domain/request-constants";
 import {
   canonicalizeSerializeAndDigestPendingRequestPayload,
   serializeVerifiedRequestEnvelope,
@@ -233,14 +234,25 @@ async function createInternal(
   const createdAtMs = checkpoint.value;
   const timeoutMs = validated.value.payload.timeoutSeconds * 1_000;
   const deadlineAtMs = createdAtMs + timeoutMs;
+  const settlementBoundaryMs = deadlineAtMs + blockingRequestDeadlineMarginMs;
   if (
     !Number.isSafeInteger(timeoutMs) ||
     !Number.isSafeInteger(deadlineAtMs) ||
-    deadlineAtMs <= createdAtMs
+    deadlineAtMs <= createdAtMs ||
+    !Number.isSafeInteger(settlementBoundaryMs)
   ) {
     return domainFailure(
       "invalid_arguments",
       "Request timeout cannot form a safe deadline.",
+      false,
+    );
+  }
+  // Never persist a request whose own deadline could be pre-empted by the internal invocation.
+  // The reserved tail bounds the authoritative terminal read and cancellation/cleanup I/O.
+  if (settlementBoundaryMs >= context.deadlineMs) {
+    return domainFailure(
+      "deadline_expired",
+      "The invocation cannot retain the durable request deadline settlement margin.",
       false,
     );
   }
@@ -370,7 +382,7 @@ export async function createBlockingSessionRequest(
   operation: RequestKind,
   args: unknown,
 ): Promise<DomainResult<BlockingSessionRequestSuccess>> {
-  assertCommunicatorReady(ports.readiness);
+  assertCommunicatorReady(ports.readiness, context.fencingToken);
   if (!Number.isSafeInteger(context.deadlineMs) || context.deadlineMs < 0) {
     return domainFailure("invalid_arguments", "Invocation deadline is malformed.", false);
   }

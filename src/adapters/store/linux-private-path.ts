@@ -44,6 +44,8 @@ export const nodeLinuxPathSyscalls: LinuxPathSyscalls = {
   fstat: (descriptor) => {
     const value = fstatSync(descriptor);
     return {
+      device: value.dev,
+      inode: value.ino,
       uid: value.uid,
       mode: value.mode,
       size: value.size,
@@ -78,6 +80,7 @@ function assertPrivateDirectory(
   syscalls: LinuxPathSyscalls,
   descriptor: number,
   requireOwner: boolean,
+  created = false,
 ): void {
   const before = syscalls.fstat(descriptor);
   if (!before.isDirectory) {
@@ -93,10 +96,32 @@ function assertPrivateDirectory(
   if ((before.mode & 0o1000) !== 0 || (before.mode & 0o022) !== 0) {
     throw new StoreSecurityError("The private state directory is shared or sticky.");
   }
-  syscalls.fchmod(descriptor, 0o700);
+  if (!created && (before.mode & 0o777) !== 0o700) {
+    throw new StoreSecurityError("An existing private state directory must already be mode 0700.");
+  }
+  if (created) syscalls.fchmod(descriptor, 0o700);
   const after = syscalls.fstat(descriptor);
   if (!after.isDirectory || after.uid !== uid || (after.mode & 0o777) !== 0o700) {
     throw new StoreSecurityError("Private state-directory permissions could not be established.");
+  }
+}
+
+/**
+ * Existing traversal directories are trusted only when replacement by another UID is prevented.
+ * Root/current-UID ownership plus no group/world write is the normal policy. A root-owned sticky
+ * directory is the narrow exception needed to traverse standard private-temp parents such as
+ * /tmp; sticky rename protection and the private child ownership check preserve the boundary.
+ */
+function assertTrustedTraversalDirectory(syscalls: LinuxPathSyscalls, descriptor: number): void {
+  const value = syscalls.fstat(descriptor);
+  const uid = syscalls.uid();
+  if (uid === undefined || !value.isDirectory || (value.uid !== 0 && value.uid !== uid)) {
+    throw new StoreSecurityError("The state path has an unsafe canonical ancestor.");
+  }
+  const sharedWrite = (value.mode & 0o022) !== 0;
+  const safeStickyRoot = value.uid === 0 && (value.mode & 0o1000) !== 0;
+  if (sharedWrite && !safeStickyRoot) {
+    throw new StoreSecurityError("The state path has a writable canonical ancestor.");
   }
 }
 
@@ -106,6 +131,9 @@ function validateDirectoryPath(directory: string): string[] {
   }
   if (directory === "/" || directory.includes("\0") || normalize(directory) !== directory) {
     throw new StoreSecurityError("The configured state directory is an unsafe target.");
+  }
+  if (["/etc", "/usr", "/var", "/tmp", "/home", "/root", "/opt"].includes(directory)) {
+    throw new StoreSecurityError("The configured state directory must be a dedicated root.");
   }
   const components = directory.slice(1).split("/");
   if (
@@ -133,15 +161,17 @@ function openDirectoryComponent(
       throw new StoreSecurityError("A state-path component could not be opened safely.");
     }
   }
+  let created = false;
   try {
     syscalls.mkdir(path, 0o700);
+    created = true;
   } catch (cause: unknown) {
     if (errorCode(cause) !== "EEXIST") {
       throw new StoreSecurityError("A state-path component could not be created safely.");
     }
   }
   try {
-    return { descriptor: syscalls.open(path, flags), created: true };
+    return { descriptor: syscalls.open(path, flags), created };
   } catch {
     throw new StoreSecurityError("A created state-path component could not be opened safely.");
   }
@@ -175,13 +205,25 @@ export class PreparedPrivateState implements Disposable {
     readonly databaseFileName: string,
     canonicalDirectory: string,
     private readonly syscalls: LinuxPathSyscalls,
+    private readonly directoryChain: readonly {
+      readonly descriptor: number;
+      readonly component?: string;
+    }[],
   ) {
     this.canonicalDatabasePath = `${canonicalDirectory}/${databaseFileName}`;
-    this.sqliteDatabasePath = descriptorPath(directoryDescriptor, databaseFileName);
+    // Bun SQLite cannot combine SQLITE_OPEN_NOFOLLOW with /proc/self/fd because the proc entry is
+    // itself a symlink. The retained trusted ancestor chain fences the canonical pathname instead.
+    this.sqliteDatabasePath = this.canonicalDatabasePath;
+  }
+
+  assertPathIdentity(): void {
+    this.assertOpen();
+    this.assertRetainedDirectoryChain();
   }
 
   verifySqliteFiles(): void {
     this.assertOpen();
+    this.assertRetainedDirectoryChain();
     this.verifyFile(this.databaseFileName, true);
     for (const suffix of ["-wal", "-shm", "-journal"] as const) {
       this.verifyFile(`${this.databaseFileName}${suffix}`, false);
@@ -190,6 +232,7 @@ export class PreparedPrivateState implements Disposable {
 
   assertMutationCapacity(maximumDatabaseBytes: number, checkpoint: () => void): void {
     this.assertOpen();
+    this.assertRetainedDirectoryChain();
     let sizes = this.readSizes();
     if (this.exceedsCeiling(sizes, maximumDatabaseBytes)) {
       try {
@@ -208,7 +251,9 @@ export class PreparedPrivateState implements Disposable {
   close(): void {
     if (this.isClosed) return;
     this.isClosed = true;
-    safelyClose(this.syscalls, this.directoryDescriptor);
+    for (const entry of [...this.directoryChain].reverse()) {
+      safelyClose(this.syscalls, entry.descriptor);
+    }
   }
 
   [Symbol.dispose](): void {
@@ -218,15 +263,24 @@ export class PreparedPrivateState implements Disposable {
   private verifyFile(name: string, create: boolean): LinuxFileStat | undefined {
     const flags = fileConstants.O_RDWR | fileConstants.O_NOFOLLOW | fileConstants.O_NONBLOCK;
     let descriptor: number;
+    let created = false;
     try {
-      descriptor = this.syscalls.open(
-        descriptorPath(this.directoryDescriptor, name),
-        create ? flags | fileConstants.O_CREAT : flags,
-        0o600,
-      );
+      descriptor = this.syscalls.open(descriptorPath(this.directoryDescriptor, name), flags);
     } catch (cause: unknown) {
       if (!create && errorCode(cause) === "ENOENT") return undefined;
-      throw new StoreSecurityError("A SQLite state file could not be opened safely.");
+      if (!create || errorCode(cause) !== "ENOENT") {
+        throw new StoreSecurityError("A SQLite state file could not be opened safely.");
+      }
+      try {
+        descriptor = this.syscalls.open(
+          descriptorPath(this.directoryDescriptor, name),
+          flags | fileConstants.O_CREAT | fileConstants.O_EXCL,
+          0o600,
+        );
+        created = true;
+      } catch {
+        throw new StoreSecurityError("A SQLite state file could not be created safely.");
+      }
     }
     try {
       const uid = this.syscalls.uid();
@@ -241,7 +295,10 @@ export class PreparedPrivateState implements Disposable {
       ) {
         throw new StoreSecurityError("A SQLite state file has an unsafe type or owner.");
       }
-      this.syscalls.fchmod(descriptor, 0o600);
+      if (!created && (before.mode & 0o777) !== 0o600) {
+        throw new StoreSecurityError("An existing SQLite state file must already be mode 0600.");
+      }
+      if (created) this.syscalls.fchmod(descriptor, 0o600);
       const after = this.syscalls.fstat(descriptor);
       if (!after.isFile || after.uid !== uid || (after.mode & 0o777) !== 0o600) {
         throw new StoreSecurityError("Private SQLite file permissions could not be established.");
@@ -249,6 +306,39 @@ export class PreparedPrivateState implements Disposable {
       return after;
     } finally {
       safelyClose(this.syscalls, descriptor);
+    }
+  }
+
+  private assertRetainedDirectoryChain(): void {
+    for (let index = 1; index < this.directoryChain.length; index += 1) {
+      const parent = this.directoryChain[index - 1];
+      const retained = this.directoryChain[index];
+      if (!parent || !retained || retained.component === undefined) {
+        throw new StoreSecurityError("The retained state-directory chain is malformed.");
+      }
+      let reopened: number;
+      try {
+        reopened = this.syscalls.open(
+          descriptorPath(parent.descriptor, retained.component),
+          fileConstants.O_RDONLY | fileConstants.O_DIRECTORY | fileConstants.O_NOFOLLOW,
+        );
+      } catch {
+        throw new StoreSecurityError("A canonical state directory component is unavailable.");
+      }
+      try {
+        const expected = this.syscalls.fstat(retained.descriptor);
+        const actual = this.syscalls.fstat(reopened);
+        if (
+          expected.device === undefined ||
+          expected.inode === undefined ||
+          actual.device !== expected.device ||
+          actual.inode !== expected.inode
+        ) {
+          throw new StoreSecurityError("A canonical state directory identity changed.");
+        }
+      } finally {
+        safelyClose(this.syscalls, reopened);
+      }
     }
   }
 
@@ -303,29 +393,40 @@ export function preparePrivateStatePath(
   } catch {
     throw new StoreSecurityError("The filesystem root descriptor could not be opened.");
   }
+  const directoryChain: Array<{ readonly descriptor: number; readonly component?: string }> = [
+    { descriptor: current },
+  ];
   try {
-    assertPrivateDirectory(syscalls, current, false);
+    assertTrustedTraversalDirectory(syscalls, current);
     for (const [index, component] of components.entries()) {
       const child = openDirectoryComponent(syscalls, current, component);
       try {
-        assertPrivateDirectory(
-          syscalls,
-          child.descriptor,
-          child.created || index === components.length - 1,
-        );
+        if (child.created || index === components.length - 1) {
+          assertPrivateDirectory(syscalls, child.descriptor, true, child.created);
+        } else {
+          assertTrustedTraversalDirectory(syscalls, child.descriptor);
+        }
       } catch (cause: unknown) {
         safelyClose(syscalls, child.descriptor);
         throw cause;
       }
-      safelyClose(syscalls, current);
       current = child.descriptor;
+      directoryChain.push({ descriptor: current, component });
     }
     assertSupportedFileSystem(syscalls, current, options.allowFuse === true);
-    const prepared = new PreparedPrivateState(current, fileName, directory, syscalls);
+    const prepared = new PreparedPrivateState(
+      current,
+      fileName,
+      directory,
+      syscalls,
+      directoryChain,
+    );
     prepared.verifySqliteFiles();
     return prepared;
   } catch (cause: unknown) {
-    safelyClose(syscalls, current);
+    for (const entry of [...directoryChain].reverse()) {
+      safelyClose(syscalls, entry.descriptor);
+    }
     if (cause instanceof StoreSecurityError) throw cause;
     throw new StoreSecurityError("The private state path could not be prepared safely.");
   }
