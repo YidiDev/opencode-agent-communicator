@@ -57,7 +57,7 @@ configuration, and values above compiled safety ceilings stop startup before the
 `XDG_STATE_HOME` or `HOME/.local/state`, outside the workspace; the store verifies ownership,
 permissions, no-follow traversal, and filesystem support. This implementation fails closed on any
 runtime other than Linux x64 before it opens the state store. Linux ARM64 and all other CPU
-architectures are outside the certified `0.1.2` package scope; package metadata also restricts
+architectures are outside the certified `0.1.3` package scope; package metadata also restricts
 installation to x64. Bun `1.4.0` remains the exact package installation and verification target.
 OpenCode executes plugins in its own embedded Bun, which is not the external installer version.
 
