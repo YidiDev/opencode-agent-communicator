@@ -4,11 +4,15 @@ import type { PendingRequestMetadata, RequestMetadata } from "../domain/request-
 import { type DomainResult, domainFailure } from "../domain/results";
 import { runUntilAborted } from "./abortable-operation";
 import { admitClaimedSessionRequest } from "./admit-claimed-session-request";
+import {
+  settleAdmissionCleanup as settleCleanup,
+  settleAdmissionForeground as settleForeground,
+  wakeAfterRequestAdmission as wake,
+} from "./blocking-request-admission-settlement";
 import type {
   SessionBlockingRequestContext,
   SessionBlockingRequestPorts,
 } from "./blocking-session-request-boundaries";
-import { observeNativePromiseRejection } from "./native-promise-observation";
 import type { RequestClaimReconciliation } from "./request-ports";
 import { type RequestStoreFailureCode, requestStoreFailureCodes } from "./request-ports";
 import { inspectRequestMetadata } from "./request-recovery-boundaries";
@@ -72,55 +76,6 @@ function inspectClaimReconciliation(
     : undefined;
 }
 
-const admissionCleanupTimeoutMs = 1_000;
-
-async function settleForeground<Value>(
-  ports: SessionBlockingRequestPorts,
-  context: SessionBlockingRequestContext,
-  operation: () => Promise<Value>,
-) {
-  const controller = new AbortController();
-  let timer: { cancel(): void } | undefined;
-  const abort = (): void => controller.abort("request_admission_settlement_cancelled");
-  try {
-    context.abort.addEventListener("abort", abort, { once: true });
-    if (context.abort.aborted) abort();
-    const nowMs = ports.clock.nowMs();
-    if (!Number.isSafeInteger(nowMs) || nowMs < 0) return { kind: "aborted" as const };
-    timer = ports.deadlineTimer.arm(Math.max(0, context.deadlineMs - nowMs), () =>
-      controller.abort("request_admission_settlement_deadline"),
-    );
-    return await runUntilAborted(controller.signal, operation);
-  } catch (cause: unknown) {
-    return { kind: "rejected" as const, cause };
-  } finally {
-    context.abort.removeEventListener("abort", abort);
-    timer?.cancel();
-  }
-}
-
-async function settleCleanup<Value>(
-  ports: SessionBlockingRequestPorts,
-  operation: () => Promise<Value>,
-) {
-  const controller = new AbortController();
-  let timer: { cancel(): void } | undefined;
-  const stop = (): void => controller.abort("request_admission_lifecycle_stopped");
-  try {
-    ports.runtime.effectSignal.addEventListener("abort", stop, { once: true });
-    if (ports.runtime.effectSignal.aborted) stop();
-    timer = ports.deadlineTimer.arm(admissionCleanupTimeoutMs, () =>
-      controller.abort("request_admission_cleanup_deadline"),
-    );
-    return await runUntilAborted(controller.signal, operation);
-  } catch (cause: unknown) {
-    return { kind: "rejected" as const, cause };
-  } finally {
-    ports.runtime.effectSignal.removeEventListener("abort", stop);
-    timer?.cancel();
-  }
-}
-
 async function reconcileClaim(
   ports: SessionBlockingRequestPorts,
   context: SessionBlockingRequestContext,
@@ -157,16 +112,6 @@ async function faultSubmittingIfStillOwner(
   } catch {
     // The owning workflow has already been conservatively classified as unsafe.
   }
-}
-
-function wake(ports: SessionBlockingRequestPorts, request: PendingRequestMetadata): void {
-  try {
-    const returned: unknown = ports.scheduler.wake();
-    if (returned !== undefined) observeNativePromiseRejection(returned);
-  } catch {
-    // Durable scheduler recovery remains available.
-  }
-  ports.runtime.wakeRequest(request.id);
 }
 
 async function classifyAmbiguousClaim(

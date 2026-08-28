@@ -1,0 +1,248 @@
+import type {
+  CompleteSubmissionInput,
+  DeliveryClaimResult,
+  DeliveryPersistencePort,
+  DeliveryStoreResult,
+  DeliveryTransitionInput,
+  OwnershipPort,
+  PrepareDeliveryInput,
+  RecoveryStartupBarrierPort,
+} from "../../application/delivery-ports";
+import type { DeliveryRetentionPersistencePort } from "../../application/delivery-retention";
+import type {
+  DeleteAbsentParticipantRequestsInput,
+  ParticipantDeletionPersistencePort,
+} from "../../application/participant-deletion-ports";
+import type {
+  CompleteRequestDeliveryInput,
+  ExpireDueRequestsResult,
+  PrepareRequestInput,
+  RequestAdmissionPersistencePort,
+  RequestClaimReconciliation,
+  RequestClaimResult,
+  RequestCreationReconciliation,
+  RequestDeadlineSchedulePort,
+  RequestParticipantQueryPort,
+  RequestRecoveryPersistencePort,
+  RequestResultRetentionPersistencePort,
+  RequestRetentionPersistencePort,
+  RequestRetentionResult,
+  RequestStoreResult,
+  RequestTerminalPersistencePort,
+  RequestTransitionInput,
+} from "../../application/request-ports";
+import type { SessionStopPersistencePort } from "../../application/session-stop-ports";
+import type { DeliveryMetadata, DeliveryParticipantRole } from "../../domain/deliveries";
+import type { FencingToken } from "../../domain/ownership";
+import type { SessionId } from "../../domain/sessions";
+import type { WorkspaceKey } from "../../domain/workspaces";
+import { SqliteStoreCore } from "./sqlite-store-core";
+import type { StoreStorageDiagnostics } from "./store-maintenance-repository";
+
+export class LinuxBunSqliteStore
+  extends SqliteStoreCore
+  implements
+    OwnershipPort,
+    DeliveryPersistencePort,
+    RecoveryStartupBarrierPort,
+    RequestAdmissionPersistencePort,
+    RequestDeadlineSchedulePort,
+    RequestRecoveryPersistencePort,
+    RequestRetentionPersistencePort,
+    RequestTerminalPersistencePort,
+    RequestResultRetentionPersistencePort,
+    RequestParticipantQueryPort,
+    SessionStopPersistencePort,
+    ParticipantDeletionPersistencePort,
+    DeliveryRetentionPersistencePort
+{
+  async createPrepared(input: PrepareDeliveryInput): Promise<DeliveryStoreResult>;
+  async createPrepared(input: PrepareRequestInput): Promise<RequestStoreResult>;
+  async createPrepared(
+    input: PrepareDeliveryInput | PrepareRequestInput,
+  ): Promise<DeliveryStoreResult | RequestStoreResult> {
+    this.assertOpen();
+    return "request" in input
+      ? this.access.mutate(() => this.requestRepository.createPrepared(input))
+      : this.access.mutate(() => this.deliveryRepository.createPrepared(input));
+  }
+
+  async reconcilePreparedCreation(
+    input: PrepareRequestInput,
+  ): Promise<RequestCreationReconciliation> {
+    this.assertOpen();
+    return this.access.inspect(() => this.requestRepository.reconcilePreparedCreation(input));
+  }
+
+  async cancelPrepared(input: DeliveryTransitionInput): Promise<DeliveryStoreResult> {
+    this.assertOpen();
+    return this.access.mutate(() => this.deliveryRepository.cancelPrepared(input));
+  }
+
+  async claimPrepared(input: DeliveryTransitionInput): Promise<DeliveryClaimResult>;
+  async claimPrepared(input: RequestTransitionInput): Promise<RequestClaimResult>;
+  async claimPrepared(
+    input: DeliveryTransitionInput | RequestTransitionInput,
+  ): Promise<DeliveryClaimResult | RequestClaimResult> {
+    this.assertOpen();
+    return "requestId" in input
+      ? this.access.mutate(() => this.requestRepository.claimPrepared(input))
+      : this.access.mutate(() => this.deliveryRepository.claimPrepared(input));
+  }
+
+  async reconcilePreparedClaim(input: RequestTransitionInput): Promise<RequestClaimReconciliation> {
+    this.assertOpen();
+    return this.access.inspect(() => this.requestRepository.reconcilePreparedClaim(input));
+  }
+
+  async completeDelivery(input: CompleteRequestDeliveryInput): Promise<RequestStoreResult> {
+    this.assertOpen();
+    return this.access.mutate(() => this.requestDeliveryRepository.completeDelivery(input));
+  }
+
+  async expireDueRequests(
+    input: Parameters<RequestAdmissionPersistencePort["expireDueRequests"]>[0],
+  ): Promise<ExpireDueRequestsResult> {
+    this.assertOpen();
+    return this.access.mutate(() => this.requestRepository.expireDueRequests(input));
+  }
+
+  async readNextPendingDeadline(
+    input: Parameters<RequestDeadlineSchedulePort["readNextPendingDeadline"]>[0],
+  ): ReturnType<RequestDeadlineSchedulePort["readNextPendingDeadline"]> {
+    this.assertOpen();
+    return this.access.inspect(() => this.requestQueryRepository.readNextPendingDeadline(input));
+  }
+
+  async listRecoverableRequests(
+    input: Parameters<RequestRecoveryPersistencePort["listRecoverableRequests"]>[0],
+  ): Promise<readonly import("../../domain/request-types").RequestMetadata[]> {
+    this.assertOpen();
+    return this.access.inspect(() => this.requestQueryRepository.listRecoverable(input));
+  }
+
+  async listForParticipant(
+    input: Parameters<RequestParticipantQueryPort["listForParticipant"]>[0],
+  ): ReturnType<RequestParticipantQueryPort["listForParticipant"]> {
+    this.assertOpen();
+    return this.access.inspect(() => this.requestParticipantQueryRepository.list(input));
+  }
+
+  async getParticipantRequest(
+    input: Parameters<RequestParticipantQueryPort["getParticipantRequest"]>[0],
+  ): ReturnType<RequestParticipantQueryPort["getParticipantRequest"]> {
+    this.assertOpen();
+    return this.access.inspect(() => this.requestParticipantQueryRepository.get(input));
+  }
+
+  async collectRequestRetention(
+    input: Parameters<RequestRetentionPersistencePort["collectRequestRetention"]>[0],
+  ): Promise<RequestRetentionResult> {
+    this.assertOpen();
+    return this.access.mutate(() => this.requestRetentionRepository.collect(input));
+  }
+
+  async answerAsk(
+    input: Parameters<RequestTerminalPersistencePort["answerAsk"]>[0],
+  ): ReturnType<RequestTerminalPersistencePort["answerAsk"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.requestTerminalRepository.answerAsk(input));
+  }
+
+  async signalWait(
+    input: Parameters<RequestTerminalPersistencePort["signalWait"]>[0],
+  ): ReturnType<RequestTerminalPersistencePort["signalWait"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.requestTerminalRepository.signalWait(input));
+  }
+
+  async cancelPending(
+    input: Parameters<RequestTerminalPersistencePort["cancelPending"]>[0],
+  ): ReturnType<RequestTerminalPersistencePort["cancelPending"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.requestTerminalRepository.cancelPending(input));
+  }
+
+  async acknowledgeResult(
+    input: Parameters<RequestTerminalPersistencePort["acknowledgeResult"]>[0],
+  ): ReturnType<RequestTerminalPersistencePort["acknowledgeResult"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.requestTerminalRepository.acknowledgeResult(input));
+  }
+
+  async expireAvailableResults(
+    input: Parameters<RequestResultRetentionPersistencePort["expireAvailableResults"]>[0],
+  ): ReturnType<RequestResultRetentionPersistencePort["expireAvailableResults"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.requestResultRetentionRepository.expireAvailable(input));
+  }
+
+  async stopPendingRequests(
+    input: Parameters<SessionStopPersistencePort["stopPendingRequests"]>[0],
+  ): ReturnType<SessionStopPersistencePort["stopPendingRequests"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.requestStopRepository.stopPendingRequests(input));
+  }
+
+  async deleteParticipantRequests(
+    input: Parameters<ParticipantDeletionPersistencePort["deleteParticipantRequests"]>[0],
+  ): ReturnType<ParticipantDeletionPersistencePort["deleteParticipantRequests"]> {
+    this.assertOpen();
+    return this.access.mutate(() =>
+      this.requestDeletionRepository.deleteParticipantRequests(input),
+    );
+  }
+
+  async deleteAbsentParticipantRequests(input: DeleteAbsentParticipantRequestsInput) {
+    this.assertOpen();
+    return this.access.mutate(() => this.requestDeletionRepository.deleteAbsent(input));
+  }
+
+  async listParticipantDeletionCandidates(
+    input: Parameters<ParticipantDeletionPersistencePort["listParticipantDeletionCandidates"]>[0],
+  ): ReturnType<ParticipantDeletionPersistencePort["listParticipantDeletionCandidates"]> {
+    this.assertOpen();
+    return this.access.inspect(() =>
+      this.requestDeletionRepository.listParticipantDeletionCandidates(input),
+    );
+  }
+
+  async completeSubmission(input: CompleteSubmissionInput): Promise<DeliveryStoreResult> {
+    this.assertOpen();
+    return this.access.mutate(() => this.deliveryRepository.completeSubmission(input));
+  }
+
+  async listRecoverable(
+    input: Parameters<DeliveryPersistencePort["listRecoverable"]>[0],
+  ): Promise<readonly DeliveryMetadata[]> {
+    this.assertOpen();
+    return this.access.inspect(() => this.deliveryQueryRepository.listRecoverable(input));
+  }
+
+  async getForParticipant(input: {
+    readonly workspaceKey: WorkspaceKey;
+    readonly deliveryId: Parameters<DeliveryPersistencePort["getForParticipant"]>[0]["deliveryId"];
+    readonly participantSessionId: SessionId;
+  }): Promise<
+    { readonly role: DeliveryParticipantRole; readonly delivery: DeliveryMetadata } | undefined
+  > {
+    this.assertOpen();
+    return this.access.inspect(() => this.deliveryQueryRepository.getForParticipant(input));
+  }
+
+  async garbageCollectMetadata(input: {
+    readonly fencingToken: FencingToken;
+    readonly workspaceKey: WorkspaceKey;
+    readonly limit: number;
+  }): Promise<unknown> {
+    this.assertOpen();
+    return this.access.mutate(() =>
+      this.maintenanceRepository.garbageCollectDeliveryMetadata(input),
+    );
+  }
+
+  async readStorageDiagnostics(): Promise<StoreStorageDiagnostics> {
+    this.assertOpen();
+    return this.access.mutate(() => this.maintenanceRepository.readStorageDiagnostics());
+  }
+}

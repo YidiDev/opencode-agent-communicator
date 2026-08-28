@@ -1,40 +1,17 @@
 import type { Database } from "bun:sqlite";
 
-import { type FencingToken, OwnershipLostFault } from "../../domain/ownership";
+import type { FencingToken } from "../../domain/ownership";
 import {
   availableResultsPerWorkspaceHardCeiling,
   deliveryRecordsPerWorkspaceHardCeiling,
   pendingRequestsPerWorkspaceHardCeiling,
 } from "../../domain/safety-ceilings";
 import type { WorkspaceKey } from "../../domain/workspaces";
+import type { LinuxPathSyscalls, SqliteDatabaseLifecycle } from "./store-boundaries";
+import { StoreSecurityError } from "./store-errors";
 
-export interface LinuxFileStat {
-  readonly device?: number;
-  readonly inode?: number;
-  readonly uid: number;
-  readonly mode: number;
-  readonly size: number;
-  readonly nlink: number;
-  readonly isDirectory: boolean;
-  readonly isFile: boolean;
-}
-
-/** Narrow injectable boundary used by race and failure tests. */
-export interface LinuxPathSyscalls {
-  readonly open: (path: string, flags: number, mode?: number) => number;
-  readonly close: (descriptor: number) => void;
-  readonly mkdir: (path: string, mode: number) => void;
-  readonly fstat: (descriptor: number) => LinuxFileStat;
-  readonly fchmod: (descriptor: number, mode: number) => void;
-  readonly statfsType: (descriptorPath: string) => bigint;
-  readonly uid: () => number | undefined;
-}
-
-/** Minimal injectable boundary for deterministic database open/close failure tests. */
-export interface SqliteDatabaseLifecycle {
-  readonly open: (path: string, flags: number) => Database;
-  readonly close: (database: Database) => void;
-}
+export type { LinuxFileStat, LinuxPathSyscalls, SqliteDatabaseLifecycle } from "./store-boundaries";
+export { OwnershipUnavailableError, StoreIntegrityError, StoreSecurityError } from "./store-errors";
 
 export const sqliteStoreHardCeilings = {
   databaseBytes: 256 * 1024 * 1024,
@@ -65,10 +42,6 @@ export const sqliteStoreHardCeilings = {
   requestTraversalNodes: 2_048,
   rateWindowMs: 60_000,
 } as const;
-
-// Request ceilings deliberately fit the entire wait graph within 1,024 workspace nodes. Defaults
-// reserve modest per-session memory, while hard byte/rate limits bound SQLite and recursive-edge
-// work even when an operator raises every configurable value.
 
 export interface SqliteStoreLimits {
   readonly databaseBytes: number;
@@ -175,18 +148,6 @@ export interface StoreContext {
   localExpiresMonotonicMs: number;
   nextRenewMonotonicMs: number;
   startupBlockedToken: FencingToken | undefined;
-}
-
-export class StoreSecurityError extends Error {
-  override readonly name = "StoreSecurityError";
-}
-
-export class StoreIntegrityError extends Error {
-  override readonly name = "StoreIntegrityError";
-}
-
-export class OwnershipUnavailableError extends OwnershipLostFault {
-  override readonly name = "OwnershipUnavailableError";
 }
 
 function boundedInteger(name: keyof SqliteStoreLimits, value: number, ceiling: number): number {
