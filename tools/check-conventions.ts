@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 
-import ts from "typescript";
+import ts from "typescript-compiler-api";
 
 import { checkArchitecture } from "./convention-architecture";
 
@@ -378,6 +378,12 @@ function isExactVersion(version: string): boolean {
   return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
 }
 
+function isExactNpmAlias(version: string): boolean {
+  return /^npm:(?:@[a-z0-9-]+\/)?[a-z0-9-]+@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(
+    version,
+  );
+}
+
 function isBoundedPeerRange(version: string): boolean {
   const match =
     /^>=(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*) <(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(
@@ -398,14 +404,18 @@ function isBoundedPeerRange(version: string): boolean {
 
 function isAllowedDependencyVersion(field: string, version: unknown): boolean {
   if (typeof version !== "string") return false;
-  return isExactVersion(version) || (field === "peerDependencies" && isBoundedPeerRange(version));
+  return (
+    isExactVersion(version) ||
+    isExactNpmAlias(version) ||
+    (field === "peerDependencies" && isBoundedPeerRange(version))
+  );
 }
 
 function dependencyVersionMessage(field: string, name: string): string {
   if (field === "peerDependencies") {
     return `${field}.${name} must pin an exact version or a bounded peer range.`;
   }
-  return `${field}.${name} must pin an exact semantic version.`;
+  return `${field}.${name} must pin an exact semantic version or npm alias.`;
 }
 
 function checkPackageJson(

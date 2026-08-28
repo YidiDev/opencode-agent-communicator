@@ -1,14 +1,15 @@
 import { realpathSync } from "node:fs";
 import { type ToolContext, type ToolDefinition, tool } from "@opencode-ai/plugin";
-import { type ZodRawShape, z } from "zod";
+import { z } from "zod";
 import { domainFailure } from "../domain/results";
 import type { InternalToolContract, StructuralToolContext } from "../tools/contracts";
 import type { ActiveInvocationRegistry } from "./active-invocations";
 import type { WorkspaceBinding } from "./workspace";
 
-function hostShape(schema: z.ZodType): ZodRawShape {
+function hostShape(schema: z.ZodType): Parameters<typeof tool>[0]["args"] {
   if (!(schema instanceof z.ZodObject)) throw new TypeError("Tool arguments must be a Zod object.");
-  return schema.shape;
+  // OpenCode pins an older Zod 4 minor whose schemas remain runtime-compatible but nominally differ.
+  return schema.shape as unknown as Parameters<typeof tool>[0]["args"];
 }
 
 function adaptContext(context: ToolContext, abort: AbortSignal): StructuralToolContext {

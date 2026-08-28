@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { extname, join, relative, resolve, sep } from "node:path";
 
-import ts from "typescript";
+import ts from "typescript-compiler-api";
 
 const sourceExtensions = new Set([".cts", ".mts", ".ts", ".tsx"]);
 

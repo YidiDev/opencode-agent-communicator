@@ -5,7 +5,7 @@ configuration, and values above compiled safety ceilings stop startup before the
 
 ```json
 [
-  "file:///home/operator/.local/share/opencode-agent-communicator/v0.1.4/node_modules/opencode-agent-communicator/src/index.ts",
+  "file:///home/operator/.local/share/opencode-agent-communicator/v0.2.0/node_modules/opencode-agent-communicator/src/index.ts",
   {
     "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
     "startupDeadlineMs": 30000,
@@ -57,7 +57,7 @@ configuration, and values above compiled safety ceilings stop startup before the
 `XDG_STATE_HOME` or `HOME/.local/state`, outside the workspace; the store verifies ownership,
 permissions, no-follow traversal, and filesystem support. This implementation fails closed on any
 runtime other than Linux x64 before it opens the state store. Linux ARM64 and all other CPU
-architectures are outside the certified `0.1.4` package scope; package metadata also restricts
+architectures are outside the certified `0.2.0` package scope; package metadata also restricts
 installation to x64. Install the immutable private Git release externally with npm, then configure
 its absolute `file://` source entry; OpenCode `1.18.x` does not reliably populate its cache directly
 from a private `git+ssh` spec. Bun `1.4.0` remains the exact development and verification target.

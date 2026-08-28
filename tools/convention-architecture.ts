@@ -1,6 +1,6 @@
 import { dirname, extname, join, resolve } from "node:path";
 
-import ts from "typescript";
+import ts from "typescript-compiler-api";
 
 type Layer = "domain" | "application" | "tools" | "native" | "store" | "export" | "composition";
 
