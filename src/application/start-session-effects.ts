@@ -2,7 +2,6 @@ import type { FencingToken } from "../domain/ownership";
 import type { DomainResult } from "../domain/results";
 import { isCoherentStartOperation, type StartOperation } from "../domain/session-start";
 import { runUntilAborted } from "./abortable-operation";
-import type { NativeQueueAdmission } from "./delivery-ports";
 import type { SessionStartContext, SessionStartPorts } from "./session-start-application";
 import type { StartStoreResult } from "./session-start-ports";
 import { ownershipCurrent, prepareStartEffect } from "./start-session-effect-preparation";
@@ -18,46 +17,6 @@ export {
   StartEffectContractFault,
   startStoreFailure,
 } from "./start-session-effect-results";
-
-function validQueueOutcome(value: unknown): value is NativeQueueAdmission {
-  let candidate: Record<string, unknown>;
-  let keys: PropertyKey[];
-  try {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-    if (![Object.prototype, null].includes(Object.getPrototypeOf(value))) return false;
-    keys = Reflect.ownKeys(value);
-    candidate = Object.create(null);
-    for (const key of keys) {
-      if (typeof key !== "string") return false;
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (!descriptor?.enumerable || !("value" in descriptor)) return false;
-      candidate[key] = descriptor.value;
-    }
-  } catch {
-    return false;
-  }
-  if (candidate.kind === "unknown" || candidate.kind === "definitive_rejection")
-    return keys.length === 1;
-  if (candidate.kind === "admitted") {
-    return (
-      keys.length === 3 &&
-      Number.isSafeInteger(candidate.admittedSeq) &&
-      (candidate.admittedSeq as number) >= 0 &&
-      Number.isSafeInteger(candidate.observedAtMs) &&
-      (candidate.observedAtMs as number) >= 0
-    );
-  }
-  return (
-    candidate.kind === "promoted" &&
-    keys.length === 4 &&
-    Number.isSafeInteger(candidate.admittedSeq) &&
-    (candidate.admittedSeq as number) >= 0 &&
-    Number.isSafeInteger(candidate.promotedSeq) &&
-    (candidate.promotedSeq as number) > (candidate.admittedSeq as number) &&
-    Number.isSafeInteger(candidate.observedAtMs) &&
-    (candidate.observedAtMs as number) >= 0
-  );
-}
 
 export async function runStartCreation(
   ports: SessionStartPorts,
@@ -217,20 +176,22 @@ export async function runStartAdmission(
   const claim = await prepareStartEffect(ports, context, token, operation, "admission");
   if (!claim.ok) return claim;
   const called = await runUntilAborted(context.abort, () =>
-    ports.nativeQueue.queueMessage({
-      targetSessionId: operation.sessionId,
+    ports.nativeStart.admitInitialMessage({
+      sessionId: operation.sessionId,
       nativeMessageId: operation.nativeMessageId,
-      envelope: claim.value.arguments.initialMessage,
+      message: claim.value.arguments.initialMessage,
+      ...(claim.value.arguments.agent === undefined ? {} : { agent: claim.value.arguments.agent }),
+      ...(claim.value.arguments.model === undefined ? {} : { model: claim.value.arguments.model }),
       abort: context.abort,
     }),
   );
-  const native: unknown = called.kind === "settled" ? called.value : { kind: "unknown" };
-  if (!validQueueOutcome(native))
-    throw new StartEffectContractFault("The native queue adapter returned a malformed outcome.");
+  const native: unknown = called.kind === "settled" ? called.value : "unknown";
+  if (!new Set(["admitted", "definitive_rejection", "unknown"]).has(native as string))
+    throw new StartEffectContractFault("The native start adapter returned a malformed outcome.");
   const state =
-    native.kind === "unknown"
+    native === "unknown"
       ? "admission_unknown"
-      : native.kind === "definitive_rejection"
+      : native === "definitive_rejection"
         ? "failed"
         : "admitted";
   if (!(await ownershipCurrent(ports, token)))

@@ -123,10 +123,8 @@ function ports(creation: "created" | "unknown" = "created"): Omit<SessionStartPo
       async updateSessionTitle() {
         return "updated";
       },
-    },
-    nativeQueue: {
-      async queueMessage() {
-        return { kind: "admitted", admittedSeq: 1, observedAtMs: 12 };
+      async admitInitialMessage() {
+        return "admitted";
       },
     },
     ownership: { acquire: async () => fencingToken, isCurrent: async () => true },

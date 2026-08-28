@@ -2,14 +2,24 @@ import { expect, test } from "bun:test";
 
 import { isAuthoritativeClientRejection } from "../../../../src/adapters/native/opencode-1-18-admission";
 import {
+  admitLegacyInitialMessage,
   createDeterministicRootSession,
   reconcileDeterministicRootSession,
   updateAndVerifySessionTitle,
 } from "../../../../src/adapters/native/opencode-1-18-start";
-import { validateManagedSessionId } from "../../../../src/domain/generated-ids";
+import {
+  validateManagedSessionId,
+  validateNativeMessageId,
+} from "../../../../src/domain/generated-ids";
 
 function sessionId() {
   const result = validateManagedSessionId(`ses_${"a".repeat(32)}`);
+  if (!result.ok) throw new Error("invalid fixture");
+  return result.value;
+}
+
+function messageId() {
+  const result = validateNativeMessageId(`msg_${"b".repeat(32)}`);
   if (!result.ok) throw new Error("invalid fixture");
   return result.value;
 }
@@ -22,6 +32,16 @@ function info(title = "Untitled") {
     location: { directory: "/workspace" },
     cost: 0,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 1, updated: 1 },
+  };
+}
+
+function publicInfo(title = "Untitled") {
+  return {
+    id: sessionId(),
+    projectID: "project",
+    directory: "/workspace",
+    title,
     time: { created: 1, updated: 1 },
   };
 }
@@ -227,20 +247,12 @@ test("accepts only a genuine optional SDK request in authoritative rejection env
   }
 });
 
-test("verifies legacy title update through V2 read-back", async () => {
+test("verifies the title directly from the public update response", async () => {
   const result = await updateAndVerifySessionTitle(
     {
-      async create() {
-        throw new Error("not used");
-      },
-      async get() {
-        return { data: { data: info("Exact title") } };
-      },
-    },
-    {
-      async updateTitle(input) {
+      async updateTitle(input: { readonly title: string }) {
         expect(input.title).toBe("Exact title");
-        return { data: info("Exact title") };
+        return { data: publicInfo("Exact title") };
       },
     },
     "/workspace",
@@ -350,14 +362,9 @@ test("fails closed for hostile snapshots, non-success data envelopes, and transp
 });
 
 test("title updates distinguish authoritative rejection while preserving ambiguous outcomes", async () => {
-  const v2 = {
-    create: async () => undefined,
-    get: async () => ({ data: { data: info("Different title") } }),
-  };
   const abort = new AbortController().signal;
   expect(
     await updateAndVerifySessionTitle(
-      v2,
       {
         updateTitle: async () => ({
           error: { _tag: "SessionNotFoundError", sessionID: sessionId(), message: "not found" },
@@ -369,16 +376,14 @@ test("title updates distinguish authoritative rejection while preserving ambiguo
     ),
   ).toBe("definitive_rejection");
   expect(
-    await updateAndVerifySessionTitle(
-      v2,
-      { updateTitle: async () => ({ data: true }) },
-      "/workspace",
-      { sessionId: sessionId(), title: "Exact title", abort },
-    ),
+    await updateAndVerifySessionTitle({ updateTitle: async () => ({ data: true }) }, "/workspace", {
+      sessionId: sessionId(),
+      title: "Exact title",
+      abort,
+    }),
   ).toBe("unknown");
   expect(
     await updateAndVerifySessionTitle(
-      v2,
       {
         updateTitle: async () => {
           throw new Error("private title fault");
@@ -386,6 +391,174 @@ test("title updates distinguish authoritative rejection while preserving ambiguo
       },
       "/workspace",
       { sessionId: sessionId(), title: "Exact title", abort },
+    ),
+  ).toBe("unknown");
+});
+
+test("admits the initial message through a correlated public transcript response", async () => {
+  const calls: unknown[] = [];
+  const result = await admitLegacyInitialMessage(
+    {
+      async prompt(input) {
+        calls.push(input);
+        return {
+          data: {
+            info: {
+              id: "msg_assistant",
+              sessionID: sessionId(),
+              parentID: messageId(),
+              role: "assistant",
+            },
+            parts: [],
+          },
+          response: new Response(null, { status: 200 }),
+        };
+      },
+    },
+    "/workspace",
+    {
+      sessionId: sessionId(),
+      nativeMessageId: messageId(),
+      message: "Visible prompt",
+      agent: "worker",
+      model: "openai/gpt-5",
+      abort: new AbortController().signal,
+    },
+  );
+  expect(result).toBe("admitted");
+  expect(calls).toEqual([
+    {
+      sessionID: sessionId(),
+      directory: "/workspace",
+      messageID: messageId(),
+      agent: "worker",
+      model: { providerID: "openai", modelID: "gpt-5" },
+      parts: [{ type: "text", text: "Visible prompt" }],
+    },
+  ]);
+});
+
+test("fails closed for uncorrelated or malformed public prompt responses", async () => {
+  const input = {
+    sessionId: sessionId(),
+    nativeMessageId: messageId(),
+    message: "Visible prompt",
+    abort: new AbortController().signal,
+  };
+  for (const response of [
+    {
+      data: {
+        info: { sessionID: "ses_other", parentID: messageId(), role: "assistant" },
+        parts: [],
+      },
+    },
+    {
+      data: {
+        info: { sessionID: sessionId(), parentID: "msg_other", role: "assistant" },
+        parts: [],
+      },
+    },
+    { data: { info: { sessionID: sessionId(), parentID: messageId(), role: "user" }, parts: [] } },
+    {
+      data: {
+        info: { sessionID: sessionId(), parentID: messageId(), role: "assistant" },
+        parts: {},
+      },
+    },
+    {
+      data: {
+        info: { sessionID: sessionId(), parentID: messageId(), role: "assistant" },
+        parts: [],
+      },
+      response: Object.create(Response.prototype),
+    },
+    {
+      data: {
+        info: { sessionID: sessionId(), parentID: messageId(), role: "assistant" },
+        parts: [],
+      },
+      request: Object.create(Request.prototype),
+    },
+    new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("hostile envelope");
+        },
+      },
+    ),
+  ]) {
+    expect(
+      await admitLegacyInitialMessage({ prompt: async () => response }, "/workspace", input),
+    ).toBe("unknown");
+  }
+});
+
+test("classifies public prompt rejection, malformed model, cancellation, and transport ambiguity", async () => {
+  const base = {
+    sessionId: sessionId(),
+    nativeMessageId: messageId(),
+    message: "Visible prompt",
+    abort: new AbortController().signal,
+  };
+  expect(
+    await admitLegacyInitialMessage(
+      {
+        prompt: async () => ({
+          error: { _tag: "InvalidRequestError", message: "rejected" },
+          request: new Request("http://opencode.internal/session"),
+          response: new Response(null, { status: 400 }),
+        }),
+      },
+      "/workspace",
+      base,
+    ),
+  ).toBe("definitive_rejection");
+  expect(
+    await admitLegacyInitialMessage({ prompt: async () => undefined }, "/workspace", {
+      ...base,
+      model: "malformed",
+    }),
+  ).toBe("definitive_rejection");
+  const aborted = new AbortController();
+  aborted.abort();
+  expect(
+    await admitLegacyInitialMessage({ prompt: async () => undefined }, "/workspace", {
+      ...base,
+      abort: aborted.signal,
+    }),
+  ).toBe("unknown");
+  const raced = new AbortController();
+  expect(
+    await admitLegacyInitialMessage(
+      {
+        prompt: async () => {
+          raced.abort();
+          return {
+            data: {
+              info: {
+                sessionID: sessionId(),
+                parentID: messageId(),
+                role: "assistant",
+              },
+              parts: [],
+            },
+          };
+        },
+      },
+      "/workspace",
+      { ...base, abort: raced.signal },
+    ),
+  ).toBe("unknown");
+  expect(
+    await admitLegacyInitialMessage(
+      {
+        prompt: async () => {
+          throw new Error("transport failed");
+        },
+      },
+      "/workspace",
+      base,
     ),
   ).toBe("unknown");
 });

@@ -49,6 +49,7 @@ function nativeFixture(): OpenCodeNativeAdapter {
     createRootSession: async () => "unknown",
     reconcileRootSession: async () => "unknown",
     updateSessionTitle: async () => "unknown",
+    admitInitialMessage: async () => "unknown",
     readParticipantPresence: async () => "present",
   };
 }

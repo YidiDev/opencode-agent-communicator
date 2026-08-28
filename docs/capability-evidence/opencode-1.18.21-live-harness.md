@@ -29,15 +29,18 @@ The test proves the following surfaces against the live binary:
   manifest, both bundled skills, and successful production disposal. The test invokes every tool
   through the live host. It proves successful list/send/delivery, ask/respond/get/ack, wait/signal,
   and approved start/stop paths; request listing; an authoritative target-role cancel rejection; and
-  the exact configured export-unavailable result. Dynamic request, delivery, operation, native
-  message, and session identities are correlated across those exact outputs. This does not claim a
-  successful cancel path or secure export, nor exhaustive policy/recovery coverage.
+  the exact configured export-unavailable result. Managed start evidence includes deterministic V2
+  creation followed by a public title update and blocking initial prompt; the public messages API and
+  pinned CLI export both contain the initial user message and assistant response under the requested
+  title. Dynamic request, delivery, operation, native message, and session identities are correlated
+  across those exact outputs. This does not claim a successful cancel path or secure export, nor
+  exhaustive policy/recovery coverage.
 - production receives the host's unmodified pinned `PluginInput`; there is no test client `Proxy`,
   fabricated health/list result, or loader wrapper. The exact first host effect is global health via
   a location-free narrow 1.18.21 V2 client. Only after that proof does production construct the
   native adapter and persistent resources. Runtime legacy root listing is reached through a narrow
-  pinned adapter because its generated `PluginInput` type omits the method; archive and V2-only
-  operations use the pinned internal V2 client.
+  pinned adapter because its generated `PluginInput` type omits the method; public title/transcript,
+  archive, and V2-only operations use the pinned internal client.
 
 All runtime evidence is written below a mode-0700 temporary root and recursively
 removed after the test. This is cleanup, not a forensic secure-erasure claim.

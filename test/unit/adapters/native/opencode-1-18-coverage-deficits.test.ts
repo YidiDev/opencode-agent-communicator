@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import { createOpenCode118NativeAdapter } from "../../../../src/adapters/native/opencode-1-18";
-import { validateManagedSessionId } from "../../../../src/domain/generated-ids";
+import {
+  validateManagedSessionId,
+  validateNativeMessageId,
+} from "../../../../src/domain/generated-ids";
 import { validateSessionId } from "../../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../../src/domain/workspaces";
 
@@ -16,6 +19,7 @@ const workspaceKey = valid(validateWorkspaceKey("workspace:coverage-deficits"));
 const sourceSessionId = valid(validateSessionId("ses_source"));
 const targetSessionId = valid(validateSessionId("ses_target"));
 const managedSessionId = valid(validateManagedSessionId(`ses_${"c".repeat(32)}`));
+const nativeMessageId = valid(validateNativeMessageId(`msg_${"d".repeat(32)}`));
 const envelope = (data: unknown) => ({ data });
 
 function v2Session(overrides: Record<string, unknown> = {}) {
@@ -42,7 +46,12 @@ function legacyClient(overrides: Record<string, unknown> = {}) {
 }
 
 function adapter(
-  input: { client?: unknown; session?: Record<string, unknown>; now?: () => number } = {},
+  input: {
+    client?: unknown;
+    session?: Record<string, unknown>;
+    publicSession?: Record<string, unknown>;
+    now?: () => number;
+  } = {},
 ) {
   return createOpenCode118NativeAdapter(
     {
@@ -56,6 +65,11 @@ function adapter(
       createV2Client: () => ({
         global: { health: async () => envelope({ healthy: true, version: "1.18.23" }) },
         experimental: { session: { list: async () => envelope([]) } },
+        session: {
+          update: async () => envelope(true),
+          prompt: async () => envelope(true),
+          ...input.publicSession,
+        },
         v2: { session: v2Session(input.session) },
       }),
     },
@@ -138,7 +152,7 @@ describe("OpenCode 1.18.23 exact native surface failures", () => {
     ).toBe("unknown");
   });
 
-  test("fails closed when the legacy title-update method is absent", async () => {
+  test("fails closed when the public title-update method is absent", async () => {
     const client = legacyClient({
       session: {
         status: async () => envelope({}),
@@ -146,12 +160,40 @@ describe("OpenCode 1.18.23 exact native surface failures", () => {
       },
     });
     expect(
-      await adapter({ client, session: { get: async () => envelope({}) } }).updateSessionTitle({
+      await adapter({
+        client,
+        session: { get: async () => envelope({}) },
+        publicSession: { update: true },
+      }).updateSessionTitle({
         sessionId: managedSessionId,
         title: "Renamed",
         abort: new AbortController().signal,
       }),
     ).toBe("unknown");
+  });
+
+  test("routes initial start admission through the public prompt surface", async () => {
+    const current = adapter({
+      publicSession: {
+        prompt: async () =>
+          envelope({
+            info: {
+              sessionID: managedSessionId,
+              parentID: nativeMessageId,
+              role: "assistant",
+            },
+            parts: [],
+          }),
+      },
+    });
+    expect(
+      await current.admitInitialMessage({
+        sessionId: managedSessionId,
+        nativeMessageId,
+        message: "visible",
+        abort: new AbortController().signal,
+      }),
+    ).toBe("admitted");
   });
 });
 

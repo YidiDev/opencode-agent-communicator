@@ -136,9 +136,7 @@ function fixture(step: StartStep) {
       reconcileRootSession: async () => "unknown",
       createRootSession: async () => "created",
       updateSessionTitle: async () => "updated",
-    },
-    nativeQueue: {
-      queueMessage: async () => ({ kind: "admitted", admittedSeq: 1, observedAtMs: 2 }),
+      admitInitialMessage: async () => "admitted",
     },
     ownership: { acquire: async () => token, isCurrent: async () => true },
     clock: { nowMs: () => 3 },
@@ -337,43 +335,47 @@ describe("session-start title and admission effect boundaries", () => {
       ok: false,
       error: { code: "native_outcome_unknown" },
     });
+    const lost = fixture("title");
+    let ownershipReads = 0;
+    lost.ports.ownership.isCurrent = async () => ++ownershipReads === 1;
+    expect(await runStartTitle(lost.ports, context(), token, lost.initial)).toMatchObject({
+      ok: false,
+      error: { code: "native_outcome_unknown" },
+    });
+    const malformedCompletion = fixture("title");
+    malformedCompletion.ports.starts.completeTitle = async () => ({
+      ok: true,
+      operation: { ...malformedCompletion.claimed, titleState: "prepared" },
+    });
+    await expect(
+      runStartTitle(malformedCompletion.ports, context(), token, malformedCompletion.initial),
+    ).rejects.toThrow("completion result");
   });
 
-  test("validates exact native admission shapes and maps terminal outcomes", async () => {
-    for (const native of [
-      { kind: "unknown" },
-      { kind: "definitive_rejection" },
-      { kind: "promoted", admittedSeq: 1, promotedSeq: 2, observedAtMs: 3 },
-    ] as const) {
+  test("validates exact native start admission outcomes and maps terminal outcomes", async () => {
+    for (const native of ["unknown", "definitive_rejection", "admitted"] as const) {
       const current = fixture("admission");
-      current.ports.nativeQueue.queueMessage = async () => native;
+      current.ports.nativeStart.admitInitialMessage = async () => native;
       expect((await runStartAdmission(current.ports, context(), token, current.initial)).ok).toBe(
         true,
       );
     }
-    for (const native of [
-      null,
-      [],
-      { kind: "unknown", extra: true },
-      { kind: "admitted", admittedSeq: 1, observedAtMs: Number.NaN },
-      { kind: "admitted", admittedSeq: -1, observedAtMs: 2 },
-      { kind: "admitted", admittedSeq: 1, observedAtMs: -1 },
-      { kind: "admitted", admittedSeq: 1, observedAtMs: Number.MAX_SAFE_INTEGER + 1 },
-      { kind: "promoted", admittedSeq: 1, promotedSeq: 2 },
-      { kind: "promoted", admittedSeq: -1, promotedSeq: 2, observedAtMs: 3 },
-      { kind: "promoted", admittedSeq: 2, promotedSeq: 2, observedAtMs: 3 },
-      { kind: "promoted", admittedSeq: 2, promotedSeq: 1, observedAtMs: 3 },
-      {
-        kind: "promoted",
-        admittedSeq: 1,
-        promotedSeq: Number.MAX_SAFE_INTEGER + 1,
-        observedAtMs: 3,
-      },
-      { kind: "promoted", admittedSeq: 1, promotedSeq: 2, observedAtMs: -1 },
-      { kind: "future" },
-    ]) {
+    const overrides = fixture("admission");
+    overrides.ports.starts.claimStep = async () => ({
+      ok: true,
+      operation: overrides.claimed,
+      arguments: { ...arguments_, agent: "worker", model: "openai/gpt-5" },
+    });
+    overrides.ports.nativeStart.admitInitialMessage = async (input) => {
+      expect(input).toMatchObject({ agent: "worker", model: "openai/gpt-5" });
+      return "admitted";
+    };
+    expect((await runStartAdmission(overrides.ports, context(), token, overrides.initial)).ok).toBe(
+      true,
+    );
+    for (const native of [null, [], {}, "future", new String("unknown")]) {
       const malformed = fixture("admission");
-      malformed.ports.nativeQueue.queueMessage = async () => native as never;
+      malformed.ports.nativeStart.admitInitialMessage = async () => native as never;
       await expect(
         runStartAdmission(malformed.ports, context(), token, malformed.initial),
       ).rejects.toThrow("malformed outcome");

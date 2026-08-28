@@ -17,6 +17,7 @@ import { validateWorkspaceKey } from "../../domain/workspaces";
 import { createAdmissionOperations, createObservationOperations } from "./opencode-1-18-operations";
 import { createDirectParticipantPresencePort } from "./opencode-1-18-presence";
 import {
+  admitLegacyInitialMessage,
   createDeterministicRootSession,
   reconcileDeterministicRootSession,
   updateAndVerifySessionTitle,
@@ -37,6 +38,27 @@ interface V2ClientSurface {
         options?: { readonly signal?: AbortSignal },
       ): Promise<unknown>;
     };
+  };
+  readonly session?: {
+    update(
+      parameters: {
+        readonly sessionID: string;
+        readonly directory: string;
+        readonly title: string;
+      },
+      options: { readonly signal: AbortSignal },
+    ): Promise<unknown>;
+    prompt(
+      parameters: {
+        readonly sessionID: string;
+        readonly directory: string;
+        readonly messageID: string;
+        readonly model?: { readonly providerID: string; readonly modelID: string };
+        readonly agent?: string;
+        readonly parts: [{ readonly type: "text"; readonly text: string }];
+      },
+      options: { readonly signal: AbortSignal },
+    ): Promise<unknown>;
   };
   readonly v2: {
     readonly session: {
@@ -86,10 +108,6 @@ interface LegacyClientSurface {
     parameters: { readonly sessionID: string; readonly directory: string },
     options: { readonly signal: AbortSignal },
   ): Promise<unknown>;
-  updateTitle(
-    parameters: { readonly sessionID: string; readonly directory: string; readonly title: string },
-    options: { readonly signal: AbortSignal },
-  ): Promise<unknown>;
 }
 
 export interface OpenCodeNativeAdapterDependencies {
@@ -132,9 +150,6 @@ function legacySurface(client: unknown): LegacyClientSurface {
     },
     async interrupt(parameters, options): Promise<unknown> {
       return abort(parameters, options);
-    },
-    async updateTitle(parameters, options): Promise<unknown> {
-      return method(session, "update", "Legacy session title update")(parameters, options);
     },
   };
 }
@@ -182,6 +197,27 @@ export function createOpenCode118NativeAdapter(
       "Pinned root/archive listing",
     )(parameters, options) as Promise<unknown>;
   const startSession = startSessionSurface(v2.v2.session);
+  const publicStartSession = {
+    updateTitle: async (
+      parameters: {
+        readonly sessionID: string;
+        readonly directory: string;
+        readonly title: string;
+      },
+      options: { readonly signal: AbortSignal },
+    ) => method(v2.session, "update", "Public session title update")(parameters, options),
+    prompt: async (
+      parameters: {
+        readonly sessionID: string;
+        readonly directory: string;
+        readonly messageID: string;
+        readonly model?: { readonly providerID: string; readonly modelID: string };
+        readonly agent?: string;
+        readonly parts: [{ readonly type: "text"; readonly text: string }];
+      },
+      options: { readonly signal: AbortSignal },
+    ) => method(v2.session, "prompt", "Public session prompt")(parameters, options),
+  };
   const participantPresence = createDirectParticipantPresencePort(startSession);
   const now = dependencies.now ?? Date.now;
   const configuredWorkspace = validateWorkspaceKey(input.workspaceKey);
@@ -232,7 +268,10 @@ export function createOpenCode118NativeAdapter(
       return reconcileDeterministicRootSession(startSession, input.directory, request);
     },
     async updateSessionTitle(request) {
-      return updateAndVerifySessionTitle(startSession, legacy, input.directory, request);
+      return updateAndVerifySessionTitle(publicStartSession, input.directory, request);
+    },
+    async admitInitialMessage(request) {
+      return admitLegacyInitialMessage(publicStartSession, input.directory, request);
     },
   };
 }
