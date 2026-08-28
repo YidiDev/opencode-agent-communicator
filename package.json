@@ -70,7 +70,7 @@
   "dependencies": {
     "@opencode-ai/plugin": "1.18.23",
     "@opencode-ai/sdk": "1.18.23",
-    "zod": "4.1.8"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.10",
