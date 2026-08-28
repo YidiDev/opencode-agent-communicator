@@ -6,10 +6,8 @@
 [![OpenCode 1.18.21 live acceptance](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** `0.1.0` is unreleased until its tag is created and its npm trusted-publishing
-workflow completes. The current source is prerelease quality and supports exactly Linux x64,
-OpenCode `1.18.21`, and Bun `1.4.0`; other architectures, operating systems, and versions are
-unsupported.
+**Release status:** `0.1.0` supports exactly Linux x64, OpenCode `1.18.21`, and Bun `1.4.0`;
+other architectures, operating systems, and versions are unsupported.
 
 ## Contents
 
@@ -47,18 +45,16 @@ release gates. Network and clustered filesystems are rejected for the state stor
 
 ## Install
 
-### 1. Add the plugin from GitHub
+### 1. Add the plugin
 
-Until `0.1.0` is published to npm, install the reviewed release candidate directly from GitHub. The
-repository is currently private, so the account running OpenCode must have working SSH access to it.
-Use the full commit SHA rather than `main` so startup always resolves the same source:
+Pin the published package version so startup always resolves the same source:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#d7456f0237e3a43db57fbc940a49e8c048ae847a",
+      "opencode-agent-communicator@0.1.0",
       {
         "policies": {
           "message": "allow",
@@ -72,14 +68,9 @@ Use the full commit SHA rather than `main` so startup always resolves the same s
 }
 ```
 
-OpenCode `1.18.21` accepts plugin entries as either a package string or `[package, options]` and its
-package installer accepts Git dependency specifiers. This plugin uses the tuple form because its
-options are strict and package-specific. OpenCode clones and installs the pinned repository into its
-package cache; no project-level clone or `bun add` is required. To upgrade a Git installation, replace
-the SHA with a newer reviewed commit and restart OpenCode.
-
-After the package is published, the Git URL can be replaced with
-`opencode-agent-communicator@0.1.0`. Do not use that npm specifier before publication.
+OpenCode `1.18.21` accepts plugin entries as either a package string or `[package, options]`. This
+plugin uses the tuple form because its options are strict and package-specific. OpenCode installs
+the pinned package into its package cache; no project-level clone or `bun add` is required.
 
 ### 2. Prepare private state
 
@@ -113,7 +104,7 @@ configuration are startup errors.
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#d7456f0237e3a43db57fbc940a49e8c048ae847a",
+      "opencode-agent-communicator@0.1.0",
       {
         "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
         "startupDeadlineMs": 30000,
@@ -385,8 +376,7 @@ version. Before replacing a development build:
 
 1. Stop every OpenCode backend that uses the state directory.
 2. Back up the entire private state directory, including SQLite sidecars, while no backend is running.
-3. Pin the GitHub installation to a reviewed full commit SHA and pin OpenCode `1.18.21` in
-   configuration. After npm publication, use `opencode-agent-communicator@0.1.0` instead.
+3. Pin `opencode-agent-communicator@0.1.0` and OpenCode `1.18.21` in configuration.
 4. Restart OpenCode and verify plugin startup and the 14-tool manifest.
 
 Startup applies forward SQLite migrations atomically. Production never runs migration `downSql`.

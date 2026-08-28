@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 1
+          fetch-depth: 0
           fetch-tags: false
           persist-credentials: false
       - name: Require the tagged commit to be reachable from trusted main
@@ -31,10 +31,6 @@ jobs:
         run: |
           [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-          fetch_depth=()
-          test ! -f "$(git rev-parse --git-path shallow)" || fetch_depth=(--unshallow)
-          git fetch --no-tags --prune "${fetch_depth[@]}" origin \
-            '+refs/heads/main:refs/remotes/origin/main'
           git merge-base --is-ancestor "$RELEASE_COMMIT" refs/remotes/origin/main
       - name: Require an exact v<package-version> tag
         env:

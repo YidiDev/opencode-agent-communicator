@@ -6,8 +6,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
-The `0.1.0` contents below are unreleased until the matching tag is created and the trusted
-publishing workflow completes.
+## [0.1.0] - 2026-08-28
 
 ### Added
 
@@ -32,4 +31,5 @@ publishing workflow completes.
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/commits/main
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/YidiDev/opencode-agent-communicator/releases/tag/v0.1.0
