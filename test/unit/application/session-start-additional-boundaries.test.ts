@@ -102,9 +102,7 @@ function effectFixture(step: StartStep) {
       reconcileRootSession: async () => "unknown",
       createRootSession: async () => "created",
       updateSessionTitle: async () => "updated",
-    },
-    nativeQueue: {
-      queueMessage: async () => ({ kind: "admitted", admittedSeq: 1, observedAtMs: 2 }),
+      admitInitialMessage: async () => "admitted",
     },
     ownership: { acquire: async () => token, isCurrent: async () => true },
     clock: { nowMs: () => 3 },
@@ -170,7 +168,7 @@ describe("session start effect crash boundaries", () => {
     });
   });
 
-  test("rejects exotic native queue outcomes without reading accessors", async () => {
+  test("rejects malformed native start admission outcomes", async () => {
     for (const native of [
       Object.create({ kind: "unknown" }),
       { kind: "admitted", admittedSeq: 1, observedAtMs: 2, [Symbol("extra")]: true },
@@ -185,7 +183,7 @@ describe("session start effect crash boundaries", () => {
       ),
     ]) {
       const current = effectFixture("admission");
-      current.ports.nativeQueue.queueMessage = async () => native as never;
+      current.ports.nativeStart.admitInitialMessage = async () => native as never;
       await expect(
         runStartAdmission(current.ports, context(), token, current.initial),
       ).rejects.toThrow("malformed outcome");

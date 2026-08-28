@@ -4,12 +4,7 @@ import type { SessionStartPolicy } from "../domain/session-start-policy";
 import type { SessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
 import type { CommunicatorReadinessPort } from "./communicator-readiness-port";
-import type {
-  ClockPort,
-  CurrentWorkspaceMembershipPort,
-  NativeQueueAdmissionPort,
-  OwnershipPort,
-} from "./delivery-ports";
+import type { ClockPort, CurrentWorkspaceMembershipPort, OwnershipPort } from "./delivery-ports";
 import type {
   NativeSessionStartPort,
   SessionStartApprovalPort,
@@ -37,7 +32,6 @@ export interface SessionStartPorts {
   readonly approval: SessionStartApprovalPort;
   readonly starts: StartOperationPersistencePort;
   readonly nativeStart: NativeSessionStartPort;
-  readonly nativeQueue: NativeQueueAdmissionPort;
   readonly ownership: OwnershipPort;
   readonly clock: ClockPort;
   readonly ids: GeneratedIdFactory;

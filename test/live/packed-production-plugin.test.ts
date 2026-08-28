@@ -33,6 +33,7 @@ setDefaultTimeout(liveDeadlineMs * 8);
 type Client = ReturnType<typeof createOpencodeClient>;
 
 interface PackedFixture {
+  readonly cliPath: string;
   readonly client: Client;
   readonly entryPath: string;
   readonly isolation: IsolatedOpenCodeState;
@@ -248,6 +249,7 @@ async function launchPackedFixture(): Promise<PackedFixture> {
     const state = isolation;
     const activeServe = serve;
     return {
+      cliPath,
       client: running.client,
       entryPath,
       isolation: state,
@@ -458,11 +460,9 @@ async function runStartStopJourney(
       idempotency_key: "packed-live-start",
       creation_state: "created",
       admission_state: "admitted",
+      title_state: "updated",
     },
   });
-  expect(["updated", "outcome_unknown"]).toContain(
-    Reflect.get(Reflect.get(started, "value") ?? {}, "title_state"),
-  );
   const startedSessionID = Reflect.get(Reflect.get(started, "value") ?? {}, "session_id");
   if (typeof startedSessionID !== "string") throw new Error("session_start returned no session ID");
   expect(
@@ -470,8 +470,36 @@ async function runStartStopJourney(
       await fixture.client.session.get({ sessionID: startedSessionID }),
       "created managed root",
     ),
-  ).toMatchObject({ id: startedSessionID });
+  ).toMatchObject({
+    id: startedSessionID,
+    title: "Packed managed target",
+  });
   await fixture.provider.waitForRequestText("Packed managed session ready check");
+  const transcript = successful(
+    await fixture.client.session.messages({ sessionID: startedSessionID }),
+    "managed public transcript",
+  );
+  expect(transcript.some((message) => message.info.role === "user")).toBe(true);
+  expect(transcript.some((message) => message.info.role === "assistant")).toBe(true);
+  expect(JSON.stringify(transcript)).toContain("Packed managed session ready check");
+  const exported = await runBoundedProcess({
+    command: fixture.cliPath,
+    arguments: ["export", startedSessionID],
+    cwd: fixture.isolation.project,
+    environment: fixture.isolation.environment,
+  });
+  expect(exported.exitCode).toBe(0);
+  expect(exported.stderr).toBe(`Exporting session: ${startedSessionID}\n`);
+  const exportDocument = JSON.parse(exported.stdout) as {
+    readonly info?: { readonly id?: unknown; readonly title?: unknown };
+    readonly messages?: readonly unknown[];
+  };
+  expect(exportDocument.info).toMatchObject({
+    id: startedSessionID,
+    title: "Packed managed target",
+  });
+  expect(exportDocument.messages?.length).toBeGreaterThanOrEqual(2);
+  expect(exported.stdout).toContain("Packed managed session ready check");
   const stop = await invoker.begin(
     "session_stop",
     `production-session-stop:${stopTargetSessionID}`,

@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-28
+
+### Fixed
+
+- Routed managed-root title updates and initial prompts through OpenCode's public session surface so
+  the TUI and `opencode export` display the requested title, initial user message, and assistant
+  response while retaining deterministic V2 session creation.
+- Required the packed production journey to prove the managed session's public transcript and CLI
+  export instead of accepting V2-only execution evidence.
+
 ## [0.2.2] - 2026-08-28
 
 ### Fixed
@@ -103,7 +113,8 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.1.4...v0.2.0

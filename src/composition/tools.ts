@@ -199,7 +199,6 @@ export function constructToolContracts(input: {
         ...common,
         starts: store.starts,
         nativeStart: native,
-        nativeQueue: native,
         ownership: store,
         clock,
         ids,

@@ -130,6 +130,7 @@ export interface StartOperationPersistencePort {
 export type NativeStartCreation = "created" | "collision" | "definitive_rejection" | "unknown";
 export type NativeStartReconciliation = "matching" | "absent" | "collision" | "unknown";
 export type NativeTitleUpdate = "updated" | "definitive_rejection" | "unknown";
+export type NativeInitialMessageAdmission = "admitted" | "definitive_rejection" | "unknown";
 export interface NativeSessionStartPort {
   createRootSession(input: {
     readonly sessionId: SessionId;
@@ -148,6 +149,14 @@ export interface NativeSessionStartPort {
     readonly title: string;
     readonly abort: AbortSignal;
   }): Promise<NativeTitleUpdate>;
+  admitInitialMessage(input: {
+    readonly sessionId: SessionId;
+    readonly nativeMessageId: NativeMessageId;
+    readonly message: string;
+    readonly agent?: string;
+    readonly model?: string;
+    readonly abort: AbortSignal;
+  }): Promise<NativeInitialMessageAdmission>;
 }
 
 export interface SessionStartApprovalPort {

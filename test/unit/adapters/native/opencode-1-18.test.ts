@@ -26,6 +26,7 @@ interface FixtureOptions {
   readonly startGets?: unknown[];
   readonly startCreateResponse?: unknown;
   readonly titleUpdateResponse?: unknown;
+  readonly publicPromptResponse?: unknown;
 }
 
 function envelope(data: unknown): { readonly data: unknown } {
@@ -70,6 +71,16 @@ function fixture(options: FixtureOptions = {}) {
                 isArchived ? (options.archivedRoots ?? []) : (options.visibleRoots ?? []),
               );
             },
+          },
+        },
+        session: {
+          async update(input, requestOptions): Promise<unknown> {
+            calls.push({ surface: "public.update", input: [input, requestOptions] });
+            return options.titleUpdateResponse;
+          },
+          async prompt(input, requestOptions): Promise<unknown> {
+            calls.push({ surface: "public.prompt", input: [input, requestOptions] });
+            return options.publicPromptResponse;
           },
         },
         v2: {
@@ -564,9 +575,15 @@ describe("OpenCode 1.18.23 native adapter start and validation boundaries", () =
     };
     const created = { data: { data: startedSession() } };
     const fake = fixture({
-      startGets: [absent, created, { data: { data: startedSession("Renamed") } }],
+      startGets: [absent, created],
       startCreateResponse: created,
-      titleUpdateResponse: { data: true },
+      titleUpdateResponse: {
+        data: {
+          id: managedSessionId,
+          directory: "/workspace",
+          title: "Renamed",
+        },
+      },
     });
     const abort = new AbortController().signal;
     expect(await fake.adapter.createRootSession({ sessionId: managedSessionId, abort })).toBe(
@@ -580,7 +597,8 @@ describe("OpenCode 1.18.23 native adapter start and validation boundaries", () =
       }),
     ).toBe("updated");
     expect(fake.calls.some((call) => call.surface === "v2.create")).toBe(true);
-    expect(fake.calls.some((call) => call.surface === "legacy.update")).toBe(true);
+    expect(fake.calls.some((call) => call.surface === "public.update")).toBe(true);
+    expect(fake.calls.some((call) => call.surface === "legacy.update")).toBe(false);
   });
 });
 

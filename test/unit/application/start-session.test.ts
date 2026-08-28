@@ -176,11 +176,9 @@ function fixture(input: { creation?: "created" | "unknown"; title?: "updated" | 
         calls.push("native:title");
         return input.title ?? "updated";
       },
-    },
-    nativeQueue: {
-      async queueMessage(request) {
-        calls.push(`native:admit:${request.nativeMessageId}:${request.envelope}`);
-        return { kind: "admitted", admittedSeq: 1, observedAtMs: 20 };
+      async admitInitialMessage(request) {
+        calls.push(`native:admit:${request.nativeMessageId}:${request.message}`);
+        return "admitted";
       },
     },
     ownership: {

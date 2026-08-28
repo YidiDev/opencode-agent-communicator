@@ -65,9 +65,7 @@ function fixture(): SessionStartPorts {
       reconcileRootSession: async () => "unknown",
       createRootSession: async () => "created",
       updateSessionTitle: async () => "updated",
-    },
-    nativeQueue: {
-      queueMessage: async () => ({ kind: "admitted", admittedSeq: 1, observedAtMs: 2 }),
+      admitInitialMessage: async () => "admitted",
     },
     ownership: { acquire: async () => token, isCurrent: async () => true },
     clock: { nowMs: () => 1 },
