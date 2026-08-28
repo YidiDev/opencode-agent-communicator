@@ -72,6 +72,15 @@ OpenCode `1.18.21` accepts plugin entries as either a package string or `[packag
 plugin uses the tuple form because its options are strict and package-specific. OpenCode installs
 the pinned package into its package cache; no project-level clone or `bun add` is required.
 
+To install `0.1.0` directly from GitHub instead, replace the package specifier above with:
+
+```text
+git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#df44d537ac73e98aca53ef5c8db56640aa4ca13a
+```
+
+The repository is private, so the account running OpenCode must have working GitHub SSH access.
+The full release commit SHA keeps the installation immutable; do not replace it with `main`.
+
 ### 2. Prepare private state
 
 The default state root is `$XDG_STATE_HOME/opencode-agent-communicator` or
