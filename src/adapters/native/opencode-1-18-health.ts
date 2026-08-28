@@ -6,14 +6,14 @@ interface PinnedHealthClient {
   readonly global: { health(): Promise<unknown> };
 }
 
-export interface OpenCode11821HealthDependencies {
+export interface OpenCode118HealthDependencies {
   readonly createClient?: (configuration: { readonly baseUrl: string }) => PinnedHealthClient;
 }
 
 /** Minimal pinned startup proof. Constructing the client performs no host request. */
-export function createOpenCode11821HealthPort(
+export function createOpenCode118HealthPort(
   input: PluginInput,
-  dependencies: OpenCode11821HealthDependencies = {},
+  dependencies: OpenCode118HealthDependencies = {},
 ): HostHealthPort {
   // PluginInput.client is the pinned legacy generated surface and does not declare global health.
   // Use only the missing pinned endpoint from the same package's generated V2 client.

@@ -6,7 +6,19 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-08-28
+## [0.1.1] - 2026-08-27
+
+### Changed
+
+- Expanded host compatibility from exact OpenCode `1.18.21` to stable versions
+  `>=1.18.21 <1.19.0`, while compiling and packaging against `1.18.23`.
+- Renamed the native adapter and live harness for the supported `1.18.x` line instead of one patch.
+- Added minimum/build-time compatibility testing to every pull request, main-branch push, and release
+  verification run.
+- Added grouped, patch-only Dependabot updates for the three OpenCode packages.
+- Made npm publication manual-only; `0.1.1` is distributed as a GitHub Release.
+
+## [0.1.0] - 2026-08-27
 
 ### Added
 
@@ -31,5 +43,6 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/YidiDev/opencode-agent-communicator/releases/tag/v0.1.1
 [0.1.0]: https://github.com/YidiDev/opencode-agent-communicator/releases/tag/v0.1.0

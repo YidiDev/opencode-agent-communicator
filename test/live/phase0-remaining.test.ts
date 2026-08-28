@@ -152,7 +152,7 @@ async function proveHostRawArgumentStripping(fixture: Fixture): Promise<void> {
     fixture.isolation.evidencePath,
     (item) => item.event === "executed" && item.sessionID === sessionID,
   );
-  // Pinned 1.18.21 preserves undeclared keys through execute, so composition's strict parse can
+  // Pinned 1.18.23 preserves undeclared keys through execute, so composition's strict parse can
   // authoritatively reject them rather than relying only on the advertised tool schema.
   expect(evidence.rawArguments).toEqual({ unknown_key: true });
 }

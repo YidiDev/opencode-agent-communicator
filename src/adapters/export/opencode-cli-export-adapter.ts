@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 
 import type { SessionExportAdapterPort } from "../../application/session-export-ports";
+import { isSupportedOpenCodeVersion } from "../../domain/host";
 import type { Sha256Digest } from "../../domain/message-payload";
 import { validateExportDestination } from "../../domain/session-export";
 import {
@@ -28,8 +29,6 @@ import {
 } from "./opencode-cli-trust";
 
 export type { OpenCodeCliExportConfiguration } from "./opencode-cli-trust";
-
-const exactVersion = "1.18.21";
 
 function pathFailure(
   cause: unknown,
@@ -102,7 +101,7 @@ export class OpenCodeCliExportAdapter implements SessionExportAdapterPort, Dispo
     if (
       version.kind !== "completed" ||
       version.exitCode !== 0 ||
-      new TextDecoder().decode(version.stdout).trim() !== exactVersion
+      !isSupportedOpenCodeVersion(new TextDecoder().decode(version.stdout).trim())
     ) {
       return "export_unavailable";
     }

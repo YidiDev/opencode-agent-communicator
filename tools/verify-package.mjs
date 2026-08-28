@@ -25,7 +25,7 @@ export const expectedToolIds = Object.freeze([
 // renamed, or reordered archive entry requires an explicit review and fingerprint update.
 export const expectedPackedPathPolicy = Object.freeze({
   entryCount: 196,
-  sha256: "a5007f37962b78f618fce3f78329314acbf8dd79d46b20b9101a4991baf26051",
+  sha256: "a21a22208c2b2195b66e356d44a2a0580fae00aa757e30b618f4a90daa5ca9f7",
 });
 
 const forbiddenPathSegments = new Set([
@@ -102,7 +102,7 @@ function packedReport(root) {
 
 export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
   const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
-  assert(packageJson.version === "0.1.0", "version must be 0.1.0");
+  assert(packageJson.version === "0.1.1", "version must be 0.1.1");
   assert(packageJson.private !== true, "package must be publishable");
   assert(packageJson.license === "MIT", "license metadata must match LICENSE");
   assert(
@@ -112,14 +112,18 @@ export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
   assert(packageJson.cpu?.length === 1 && packageJson.cpu[0] === "x64", "package must be x64-only");
   assert(packageJson.engines?.bun === "1.4.0", "Bun compatibility must be exact");
   assert(
-    packageJson.peerDependencies?.["opencode-ai"] === "1.18.21",
-    "OpenCode peer must be exact",
+    packageJson.peerDependencies?.["opencode-ai"] === ">=1.18.21 <1.19.0",
+    "OpenCode peer must match the certified minor line",
   );
   assert(
-    packageJson.dependencies?.["@opencode-ai/plugin"] === "1.18.21",
+    packageJson.engines?.opencode === ">=1.18.21 <1.19.0",
+    "OpenCode engine range must match the certified minor line",
+  );
+  assert(
+    packageJson.dependencies?.["@opencode-ai/plugin"] === "1.18.23",
     "plugin API must be exact",
   );
-  assert(packageJson.dependencies?.["@opencode-ai/sdk"] === "1.18.21", "SDK must be exact");
+  assert(packageJson.dependencies?.["@opencode-ai/sdk"] === "1.18.23", "SDK must be exact");
   assert(
     packageJson.exports?.["."] === "./src/index.ts",
     "export must use the Bun-loadable source entry",

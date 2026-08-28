@@ -84,7 +84,7 @@ function isExactCorrelatedNotFound(response: unknown, expectedSessionId: Session
 }
 
 /** Classifies only direct, ID-correlated V2 evidence; list omission is intentionally irrelevant. */
-export function classifyOpenCode11821DirectSessionPresence(
+export function classifyOpenCode118DirectSessionPresence(
   response: unknown,
   expectedSessionId: SessionId,
 ): ParticipantPresence {
@@ -111,7 +111,7 @@ export function createDirectParticipantPresencePort(
         const response = await surface.get({ sessionID: sessionId }, { signal: abort });
         return abort.aborted
           ? "unknown"
-          : classifyOpenCode11821DirectSessionPresence(response, sessionId);
+          : classifyOpenCode118DirectSessionPresence(response, sessionId);
       } catch {
         return "unknown";
       }

@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  createOpenCode11821NativeAdapter,
+  createOpenCode118NativeAdapter,
   type OpenCodeNativeAdapterDependencies,
-} from "../../../../src/adapters/native/opencode-1-18-21";
+} from "../../../../src/adapters/native/opencode-1-18";
 import { validateNativeMessageId } from "../../../../src/domain/generated-ids";
 import { validateSessionId } from "../../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../../src/domain/workspaces";
@@ -63,7 +63,7 @@ function fixture(options: FixtureOptions = {}) {
       },
     }),
   };
-  const adapter = createOpenCode11821NativeAdapter(
+  const adapter = createOpenCode118NativeAdapter(
     {
       client: {
         experimental: { session: { list: async () => ({ data: [] }) } },
@@ -85,7 +85,7 @@ function request(abort = new AbortController().signal) {
   return { targetSessionId, nativeMessageId, envelope: verifiedEnvelope, abort };
 }
 
-describe("OpenCode 1.18.21 native steer admission", () => {
+describe("OpenCode 1.18.23 native steer admission", () => {
   test("makes the exact pinned steer call once and accepts native admitted evidence", async () => {
     const controller = new AbortController();
     const fake = fixture();
@@ -174,7 +174,7 @@ describe("OpenCode 1.18.21 native steer admission", () => {
   test.each([
     ["outer envelope", null],
     ["outer error", { error: { secret: "hidden" }, data: { data: {} } }],
-    ["nested 1.18.21 envelope", { data: { admittedSeq: 8 } }],
+    ["nested 1.18.23 envelope", { data: { admittedSeq: 8 } }],
     ["nested data", { data: { data: null } }],
   ])("returns unknown for malformed %s", async (_label, response) => {
     const fake = fixture({ response });

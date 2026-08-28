@@ -8,7 +8,7 @@ import {
   type SessionDurableEvent,
   type SessionInputAdmitted,
 } from "@opencode-ai/sdk/v2/client";
-import { createOpenCode11821NativeAdapter } from "../../src/adapters/native/opencode-1-18-21";
+import { createOpenCode118NativeAdapter } from "../../src/adapters/native/opencode-1-18";
 import { validateNativeMessageId } from "../../src/domain/generated-ids";
 import { validateSessionId } from "../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../src/domain/workspaces";
@@ -617,7 +617,7 @@ async function proveProductionAdapterParsingAndMergedActivity(fixture: LiveFixtu
   ) {
     throw new Error("production adapter live fixture IDs are invalid");
   }
-  const adapter = createOpenCode11821NativeAdapter({
+  const adapter = createOpenCode118NativeAdapter({
     client: fixture.client,
     directory: fixture.isolation.project,
     serverUrl: new URL(fixture.baseUrl),

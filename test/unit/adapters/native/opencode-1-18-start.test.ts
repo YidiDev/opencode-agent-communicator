@@ -4,7 +4,7 @@ import {
   createDeterministicRootSession,
   reconcileDeterministicRootSession,
   updateAndVerifySessionTitle,
-} from "../../../../src/adapters/native/opencode-1-18-21-start";
+} from "../../../../src/adapters/native/opencode-1-18-start";
 import { validateManagedSessionId } from "../../../../src/domain/generated-ids";
 
 function sessionId() {

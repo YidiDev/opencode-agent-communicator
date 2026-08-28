@@ -1,4 +1,4 @@
-import type { OpenCodeNativeAdapter } from "../adapters/native/opencode-1-18-21";
+import type { OpenCodeNativeAdapter } from "../adapters/native/opencode-1-18";
 import type { LinuxBunSqliteStore } from "../adapters/store/sqlite-store";
 import type { RequestDeadlineTimerPort } from "../application/blocking-session-request-boundaries";
 import type { CommunicatorStartupRecoveryLifecycle } from "../application/communicator-startup-lifecycle";

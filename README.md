@@ -3,11 +3,12 @@
 > A Linux x64 OpenCode plugin that gives agents 14 bounded tools for durable, workspace-scoped session communication.
 
 [![Linux x64 verification](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/ci.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/ci.yml)
-[![OpenCode 1.18.21 live acceptance](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
+[![OpenCode 1.18 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** `0.1.0` supports exactly Linux x64, OpenCode `1.18.21`, and Bun `1.4.0`;
-other architectures, operating systems, and versions are unsupported.
+**Release status:** `0.1.1` supports Linux x64 and stable OpenCode versions
+`>=1.18.21 <1.19.0`. Bun `1.4.0` is required for installation and verification. Other
+architectures, operating systems, OpenCode versions, and prereleases are unsupported.
 
 ## Contents
 
@@ -33,11 +34,11 @@ It does not grant one agent authority over another and does not provide remote c
 ## Requirements
 
 - Linux x64 with a local filesystem suitable for SQLite WAL
-- OpenCode `1.18.21` exactly
+- A stable OpenCode version in `>=1.18.21 <1.19.0`
 - Bun `1.4.0` for package installation, development, and release verification
 - A dedicated private state directory owned by the account running OpenCode
 
-Plugin startup fails closed on another OpenCode version, operating system, or CPU architecture.
+Plugin startup fails closed on an unsupported OpenCode version, operating system, or CPU architecture.
 OpenCode executes plugins in its own embedded Bun runtime, so that value is not the external Bun
 version used to install the package; the external `1.4.0` pin is enforced by package metadata and
 release gates. Network and clustered filesystems are rejected for the state store. See
@@ -47,14 +48,14 @@ release gates. Network and clustered filesystems are rejected for the state stor
 
 ### 1. Add the plugin
 
-Pin the published package version so startup always resolves the same source:
+Pin the GitHub release tag so startup always resolves the same source:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "opencode-agent-communicator@0.1.0",
+      "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.1.1",
       {
         "policies": {
           "message": "allow",
@@ -68,18 +69,13 @@ Pin the published package version so startup always resolves the same source:
 }
 ```
 
-OpenCode `1.18.21` accepts plugin entries as either a package string or `[package, options]`. This
+Supported OpenCode `1.18.x` versions accept plugin entries as either a package string or
+`[package, options]`. This
 plugin uses the tuple form because its options are strict and package-specific. OpenCode installs
 the pinned package into its package cache; no project-level clone or `bun add` is required.
 
-To install `0.1.0` directly from GitHub instead, replace the package specifier above with:
-
-```text
-git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#df44d537ac73e98aca53ef5c8db56640aa4ca13a
-```
-
 The repository is private, so the account running OpenCode must have working GitHub SSH access.
-The full release commit SHA keeps the installation immutable; do not replace it with `main`.
+Release tags are immutable by project policy; do not replace `v0.1.1` with `main`.
 
 ### 2. Prepare private state
 
@@ -100,8 +96,8 @@ Restart every OpenCode backend that should load the plugin. Configuration and pl
 read at startup. Open a session and confirm that the tool list contains all 14 names from the table
 below. Registration is atomic: startup exposes all 14 or fails instead of leaving a partial tool set.
 
-If startup fails, run `opencode --version` and `bun --version` first. They must print `1.18.21` and
-`1.4.0` respectively.
+If startup fails, run `opencode --version` and `bun --version` first. OpenCode must report a stable
+version in `>=1.18.21 <1.19.0`, and Bun must report `1.4.0`.
 
 ## Configure
 
@@ -113,7 +109,7 @@ configuration are startup errors.
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "opencode-agent-communicator@0.1.0",
+      "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.1.1",
       {
         "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
         "startupDeadlineMs": 30000,
@@ -249,7 +245,7 @@ Export remains registered but returns `export_unavailable` until `root`, `execut
 `trustedWorkingDirectory` are all configured and trusted.
 
 1. Create a dedicated export root owned by the OpenCode account with mode `0700`.
-2. Point `executable` at the exact OpenCode `1.18.21` ELF. It and its path must satisfy the documented
+2. Point `executable` at a supported OpenCode `1.18.x` ELF. It and its path must satisfy the documented
    root-ownership and write-permission checks; a user-owned Bun wrapper is rejected.
 3. Create a root-owned, non-writable working directory outside the workspace, plugin package, state,
    and export trees. `/var/empty` is a common choice when prepared by an administrator.
@@ -321,7 +317,7 @@ See [Linux SQLite store assumptions](docs/linux-sqlite-store.md).
 - The plugin does not expose a shell, command string, network listener, or remote command-execution
   tool. `session_start` uses pinned OpenCode APIs; it does not accept a command.
 - `session_export` is disabled unless all three export trust paths are configured. Its only process is
-  a directly spawned, root-owned OpenCode `1.18.21` ELF executable with fixed argv construction, no
+  a directly spawned, root-owned, supported OpenCode `1.18.x` ELF executable with fixed argv construction, no
   shell, a minimal environment, bounded output, and a deadline.
 
 Secure export is a **Linux x64-only, capability-sensitive prerelease feature**. It requires kernel
@@ -378,14 +374,15 @@ are logical deletion, not secure erasure from old pages, snapshots, or media.
 
 ## Upgrade, migrate, or roll back
 
-### Upgrade to 0.1.0
+### Upgrade to 0.1.1
 
-This is the first public release, so there is no supported migration from an earlier published
-version. Before replacing a development build:
+Release `0.1.1` broadens the certified host range from exact OpenCode `1.18.21` to stable versions
+`>=1.18.21 <1.19.0`. It does not change the SQLite schema. Before replacing `0.1.0` or a development
+build:
 
 1. Stop every OpenCode backend that uses the state directory.
 2. Back up the entire private state directory, including SQLite sidecars, while no backend is running.
-3. Pin `opencode-agent-communicator@0.1.0` and OpenCode `1.18.21` in configuration.
+3. Pin the plugin to GitHub release tag `v0.1.1` and use a supported OpenCode patch.
 4. Restart OpenCode and verify plugin startup and the 14-tool manifest.
 
 Startup applies forward SQLite migrations atomically. Production never runs migration `downSql`.
@@ -429,9 +426,9 @@ acceptance must complete all capability tests with zero skips on both glibc and 
 
 ### Package verification
 
-The npm entry is the TypeScript source module `src/index.ts`. OpenCode `1.18.21` installs plugins with
-Bun and supports source-loaded TypeScript modules. The archive includes only runtime source, bundled
-skills, operational documentation, and release/legal files.
+The package entry is the TypeScript source module `src/index.ts`. Supported OpenCode `1.18.x`
+versions install plugins with Bun and support source-loaded TypeScript modules. The archive includes
+only runtime source, bundled skills, operational documentation, and release/legal files.
 
 ```bash
 bun run verify:package
@@ -439,18 +436,17 @@ npm pack --dry-run
 bun run test:black-box
 ```
 
-`prepack` verifies the entry, Linux x64 package scope, exact host pins, exact ordered 14-tool
-manifest, and a reviewed
+`prepack` verifies the entry, Linux x64 package scope, host range, exact build-time dependencies,
+exact ordered 14-tool manifest, and a reviewed
 fingerprint of every path npm will pack. It rejects path-policy drift, symlinks, executable entries,
 secret-like names, and generated/test output. The black-box test creates an archive without
 publishing it, installs it into an isolated Bun project, imports the package by name, and checks
-packaged runtime assets. The release workflow builds one archive and binds its SHA-256 to the build
-job output independently of the uploaded archive. The protected `release` environment rechecks both
-digests and publishes that same archive through npm trusted publishing/OIDC with the npm `11.5.1`
-CLI bundled in pinned Node `24.6.0`; the privileged job installs no packages and uses no long-lived
-npm token.
+packaged runtime assets. Release `0.1.1` is distributed through its immutable Git tag and GitHub
+Release, not npm. npm remains the reviewed archive format, and the separate npm publication workflow
+can run only through an explicit manual dispatch.
 
-Live compatibility tests are separate because they launch the pinned OpenCode executable:
+Live compatibility tests launch isolated OpenCode executables for the minimum supported patch and
+the exact build-time patch:
 
 ```bash
 bun run test:live
@@ -461,9 +457,9 @@ and loads the published production entry without a loader shim or modified `Plug
 acceptance invokes all 14 tools through OpenCode: successful list/send/delivery, ask/respond/get/ack,
 wait/signal, and approved start/stop paths; an authoritative cancel role rejection; request listing;
 and the configured export-unavailable result. It asserts the exact manifest (so partial registration
-fails), bundled skills, correlated outputs, consumed permissions, and disposal. This is pinned local
-harness evidence, not a claim that every failure, recovery, retention, or secure-export branch is
-live-proven.
+fails), bundled skills, correlated outputs, consumed permissions, and disposal. This matrix is
+boundary evidence for the supported minor line, not a claim that every patch or every failure,
+recovery, retention, or secure-export branch is live-proven.
 
 See the
 [development conventions](https://github.com/YidiDev/opencode-agent-communicator/blob/main/DEVELOPMENT.md)

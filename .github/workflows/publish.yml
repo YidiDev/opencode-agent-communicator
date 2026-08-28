@@ -1,9 +1,7 @@
 name: Publish npm release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -34,9 +32,13 @@ jobs:
           git merge-base --is-ancestor "$RELEASE_COMMIT" refs/remotes/origin/main
       - name: Require an exact v<package-version> tag
         env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           package_version="$(node -p "require('./package.json').version")"
+          test "$RELEASE_REF_TYPE" = "tag"
+          test "$RELEASE_REF" = "refs/tags/v$package_version"
           test "$RELEASE_TAG" = "v$package_version" || {
             printf 'tag %s does not match package version %s\n' "$RELEASE_TAG" "$package_version" >&2
             exit 1
@@ -49,19 +51,11 @@ jobs:
     permissions:
       contents: read
 
-  live:
-    name: Exact 1.18.21 release gate
-    needs: metadata
-    uses: ./.github/workflows/live-opencode.yml
-    permissions:
-      contents: read
-
   archive:
     name: Build the release archive once
     needs:
       - metadata
       - verification
-      - live
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

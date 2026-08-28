@@ -60,7 +60,7 @@ async function runExport(input: {
   return record(value, "CLI export");
 }
 
-test("validates the isolated exact OpenCode 1.18.21 live surface", async () => {
+test("validates the isolated exact OpenCode 1.18.23 live surface", async () => {
   const thisDirectory = dirname(fileURLToPath(import.meta.url));
   const projectRoot = join(thisDirectory, "..", "..");
   const pluginPath = await realpath(join(thisDirectory, "fixtures", "diagnostic-plugin.ts"));

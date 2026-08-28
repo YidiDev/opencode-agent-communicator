@@ -8,3 +8,29 @@ updates:
       time: "06:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      opencode-compatibility:
+        patterns:
+          - opencode-ai
+          - "@opencode-ai/plugin"
+          - "@opencode-ai/sdk"
+        update-types:
+          - patch
+    ignore:
+      - dependency-name: opencode-ai
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+      - dependency-name: "@opencode-ai/plugin"
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+      - dependency-name: "@opencode-ai/sdk"
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor

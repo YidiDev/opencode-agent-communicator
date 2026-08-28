@@ -378,6 +378,36 @@ function isExactVersion(version: string): boolean {
   return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
 }
 
+function isBoundedPeerRange(version: string): boolean {
+  const match =
+    /^>=(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*) <(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(
+      version,
+    );
+  if (!match) return false;
+  const bounds = match.slice(1).map(Number);
+  if (!bounds.every(Number.isSafeInteger)) return false;
+  for (let index = 0; index < 3; index += 1) {
+    const lower = bounds[index];
+    const upper = bounds[index + 3];
+    if (lower === undefined || upper === undefined) return false;
+    if (lower < upper) return true;
+    if (lower > upper) return false;
+  }
+  return false;
+}
+
+function isAllowedDependencyVersion(field: string, version: unknown): boolean {
+  if (typeof version !== "string") return false;
+  return isExactVersion(version) || (field === "peerDependencies" && isBoundedPeerRange(version));
+}
+
+function dependencyVersionMessage(field: string, name: string): string {
+  if (field === "peerDependencies") {
+    return `${field}.${name} must pin an exact version or a bounded peer range.`;
+  }
+  return `${field}.${name} must pin an exact semantic version.`;
+}
+
 function checkPackageJson(
   rootDirectory: string,
   diagnostics: ConventionDiagnostic[],
@@ -447,7 +477,7 @@ function checkPackageJson(
       continue;
     }
     for (const [name, version] of Object.entries(dependencies)) {
-      if (typeof version !== "string" || !isExactVersion(version)) {
+      if (!isAllowedDependencyVersion(field, version)) {
         addFinding(
           diagnostics,
           exceptions,
@@ -455,7 +485,7 @@ function checkPackageJson(
             "dependency-version",
             "error",
             projectPath,
-            `${field}.${name} must pin an exact semantic version.`,
+            dependencyVersionMessage(field, name),
           ),
         );
       }

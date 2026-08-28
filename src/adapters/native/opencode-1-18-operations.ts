@@ -11,10 +11,7 @@ import type { VisibleRootSessionPort } from "../../domain/sessions";
 import { validateSessionId } from "../../domain/sessions";
 import type { WorkspaceKey } from "../../domain/workspaces";
 import { validateWorkspaceKey } from "../../domain/workspaces";
-import {
-  isAuthoritativeClientRejection,
-  parseAdmissionResponse,
-} from "./opencode-1-18-21-admission";
+import { isAuthoritativeClientRejection, parseAdmissionResponse } from "./opencode-1-18-admission";
 import {
   combineRootSets,
   mergedActivityStatus,
@@ -22,8 +19,8 @@ import {
   parseActivityMap,
   parseSessionArray,
   parseV2SessionArray,
-} from "./opencode-1-18-21-sessions";
-import { envelopeData, NativeAdapterFault } from "./opencode-1-18-21-surface";
+} from "./opencode-1-18-sessions";
+import { envelopeData, NativeAdapterFault } from "./opencode-1-18-surface";
 
 interface ObservationContext {
   readonly active: (options?: { readonly signal?: AbortSignal }) => Promise<unknown>;

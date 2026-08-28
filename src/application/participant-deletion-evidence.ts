@@ -1,6 +1,6 @@
 import { type SessionId, validateSessionId } from "../domain/sessions";
 
-export interface OpenCode11821DeletedSessionEvidence {
+export interface OpenCode118DeletedSessionEvidence {
   readonly sessionId: SessionId;
   readonly projectId: string;
   readonly directory: string;
@@ -120,12 +120,12 @@ function validOptionalSessionData(session: DataRecord): boolean {
 }
 
 /**
- * Parses only the pinned legacy plugin-hook shape from OpenCode 1.18.21. The event has no native
+ * Parses only the supported OpenCode 1.18 legacy plugin-hook shape. The event has no native
  * message identifier or sequence and therefore cannot prove request admission or promotion.
  */
-export function parseOpenCode11821SessionDeletedEvent(
+export function parseOpenCode118SessionDeletedEvent(
   value: unknown,
-): OpenCode11821DeletedSessionEvidence | undefined {
+): OpenCode118DeletedSessionEvidence | undefined {
   const event = exactRecord(value, ["type", "properties"]);
   if (event?.type !== "session.deleted") return undefined;
   const properties = exactRecord(event.properties, ["info"]);
@@ -160,7 +160,7 @@ export function parseOpenCode11821SessionDeletedEvent(
 }
 
 /** Total discriminator used before treating an arbitrary hook event as relevant native evidence. */
-export function isOpenCode11821SessionDeletedEvent(value: unknown): boolean {
+export function isOpenCode118SessionDeletedEvent(value: unknown): boolean {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
     const descriptor = Object.getOwnPropertyDescriptor(value, "type");

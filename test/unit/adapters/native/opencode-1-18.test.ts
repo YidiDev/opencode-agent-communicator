@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  createOpenCode11821NativeAdapter,
+  createOpenCode118NativeAdapter,
   type OpenCodeNativeAdapterDependencies,
-} from "../../../../src/adapters/native/opencode-1-18-21";
+} from "../../../../src/adapters/native/opencode-1-18";
 import {
   validateManagedSessionId,
   validateNativeMessageId,
@@ -55,7 +55,7 @@ function fixture(options: FixtureOptions = {}) {
         global: {
           async health(): Promise<unknown> {
             calls.push({ surface: "health" });
-            return envelope(options.health ?? { healthy: true, version: "1.18.21" });
+            return envelope(options.health ?? { healthy: true, version: "1.18.23" });
           },
         },
         experimental: {
@@ -124,7 +124,7 @@ function fixture(options: FixtureOptions = {}) {
   };
   return {
     calls,
-    adapter: createOpenCode11821NativeAdapter(
+    adapter: createOpenCode118NativeAdapter(
       {
         client,
         directory: "/workspace",
@@ -151,7 +151,7 @@ function startedSession(title = "Worker") {
   };
 }
 
-test("interrupts through the exact 1.18.21 legacy abort surface and preserves ambiguity", async () => {
+test("interrupts through the exact 1.18.23 legacy abort surface and preserves ambiguity", async () => {
   const successful = fixture();
   expect(
     await successful.adapter.interruptSession({
@@ -181,7 +181,7 @@ test("interrupts through the exact 1.18.21 legacy abort surface and preserves am
   expect(timedOut.calls.some((item) => item.surface === "legacy.abort")).toBe(false);
 });
 
-describe("OpenCode 1.18.21 native adapter", () => {
+describe("OpenCode 1.18.23 native adapter", () => {
   test("observes exact request participants and merged target activity without listing V2 metadata", async () => {
     const fake = fixture({
       visibleRoots: [
@@ -236,7 +236,7 @@ describe("OpenCode 1.18.21 native adapter", () => {
 
   test("constructs V2 from serverUrl and reads exact health through V2", async () => {
     const fake = fixture();
-    expect(await fake.adapter.readHealth()).toEqual({ healthy: true, version: "1.18.21" });
+    expect(await fake.adapter.readHealth()).toEqual({ healthy: true, version: "1.18.23" });
     expect(fake.calls).toEqual([
       {
         surface: "createV2",
@@ -375,7 +375,7 @@ describe("OpenCode 1.18.21 native adapter", () => {
   });
 });
 
-describe("OpenCode 1.18.21 native adapter failure boundaries and membership", () => {
+describe("OpenCode 1.18.23 native adapter failure boundaries and membership", () => {
   test.each([
     ["native error", { error: { credential: "secret" } }],
     ["missing data", { response: {} }],
@@ -410,7 +410,7 @@ describe("OpenCode 1.18.21 native adapter failure boundaries and membership", ()
         abort: async () => envelope(true),
       },
     };
-    const adapter = createOpenCode11821NativeAdapter(
+    const adapter = createOpenCode118NativeAdapter(
       {
         client,
         directory: "/workspace",
@@ -454,7 +454,7 @@ describe("OpenCode 1.18.21 native adapter failure boundaries and membership", ()
   test("fails during construction when required injected legacy surfaces are absent", () => {
     const dependencies: OpenCodeNativeAdapterDependencies = {
       createV2Client: () => ({
-        global: { health: async () => envelope({ healthy: true, version: "1.18.21" }) },
+        global: { health: async () => envelope({ healthy: true, version: "1.18.23" }) },
         v2: {
           session: {
             active: async () => envelope({ data: {} }),
@@ -465,7 +465,7 @@ describe("OpenCode 1.18.21 native adapter failure boundaries and membership", ()
       }),
     };
     expect(() =>
-      createOpenCode11821NativeAdapter(
+      createOpenCode118NativeAdapter(
         {
           client: {},
           directory: "/workspace",
@@ -500,11 +500,11 @@ describe("OpenCode 1.18.21 native adapter failure boundaries and membership", ()
   });
 });
 
-describe("OpenCode 1.18.21 native adapter start and validation boundaries", () => {
+describe("OpenCode 1.18.23 native adapter start and validation boundaries", () => {
   test("rejects invalid observation clocks and malformed participant requests", async () => {
     const badClock = fixture({ visibleRoots: [nativeSession("ses_source", "Source", 1)] });
     const dependencies = { now: () => Number.NaN };
-    const clockAdapter = createOpenCode11821NativeAdapter(
+    const clockAdapter = createOpenCode118NativeAdapter(
       {
         client: {
           experimental: { session: { list: async () => envelope([]) } },
@@ -584,7 +584,7 @@ describe("OpenCode 1.18.21 native adapter start and validation boundaries", () =
   });
 });
 
-describe("OpenCode 1.18.21 native queue admission", () => {
+describe("OpenCode 1.18.23 native queue admission", () => {
   test("queues exactly once and accepts exact admission evidence using native time", async () => {
     const controller = new AbortController();
     const fake = fixture({
