@@ -6,7 +6,7 @@
 [![OpenCode 1.18 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** `0.1.2` supports Linux x64 and stable OpenCode versions
+**Release status:** `0.1.3` supports Linux x64 and stable OpenCode versions
 `>=1.18.21 <1.19.0`. Bun `1.4.0` is required for installation and verification. Other
 architectures, operating systems, OpenCode versions, and prereleases are unsupported.
 
@@ -55,7 +55,7 @@ Pin the GitHub release tag so startup always resolves the same source:
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.1.2",
+      "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.1.3",
       {
         "policies": {
           "message": "allow",
@@ -75,7 +75,7 @@ plugin uses the tuple form because its options are strict and package-specific. 
 the pinned package into its package cache; no project-level clone or `bun add` is required.
 
 The repository is private, so the account running OpenCode must have working GitHub SSH access.
-Release tags are immutable by project policy; do not replace `v0.1.2` with `main`.
+Release tags are immutable by project policy; do not replace `v0.1.3` with `main`.
 
 ### 2. Prepare private state
 
@@ -109,7 +109,7 @@ configuration are startup errors.
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.1.2",
+      "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.1.3",
       {
         "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
         "startupDeadlineMs": 30000,
@@ -374,6 +374,13 @@ are logical deletion, not secure erasure from old pages, snapshots, or media.
 
 ## Upgrade, migrate, or roll back
 
+### Upgrade to 0.1.3
+
+Release `0.1.3` promotes the fully verified `0.1.2` runtime tree without changing behavior, the
+supported host range, or the SQLite schema. All hosted quality, coverage, package, Docker security,
+and OpenCode compatibility jobs passed for `0.1.2`; no GitHub-only correction was required. Follow
+the `0.1.2` stop, backup, pin, restart, and manifest-verification procedure using tag `v0.1.3`.
+
 ### Upgrade to 0.1.2
 
 Release `0.1.2` preserves the `>=1.18.21 <1.19.0` host range and SQLite schema while splitting
@@ -449,7 +456,7 @@ exact ordered 14-tool manifest, and a reviewed
 fingerprint of every path npm will pack. It rejects path-policy drift, symlinks, executable entries,
 secret-like names, and generated/test output. The black-box test creates an archive without
 publishing it, installs it into an isolated Bun project, imports the package by name, and checks
-packaged runtime assets. Release `0.1.2` is distributed through its immutable Git tag and GitHub
+packaged runtime assets. Release `0.1.3` is distributed through its immutable Git tag and GitHub
 Release, not npm. npm remains the reviewed archive format, and the separate npm publication workflow
 can run only through an explicit manual dispatch.
 
