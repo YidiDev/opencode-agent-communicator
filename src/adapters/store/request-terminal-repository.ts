@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import type {
   AcknowledgeRequestResult,
   CancelPendingResult,
@@ -10,17 +8,14 @@ import { validateRequestId } from "../../domain/generated-ids";
 import { requestLimits } from "../../domain/request-constants";
 import {
   validateAskResponseAgainstPendingPayload,
-  validateRetainedRequestResult,
   validateWaitRequestResult,
 } from "../../domain/request-content";
-import { serializeRetainedRequestResult } from "../../domain/request-serialization";
 import type {
   AnsweredAskRequestMetadata,
   AskRequestResult,
   PendingRequestMetadata,
   ReachedWaitRequestMetadata,
   RequestMetadata,
-  RetainedRequestResult,
   WaitRequestResult,
 } from "../../domain/request-types";
 import { validateSessionId } from "../../domain/sessions";
@@ -30,15 +25,16 @@ import { validatePendingPrivateContent } from "./request-persistence-validation"
 import {
   assertPendingWaitEdge,
   eraseRequestPrivateContent,
-  eraseStoredResult,
   requestFailure,
   requestPageLimitReached,
   requestStoreNowMs,
   selectRequest,
 } from "./request-repository-shared";
+import { canonicalRequestResult, coherentCanonicalRequestResult } from "./request-result-canonical";
 import { availableResultQuotaAllows } from "./request-result-quotas";
 import { validateStoredResultState } from "./request-result-validation";
 import { hydrateRequest, type RequestRow, requestMetadataColumns } from "./request-rows";
+import { RequestSourceTerminalRepository } from "./request-source-terminal-repository";
 import { type StoreContext, StoreIntegrityError } from "./store-types";
 
 interface ParticipantRequestRow extends RequestRow {
@@ -50,76 +46,24 @@ interface ParticipantRequestRow extends RequestRow {
 type AskWriteResult = RequestTerminalWriteResult<AnsweredAskRequestMetadata, AskRequestResult>;
 type WaitWriteResult = RequestTerminalWriteResult<ReachedWaitRequestMetadata, WaitRequestResult>;
 type WriteResult = AskWriteResult | WaitWriteResult;
-type TerminalRequestMetadata = Exclude<RequestMetadata, PendingRequestMetadata>;
-
-function cancelTerminalResult(request: TerminalRequestMetadata): CancelPendingResult {
-  switch (request.resolutionState) {
-    case "cancelled":
-      return { ok: true, outcome: "idempotent", resolutionState: "cancelled", request };
-    case "answered":
-      return { ok: true, outcome: "terminal_state", resolutionState: "answered", request };
-    case "reached":
-      return { ok: true, outcome: "terminal_state", resolutionState: "reached", request };
-    case "deadline_expired":
-      return { ok: true, outcome: "terminal_state", resolutionState: "deadline_expired", request };
-    case "delivery_failed":
-      return { ok: true, outcome: "terminal_state", resolutionState: "delivery_failed", request };
-    case "target_stopped":
-      return { ok: true, outcome: "terminal_state", resolutionState: "target_stopped", request };
-    case "source_stopped":
-      return { ok: true, outcome: "terminal_state", resolutionState: "source_stopped", request };
-    case "target_deleted":
-      return { ok: true, outcome: "terminal_state", resolutionState: "target_deleted", request };
-    case "source_deleted":
-      return { ok: true, outcome: "terminal_state", resolutionState: "source_deleted", request };
-  }
-}
-
-function canonicalInput(result: unknown):
-  | {
-      readonly value: RetainedRequestResult;
-      readonly json: string;
-      readonly bytes: number;
-      readonly digest: string;
-    }
-  | undefined {
-  const validated = validateRetainedRequestResult(result);
-  if (!validated.ok) return undefined;
-  const json = serializeRetainedRequestResult(validated.value);
-  const encoded = new TextEncoder().encode(json);
-  return {
-    value: validated.value,
-    json,
-    bytes: encoded.length,
-    digest: createHash("sha256").update(encoded).digest("hex"),
-  };
-}
-
-function coherentCanonicalCandidate(
-  candidate: NonNullable<ReturnType<typeof canonicalInput>>,
-): boolean {
-  const json = serializeRetainedRequestResult(candidate.value);
-  const bytes = new TextEncoder().encode(json);
-  return (
-    json === candidate.json &&
-    bytes.length === candidate.bytes &&
-    createHash("sha256").update(bytes).digest("hex") === candidate.digest
-  );
-}
 
 export class RequestTerminalRepository {
+  private readonly source: RequestSourceTerminalRepository;
+
   constructor(
     private readonly context: StoreContext,
     private readonly ownership: OwnershipRepository,
-  ) {}
+  ) {
+    this.source = new RequestSourceTerminalRepository(context, ownership);
+  }
 
   answerAsk(
     input: RequestParticipantMutationInput & { readonly answers: AskRequestResult["answers"] },
   ): AskWriteResult {
     if (!this.validParticipantInput(input)) return this.notFound();
-    let candidate: ReturnType<typeof canonicalInput>;
+    let candidate: ReturnType<typeof canonicalRequestResult>;
     try {
-      candidate = canonicalInput({ kind: "ask", answers: input.answers });
+      candidate = canonicalRequestResult({ kind: "ask", answers: input.answers });
     } catch {
       candidate = undefined;
     }
@@ -130,14 +74,14 @@ export class RequestTerminalRepository {
     input: RequestParticipantMutationInput & { readonly evidence?: string },
   ): WaitWriteResult {
     if (!this.validParticipantInput(input)) return this.notFound();
-    let candidate: ReturnType<typeof canonicalInput>;
+    let candidate: ReturnType<typeof canonicalRequestResult>;
     try {
       const proposed:
         | { readonly kind: "wait"; readonly evidence: string | undefined }
         | { readonly kind: "wait" } = Object.hasOwn(input, "evidence")
         ? { kind: "wait", evidence: input.evidence }
         : { kind: "wait" };
-      candidate = canonicalInput(proposed);
+      candidate = canonicalRequestResult(proposed);
     } catch {
       candidate = undefined;
     }
@@ -147,17 +91,17 @@ export class RequestTerminalRepository {
   private writeTarget(
     input: RequestParticipantMutationInput,
     kind: "ask",
-    candidate: ReturnType<typeof canonicalInput>,
+    candidate: ReturnType<typeof canonicalRequestResult>,
   ): AskWriteResult;
   private writeTarget(
     input: RequestParticipantMutationInput,
     kind: "wait",
-    candidate: ReturnType<typeof canonicalInput>,
+    candidate: ReturnType<typeof canonicalRequestResult>,
   ): WaitWriteResult;
   private writeTarget(
     input: RequestParticipantMutationInput,
     kind: "ask" | "wait",
-    candidate: ReturnType<typeof canonicalInput>,
+    candidate: ReturnType<typeof canonicalRequestResult>,
   ): WriteResult {
     const atLimit = requestPageLimitReached(this.context);
     try {
@@ -172,7 +116,7 @@ export class RequestTerminalRepository {
   private writeTargetOwned(
     input: RequestParticipantMutationInput,
     kind: "ask" | "wait",
-    candidate: ReturnType<typeof canonicalInput>,
+    candidate: ReturnType<typeof canonicalRequestResult>,
   ): WriteResult {
     this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
     const row = this.selectForRole(input, "target");
@@ -205,7 +149,7 @@ export class RequestTerminalRepository {
         : validateWaitRequestResult(candidate.value);
     if (
       !validResponse.ok ||
-      !coherentCanonicalCandidate(candidate) ||
+      !coherentCanonicalRequestResult(candidate) ||
       !Number.isSafeInteger(nowMs + requestLimits.resultRetentionMs)
     ) {
       return { ok: false, code: "state_conflict", request: before };
@@ -220,7 +164,7 @@ export class RequestTerminalRepository {
     input: RequestParticipantMutationInput,
     before: PendingRequestMetadata,
     kind: "ask" | "wait",
-    candidate: NonNullable<ReturnType<typeof canonicalInput>>,
+    candidate: NonNullable<ReturnType<typeof canonicalRequestResult>>,
     nowMs: number,
   ): WriteResult {
     eraseRequestPrivateContent(this.context, before.id);
@@ -270,129 +214,11 @@ export class RequestTerminalRepository {
   }
 
   cancelPending(input: RequestParticipantMutationInput): CancelPendingResult {
-    if (!this.validParticipantInput(input)) return this.notFound();
-    const atLimit = requestPageLimitReached(this.context);
-    try {
-      return this.context.database
-        .transaction((): CancelPendingResult => {
-          this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
-          const row = this.selectForRole(input, "source");
-          if (!row) return this.notFound();
-          const before = hydrateRequest(row);
-          if (before.resolutionState !== "pending") {
-            validateStoredResultState(this.context, before);
-            return cancelTerminalResult(before);
-          }
-          const nowMs = requestStoreNowMs(this.context);
-          if (nowMs < before.updatedAtMs) return { ok: false, code: "state_conflict" };
-          if (nowMs >= before.deadlineAtMs) {
-            const request = this.expirePending(before, nowMs);
-            if (request.resolutionState !== "deadline_expired") {
-              throw new StoreIntegrityError("The deadline winner was malformed.");
-            }
-            return {
-              ok: true,
-              outcome: "terminal_state",
-              resolutionState: request.resolutionState,
-              request,
-            };
-          }
-          const content = validatePendingPrivateContent(
-            before,
-            row.payloadJson,
-            row.envelopeJson,
-            row.retainedContentBytes,
-          );
-          if (!content)
-            throw new StoreIntegrityError("Stored pending request content was invalid.");
-          assertPendingWaitEdge(this.context, before);
-          eraseRequestPrivateContent(this.context, before.id);
-          const changed = this.context.database.run(
-            `UPDATE requests SET resolution_state = 'cancelled', resolved_at_ms = ?, updated_at_ms = ?,
-             payload_sha256 = NULL, retained_content_byte_length = NULL
-           WHERE workspace_key = ? AND id = ? AND resolution_state = 'pending' AND deadline_at_ms > ?`,
-            [nowMs, nowMs, input.workspaceKey, input.requestId, nowMs],
-          );
-          if (changed.changes !== 1)
-            throw new StoreIntegrityError("The request cancellation CAS failed.");
-          const request = selectRequest(this.context, input.workspaceKey, input.requestId);
-          if (!request) throw new StoreIntegrityError("The cancelled request was absent.");
-          if (request.resolutionState !== "cancelled") {
-            throw new StoreIntegrityError("The cancellation result was malformed.");
-          }
-          return {
-            ok: true,
-            outcome: "applied",
-            resolutionState: "cancelled",
-            request,
-          };
-        })
-        .immediate();
-    } catch (cause: unknown) {
-      return requestFailure(cause, atLimit);
-    }
+    return this.source.cancelPending(input);
   }
 
   acknowledgeResult(input: RequestParticipantMutationInput): AcknowledgeRequestResult {
-    if (!this.validParticipantInput(input)) return this.notFound();
-    const atLimit = requestPageLimitReached(this.context);
-    try {
-      return (
-        this.context.database
-          // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one transaction keeps result erasure and every authoritative state check atomic.
-          .transaction((): AcknowledgeRequestResult => {
-            this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
-            const row = this.selectForRole(input, "source");
-            if (!row) return this.notFound();
-            const before = hydrateRequest(row);
-            if (before.resultState === "acknowledged") {
-              validateStoredResultState(this.context, before);
-              return { ok: true, outcome: "idempotent", request: before };
-            }
-            if (before.resultState !== "available" && before.resultState !== "expired") {
-              if (before.resolutionState === "pending") this.assertPendingPrivateState(before, row);
-              validateStoredResultState(this.context, before);
-              return { ok: false, code: "state_conflict" };
-            }
-            const nowMs = requestStoreNowMs(this.context);
-            if (nowMs < before.updatedAtMs) return { ok: false, code: "state_conflict" };
-            eraseStoredResult(this.context, before.id);
-            const expiredAtMs =
-              before.resultState === "available" && nowMs >= before.resultExpiresAtMs
-                ? nowMs
-                : before.resultExpiredAtMs;
-            const changed = this.context.database.run(
-              `UPDATE requests SET result_state = 'acknowledged', acknowledged_at_ms = ?,
-              updated_at_ms = ?, result_expired_at_ms = ?,
-              result_byte_length = NULL, result_sha256 = NULL
-            WHERE workspace_key = ? AND id = ? AND result_state = ?`,
-              [
-                nowMs,
-                nowMs,
-                expiredAtMs ?? null,
-                input.workspaceKey,
-                input.requestId,
-                before.resultState,
-              ],
-            );
-            if (changed.changes !== 1)
-              throw new StoreIntegrityError("The result acknowledgement CAS failed.");
-            const request = selectRequest(this.context, input.workspaceKey, input.requestId);
-            if (!request) throw new StoreIntegrityError("The acknowledged request was absent.");
-            validateStoredResultState(this.context, request);
-            if (
-              (request.resolutionState !== "answered" && request.resolutionState !== "reached") ||
-              request.resultState !== "acknowledged"
-            ) {
-              throw new StoreIntegrityError("The acknowledged request state was malformed.");
-            }
-            return { ok: true, outcome: "applied", request };
-          })
-          .immediate()
-      );
-    } catch (cause: unknown) {
-      return requestFailure(cause, atLimit);
-    }
+    return this.source.acknowledgeResult(input);
   }
 
   private validParticipantInput(input: RequestParticipantMutationInput): boolean {
@@ -421,20 +247,6 @@ export class RequestTerminalRepository {
         )
         .get(input.workspaceKey, input.requestId, input.callerSessionId) ?? undefined
     );
-  }
-
-  private assertPendingPrivateState(
-    request: PendingRequestMetadata,
-    row: ParticipantRequestRow,
-  ): void {
-    const content = validatePendingPrivateContent(
-      request,
-      row.payloadJson,
-      row.envelopeJson,
-      row.retainedContentBytes,
-    );
-    if (!content) throw new StoreIntegrityError("Stored pending request content was invalid.");
-    assertPendingWaitEdge(this.context, request);
   }
 
   private expirePending(before: PendingRequestMetadata, nowMs: number): RequestMetadata {

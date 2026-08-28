@@ -6,6 +6,17 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-27
+
+### Changed
+
+- Split every runtime source file above the 300-line review threshold into cohesive, acyclic modules
+  without changing public APIs, persistence semantics, or lifecycle ordering.
+- Backtested the unmodified live compatibility harness against OpenCode `1.18.20`; its native
+  sanitized export fails strict validation, confirming `1.18.21` as the natural compatibility floor.
+- Made live-test descriptions report the selected OpenCode matrix version instead of the build-time
+  default.
+
 ## [0.1.1] - 2026-08-27
 
 ### Changed
@@ -43,6 +54,7 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/YidiDev/opencode-agent-communicator/releases/tag/v0.1.2
 [0.1.1]: https://github.com/YidiDev/opencode-agent-communicator/releases/tag/v0.1.1
 [0.1.0]: https://github.com/YidiDev/opencode-agent-communicator/releases/tag/v0.1.0

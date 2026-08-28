@@ -32,9 +32,11 @@ Bun.plugin({
   name: "istanbul-production-coverage",
   setup(builder) {
     builder.onLoad({ filter: sourceFilter }, (args) => {
-      if (!isProductionSource(args.path)) return undefined;
+      if (!isProductionSource(args.path)) {
+        return { contents: readFileSync(args.path, "utf8"), loader: "ts" };
+      }
       const source = readFileSync(args.path, "utf8");
-      if (!sourceHasRuntimeCode(args.path, source)) return undefined;
+      if (!sourceHasRuntimeCode(args.path, source)) return { contents: source, loader: "ts" };
       return {
         contents: instrumenter.instrumentSync(source, args.path),
         loader: "ts",
