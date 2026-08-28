@@ -176,7 +176,6 @@ export function createCompositionFactory(
       const workspaceKey = workspace.workspaceKey;
       const startupAbort = new AbortController();
       const startupDeadlineMs = productionClock.nowMs() + options.startupDeadlineMs;
-      // The generated legacy PluginInput client has no declared health endpoint. The narrow pinned
       // The health adapter uses the build-time 1.18 SDK across the supported patch line. Identity is
       // checked before that call; both checks complete before any persistent resource is opened.
       const compatible = await dependencies.checkCompatibility(

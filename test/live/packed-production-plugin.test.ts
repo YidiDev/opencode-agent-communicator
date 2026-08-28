@@ -527,3 +527,68 @@ test(`runs the exact packed production plugin through OpenCode ${exactOpenCodeVe
     await fixture.close(failure);
   }
 });
+
+test(`loads the packed production plugin during a direct OpenCode ${exactOpenCodeVersion} run`, async () => {
+  const repository = resolve(import.meta.dir, "../..");
+  const staging = await mkdtemp(join(tmpdir(), "communicator-packed-direct-run-"));
+  const provider = launchDeterministicProvider();
+  let isolation: IsolatedOpenCodeState | undefined;
+  let failure: unknown;
+  try {
+    const entryPath = await installPackedPlugin(repository, staging);
+    isolation = await createIsolatedOpenCodeState({
+      providerBaseUrl: provider.baseUrl,
+      pluginPath: entryPath,
+      pluginOptions: { stateDirectory: join(staging, "direct-run-state") },
+    });
+    const cliPath = await resolveExactProjectCli(repository);
+    const result = await runBoundedProcess({
+      command: cliPath,
+      arguments: [
+        "run",
+        "--agent",
+        "build",
+        "--format",
+        "json",
+        "--print-logs",
+        "--log-level",
+        "DEBUG",
+        "production-session-list",
+      ],
+      cwd: isolation.project,
+      environment: isolation.environment,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain("failed to load plugin");
+    expect(result.stderr).not.toContain("requires Linux x64 and a healthy OpenCode");
+    const toolEvent = result.stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as unknown)
+      .find(
+        (event) =>
+          Reflect.get(Reflect.get(event as object, "part") as object, "tool") === "session_list",
+      );
+    const toolState = Reflect.get(Reflect.get(toolEvent as object, "part") as object, "state");
+    expect(Reflect.get(toolState as object, "status")).toBe("completed");
+    const toolResult = JSON.parse(Reflect.get(toolState as object, "output") as string) as unknown;
+    expect(toolResult).toMatchObject({ ok: true });
+    expect(Reflect.get(toolResult as object, "value")).toBeArray();
+
+    const advertised = provider.requests
+      .map((request) => JSON.stringify(request))
+      .find((request) => toolIds.every((toolID) => request.includes(`"name":"${toolID}"`)));
+    expect(advertised).toBeDefined();
+  } catch (error: unknown) {
+    failure = error;
+  } finally {
+    await cleanupAll(
+      [
+        () => provider.stop(),
+        () => isolation?.remove(),
+        () => rm(staging, { recursive: true, force: true }),
+      ],
+      failure,
+    );
+  }
+});

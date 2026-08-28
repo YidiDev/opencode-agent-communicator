@@ -2,7 +2,7 @@ import { expect, setDefaultTimeout, test } from "bun:test";
 import { realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-
+import { createOpencodeClient as createLegacyOpencodeClient } from "@opencode-ai/sdk/client";
 import {
   createOpencodeClient,
   type SessionDurableEvent,
@@ -618,7 +618,10 @@ async function proveProductionAdapterParsingAndMergedActivity(fixture: LiveFixtu
     throw new Error("production adapter live fixture IDs are invalid");
   }
   const adapter = createOpenCode118NativeAdapter({
-    client: fixture.client,
+    client: createLegacyOpencodeClient({
+      baseUrl: fixture.baseUrl,
+      directory: fixture.isolation.project,
+    }),
     directory: fixture.isolation.project,
     serverUrl: new URL(fixture.baseUrl),
     workspaceKey: workspaceKey.value,

@@ -24,8 +24,8 @@ export const expectedToolIds = Object.freeze([
 // This is SHA-256(npm-reported pack paths joined with LF), not a content digest. Any added, removed,
 // renamed, or reordered archive entry requires an explicit review and fingerprint update.
 export const expectedPackedPathPolicy = Object.freeze({
-  entryCount: 249,
-  sha256: "4329299683c6bb7f7a5c727c5477a1a9b400cff6ea09aa84b6840340e167d6df",
+  entryCount: 250,
+  sha256: "86a8ea0422d82ae4c230c56171d1bc6c0715e2c80d16ba9b16bc71ef0ff02444",
 });
 
 const forbiddenPathSegments = new Set([
@@ -102,7 +102,7 @@ function packedReport(root) {
 
 export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
   const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
-  assert(packageJson.version === "0.2.0", "version must be 0.2.0");
+  assert(packageJson.version === "0.2.1", "version must be 0.2.1");
   assert(packageJson.private !== true, "package must be publishable");
   assert(packageJson.license === "MIT", "license metadata must match LICENSE");
   assert(
@@ -120,10 +120,10 @@ export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
     "OpenCode engine range must match the certified minor line",
   );
   assert(
-    packageJson.dependencies?.["@opencode-ai/plugin"] === "1.18.23",
+    packageJson.dependencies?.["@opencode-ai/plugin"] === "1.18.24",
     "plugin API must be exact",
   );
-  assert(packageJson.dependencies?.["@opencode-ai/sdk"] === "1.18.23", "SDK must be exact");
+  assert(packageJson.dependencies?.["@opencode-ai/sdk"] === "1.18.24", "SDK must be exact");
   assert(packageJson.dependencies?.zod === "4.4.3", "Zod must match the certified version");
   assert(
     packageJson.devDependencies?.typescript === "7.0.2",
