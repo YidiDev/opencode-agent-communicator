@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 
+import { isAuthoritativeClientRejection } from "../../../../src/adapters/native/opencode-1-18-admission";
 import {
   createDeterministicRootSession,
   reconcileDeterministicRootSession,
@@ -40,6 +41,7 @@ test("creates a deterministic root only after absence and verifies response plus
                 sessionID: sessionId(),
                 message: "not found",
               },
+              request: new Request(`http://opencode.internal/session/${sessionId()}`),
               response: new Response(null, { status: 404 }),
             }
           : { data: { data: info() } };
@@ -198,6 +200,31 @@ test("fails closed for mixed envelopes and fake status objects", async () => {
     expect(result).toBe("unknown");
   }
   expect(created).toBe(false);
+});
+
+test("accepts only a genuine optional SDK request in authoritative rejection envelopes", () => {
+  const error = {
+    _tag: "SessionNotFoundError",
+    sessionID: sessionId(),
+    message: "not found",
+  };
+  const response = new Response(null, { status: 404 });
+  const request = new Request(`http://opencode.internal/session/${sessionId()}`);
+
+  expect(isAuthoritativeClientRejection({ error, request, response }, false, sessionId())).toBe(
+    true,
+  );
+  expect(isAuthoritativeClientRejection({ error, response }, false, sessionId())).toBe(true);
+  for (const malformed of [
+    { error, request: {}, response },
+    { error, request: Object.create(Request.prototype), response },
+    { error, request: new Proxy(request, {}), response },
+    { error, request, response: Object.create(Response.prototype) },
+    { error, request, response: new Proxy(response, {}) },
+    { error, request, response, unexpected: true },
+  ]) {
+    expect(isAuthoritativeClientRejection(malformed, false, sessionId())).toBe(false);
+  }
 });
 
 test("verifies legacy title update through V2 read-back", async () => {

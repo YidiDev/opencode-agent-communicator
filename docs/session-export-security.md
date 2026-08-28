@@ -46,7 +46,7 @@ absolute glibc/musl locations, canonicalizes each candidate, verifies a root-own
 fully root-owned, non-group/world-writable ancestor chain, and binds through the retained
 `/proc/self/fd/<fd>` object. It never asks the dynamic loader to search for `libc.so.6`; unsupported
 architectures or failed trust checks leave secure export unavailable. The source retains ARM64
-syscall numbers and absolute libc candidates for possible future work. They are not `0.2.1`
+syscall numbers and absolute libc candidates for possible future work. They are not `0.2.2`
 certification evidence or a support claim, and package metadata excludes ARM64 installation.
 
 Native export accepts only a direct ELF binary (scripts and CLI shell wrappers are unsupported) on
@@ -63,7 +63,7 @@ Valid output must
 have the exact top-level `{info,messages}` envelope, matching embedded session IDs, import-shaped
 messages, and the sanitizer markers proven by the live capability gate. The public projection
 contains only the relative destination, byte count, sanitization mode, and SHA-256 digest.
-The schema fixture source is the pinned build-time `@opencode-ai/sdk@1.18.24` V2 generated
+The schema fixture source is the pinned build-time `@opencode-ai/sdk@1.18.25` V2 generated
 `Session`/`Message`/`Part` declarations, checked against real CLI export and sanitized CLI import
 round trips at both compatibility boundaries in `test/live/opencode-1.18.test.ts`.
 

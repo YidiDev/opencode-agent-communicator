@@ -45,6 +45,36 @@ function safeSequence(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
+const requestUrlGetter = Object.getOwnPropertyDescriptor(Request.prototype, "url")?.get;
+const responseStatusGetter = Object.getOwnPropertyDescriptor(Response.prototype, "status")?.get;
+
+function genuineRequest(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || !requestUrlGetter) return false;
+  try {
+    return typeof requestUrlGetter.call(value) === "string";
+  } catch {
+    return false;
+  }
+}
+
+function genuineResponseStatus(value: unknown): number | undefined {
+  if (typeof value !== "object" || value === null || !responseStatusGetter) return undefined;
+  try {
+    return responseStatusGetter.call(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function hasValidOptionalRequest(envelope: Record<string, unknown>): boolean {
+  return !Object.hasOwn(envelope, "request") || genuineRequest(envelope.request);
+}
+
+function supportedRejectionStatus(value: unknown): 400 | 401 | 404 | undefined {
+  const status = genuineResponseStatus(value);
+  return status === 400 || status === 401 || status === 404 ? status : undefined;
+}
+
 function observedTime(data: Record<string, unknown>, now: () => number): number | undefined {
   // The 1.18 line's successful admission response makes timeCreated authoritative.
   // The injected clock is used only when that field is absent, never when native evidence is invalid.
@@ -102,11 +132,10 @@ export function isAuthoritativeClientRejection(
   expectedTargetSessionId?: SessionId,
 ): boolean {
   if (aborted) return false;
-  const envelope = snapshotExactData(response, ["error", "response"]);
-  if (!envelope || envelope.error === undefined || !(envelope.response instanceof Response))
-    return false;
-  const status = envelope.response.status;
-  if (![400, 401, 404].includes(status)) return false;
+  const envelope = snapshotExactData(response, ["error", "request", "response"]);
+  if (!envelope || envelope.error === undefined || !hasValidOptionalRequest(envelope)) return false;
+  const status = supportedRejectionStatus(envelope.response);
+  if (status === undefined) return false;
   const allowed =
     status === 400
       ? ["_tag", "message", "kind", "field"]

@@ -1,4 +1,4 @@
-const configuredOpenCodeVersion = process.env.OPENCODE_COMPAT_VERSION ?? "1.18.24";
+const configuredOpenCodeVersion = process.env.OPENCODE_COMPAT_VERSION ?? "1.18.25";
 if (!/^1\.18\.(0|[1-9]\d*)$/.test(configuredOpenCodeVersion)) {
   throw new Error("OPENCODE_COMPAT_VERSION must be a stable OpenCode 1.18 patch");
 }
