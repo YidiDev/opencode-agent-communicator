@@ -87,7 +87,7 @@ describe("packed npm archive", () => {
       cpu: string[];
     };
     expect(metadata).toMatchObject({
-      version: "0.1.0",
+      version: "0.1.1",
       exports: { ".": "./src/index.ts" },
       os: ["linux"],
       cpu: ["x64"],
@@ -96,7 +96,7 @@ describe("packed npm archive", () => {
       await readFile(join(installedRoot, "skills/session-orchestrator/SKILL.md"), "utf8"),
     ).toContain("session_start");
     expect(await readFile(join(installedRoot, "docs/plugin-configuration.md"), "utf8")).toContain(
-      "OpenCode 1.18.21",
+      ">=1.18.21 <1.19.0",
     );
   }, 60_000);
 });

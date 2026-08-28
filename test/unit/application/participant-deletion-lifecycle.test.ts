@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-  isOpenCode11821SessionDeletedEvent,
-  parseOpenCode11821SessionDeletedEvent,
+  isOpenCode118SessionDeletedEvent,
+  parseOpenCode118SessionDeletedEvent,
 } from "../../../src/application/participant-deletion-evidence";
 import { ParticipantDeletionLifecycle } from "../../../src/application/participant-deletion-lifecycle";
 import type {
@@ -34,7 +34,7 @@ function event(overrides: Record<string, unknown> = {}) {
         projectID: "project",
         directory: "/workspace",
         title: "Deleted",
-        version: "1.18.21",
+        version: "1.18.23",
         time: { created: 1, updated: 2 },
         ...overrides,
       },
@@ -293,7 +293,7 @@ describe("participant deletion application lifecycle", () => {
   });
 });
 
-describe("OpenCode 1.18.21 participant deletion evidence", () => {
+describe("OpenCode 1.18.23 participant deletion evidence", () => {
   test("parses the complete pinned optional session shape without retaining mutable input", () => {
     const input = event({
       time: { created: 1, updated: 2, compacting: 3 },
@@ -306,7 +306,7 @@ describe("OpenCode 1.18.21 participant deletion evidence", () => {
       share: { url: "https://example.test/session" },
       revert: { messageID: "msg", partID: "part", snapshot: "snapshot", diff: "diff" },
     });
-    const parsed = parseOpenCode11821SessionDeletedEvent(input);
+    const parsed = parseOpenCode118SessionDeletedEvent(input);
     expect(parsed).toEqual({
       sessionId: valid(validateSessionId("ses_deleted")),
       projectId: "project",
@@ -321,7 +321,7 @@ describe("OpenCode 1.18.21 participant deletion evidence", () => {
       type: "session.deleted",
       properties: nullProperties,
     });
-    expect(parseOpenCode11821SessionDeletedEvent(nullEvent)).toMatchObject({
+    expect(parseOpenCode118SessionDeletedEvent(nullEvent)).toMatchObject({
       sessionId: "ses_deleted",
       isRoot: true,
     });
@@ -348,7 +348,7 @@ describe("OpenCode 1.18.21 participant deletion evidence", () => {
       },
     });
     for (const value of [accessor, symbol, inherited, throwing]) {
-      expect(parseOpenCode11821SessionDeletedEvent(value)).toBeUndefined();
+      expect(parseOpenCode118SessionDeletedEvent(value)).toBeUndefined();
     }
     expect(reads).toBe(0);
 
@@ -358,7 +358,7 @@ describe("OpenCode 1.18.21 participant deletion evidence", () => {
       Object.defineProperty({ info: event().properties.info }, Symbol("hidden"), { value: true }),
     ]) {
       expect(() =>
-        parseOpenCode11821SessionDeletedEvent({ type: "session.deleted", properties }),
+        parseOpenCode118SessionDeletedEvent({ type: "session.deleted", properties }),
       ).toThrow("malformed");
     }
 
@@ -369,9 +369,9 @@ describe("OpenCode 1.18.21 participant deletion evidence", () => {
         return "session.deleted";
       },
     });
-    expect(isOpenCode11821SessionDeletedEvent(typeAccessor)).toBe(false);
+    expect(isOpenCode118SessionDeletedEvent(typeAccessor)).toBe(false);
     expect(
-      isOpenCode11821SessionDeletedEvent(
+      isOpenCode118SessionDeletedEvent(
         new Proxy(
           {},
           {
@@ -382,8 +382,8 @@ describe("OpenCode 1.18.21 participant deletion evidence", () => {
         ),
       ),
     ).toBe(false);
-    expect(isOpenCode11821SessionDeletedEvent(null)).toBe(false);
-    expect(isOpenCode11821SessionDeletedEvent([])).toBe(false);
+    expect(isOpenCode118SessionDeletedEvent(null)).toBe(false);
+    expect(isOpenCode118SessionDeletedEvent([])).toBe(false);
     expect(reads).toBe(0);
   });
 
@@ -436,7 +436,7 @@ describe("OpenCode 1.18.21 participant deletion evidence", () => {
       { version: "x".repeat(257) },
     ];
     for (const override of malformed) {
-      expect(() => parseOpenCode11821SessionDeletedEvent(event(override))).toThrow("malformed");
+      expect(() => parseOpenCode118SessionDeletedEvent(event(override))).toThrow("malformed");
     }
   });
 });

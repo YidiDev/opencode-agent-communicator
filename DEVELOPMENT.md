@@ -216,7 +216,7 @@ test/
   unit/          # mirrors src/ for pure behavior
   integration/   # real store and adapter boundaries
   black-box/     # packaged plugin behavior
-  live/          # isolated exact OpenCode 1.18.21 harness
+  live/          # isolated supported OpenCode 1.18 harness
 ```
 
 ### 9.1 Required Practices
@@ -234,7 +234,7 @@ test/
 - Security boundary tests MUST include malformed, adversarial, and concurrent
   inputs.
 - Snapshot tests MAY supplement but MUST NOT replace semantic assertions.
-- Live tests MUST use an isolated, project-pinned OpenCode 1.18.21 harness and
+- Live tests MUST use isolated, project-selected supported OpenCode 1.18 harnesses and
   MUST NOT alter the user's active OpenCode installation.
 - The regular suite has an exact reviewed skip declaration budget enforced by
   `tools/verify-test-skips.mjs`; adding or moving a skip requires explicit review.

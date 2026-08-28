@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, rmSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { OpenCodeNativeAdapter } from "../../../src/adapters/native/opencode-1-18-21";
+import type { OpenCodeNativeAdapter } from "../../../src/adapters/native/opencode-1-18";
 import {
   type CommunicatorOptions,
   parseCommunicatorOptions,
@@ -31,7 +31,7 @@ function rootFixture(): string {
 
 function nativeFixture(): OpenCodeNativeAdapter {
   return {
-    readHealth: async () => ({ healthy: true, version: "1.18.21" }),
+    readHealth: async () => ({ healthy: true, version: "1.18.23" }),
     readVisibleRoots: async () => [],
     readCurrentRoots: async () => ({
       sourceVisible: false,
@@ -74,8 +74,8 @@ function injectedDependencies(
       directory: join(options.stateDirectory, "..", "workspace"),
       worktree: join(options.stateDirectory, "..", "workspace"),
     }),
-    createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.21" }) }),
-    checkCompatibility: async () => ({ ok: true, value: { version: "1.18.21" } }),
+    createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
+    checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
     createNative: nativeFixture,
     createRuntime: () => ({ stop: () => order.push("runtime-stop") }) as never,
     recoverStartup: async () => ({ ok: true, value: lifecycle(order) as never }),

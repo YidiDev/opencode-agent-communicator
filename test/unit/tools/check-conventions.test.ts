@@ -73,7 +73,7 @@ describe("physical line limits", () => {
 });
 
 describe("metadata and source directives", () => {
-  test("requires exact dependency and package manager versions", () => {
+  test("requires exact installed versions and bounded peer ranges", () => {
     const root = createRepository();
     write(
       root,
@@ -81,12 +81,18 @@ describe("metadata and source directives", () => {
       JSON.stringify({
         packageManager: "bun@^1.4.0",
         dependencies: { example: "~1.2.3" },
-        peerDependencies: { peer: ">=2.0.0" },
+        peerDependencies: {
+          bounded: ">=2.0.0 <3.0.0",
+          broad: "^2.0.0",
+          inverted: ">=3.0.0 <2.0.0",
+          empty: ">=2.0.0 <2.0.0",
+          unsafe: ">=9007199254740992.0.0 <9007199254740993.0.0",
+        },
       }),
     );
 
     expect(findings(root, "package-manager")).toHaveLength(1);
-    expect(findings(root, "dependency-version")).toHaveLength(2);
+    expect(findings(root, "dependency-version")).toHaveLength(5);
   });
 
   test("rejects bare work markers and TypeScript suppressions", () => {

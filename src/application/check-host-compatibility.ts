@@ -1,8 +1,8 @@
 import {
   type CompatibleHost,
   type HostHealthPort,
+  isSupportedOpenCodeVersion,
   type RuntimeIdentityPort,
-  supportedOpenCodeVersion,
   supportedRuntimeArchitecture,
   supportedRuntimePlatform,
 } from "../domain/host";
@@ -12,7 +12,7 @@ import { boundedExternalCall } from "./bounded-external-call";
 function incompatibleHost(): DomainResult<never> {
   return domainFailure(
     "incompatible_host",
-    "The communicator requires Linux x64 and a healthy OpenCode 1.18.21 host.",
+    "The communicator requires Linux x64 and a healthy OpenCode >=1.18.21 <1.19.0 host.",
     false,
   );
 }
@@ -25,12 +25,11 @@ function isExactSupportedRuntime(value: unknown): boolean {
   );
 }
 
-function isExactSupportedHealth(value: unknown): boolean {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  return (
-    Reflect.get(value, "healthy") === true &&
-    Reflect.get(value, "version") === supportedOpenCodeVersion
-  );
+function supportedHealthVersion(value: unknown): CompatibleHost["version"] | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  if (Reflect.get(value, "healthy") !== true) return undefined;
+  const version = Reflect.get(value, "version");
+  return isSupportedOpenCodeVersion(version) ? version : undefined;
 }
 
 export async function checkHostCompatibility(
@@ -43,10 +42,11 @@ export async function checkHostCompatibility(
     const health = context
       ? await boundedExternalCall(() => healthPort.readHealth(), context.abort, context.deadlineMs)
       : { kind: "value" as const, value: await healthPort.readHealth() };
-    if (health.kind !== "value" || !isExactSupportedHealth(health.value)) {
+    const version = health.kind === "value" ? supportedHealthVersion(health.value) : undefined;
+    if (!version) {
       return incompatibleHost();
     }
-    return { ok: true, value: { version: supportedOpenCodeVersion } };
+    return { ok: true, value: { version } };
   } catch (_cause: unknown) {
     return incompatibleHost();
   }

@@ -504,7 +504,7 @@ async function runStartStopJourney(invoker: Invoker, stopTargetSessionID: string
   }
 }
 
-test("runs the exact packed production plugin through OpenCode 1.18.21", async () => {
+test("runs the exact packed production plugin through OpenCode 1.18.23", async () => {
   const fixture = await launchPackedFixture();
   let failure: unknown;
   try {

@@ -16,14 +16,17 @@ function healthPort(value: unknown): HostHealthPort {
 }
 
 describe("host compatibility", () => {
-  test("accepts only the healthy exact pinned host", async () => {
-    expect(
-      await checkHostCompatibility(exactRuntime, healthPort({ healthy: true, version: "1.18.21" })),
-    ).toEqual({
-      ok: true,
-      value: { version: "1.18.21" },
-    });
-  });
+  test.each(["1.18.21", "1.18.23", "1.18.999"])(
+    "accepts a healthy supported patch host at %s",
+    async (version) => {
+      expect(
+        await checkHostCompatibility(exactRuntime, healthPort({ healthy: true, version })),
+      ).toEqual({
+        ok: true,
+        value: { version },
+      });
+    },
+  );
 
   test.each([
     ["wrong platform", { platform: "darwin", architecture: "x64", bunVersion: "1.4.0" }],
@@ -40,7 +43,7 @@ describe("host compatibility", () => {
       {
         async readHealth(): Promise<unknown> {
           healthReads += 1;
-          return { healthy: true, version: "1.18.21" };
+          return { healthy: true, version: "1.18.23" };
         },
       },
     );
@@ -48,7 +51,8 @@ describe("host compatibility", () => {
       ok: false,
       error: {
         code: "incompatible_host",
-        message: "The communicator requires Linux x64 and a healthy OpenCode 1.18.21 host.",
+        message:
+          "The communicator requires Linux x64 and a healthy OpenCode >=1.18.21 <1.19.0 host.",
         retryable: false,
       },
     });
@@ -59,19 +63,25 @@ describe("host compatibility", () => {
     ["missing health", undefined],
     ["null health", null],
     ["array health", []],
-    ["missing healthy", { version: "1.18.21" }],
-    ["false healthy", { healthy: false, version: "1.18.21" }],
-    ["malformed healthy", { healthy: "true", version: "1.18.21" }],
+    ["missing healthy", { version: "1.18.23" }],
+    ["false healthy", { healthy: false, version: "1.18.23" }],
+    ["malformed healthy", { healthy: "true", version: "1.18.23" }],
     ["missing version", { healthy: true }],
-    ["malformed version", { healthy: true, version: 11821 }],
+    ["malformed version", { healthy: true, version: 11823 }],
     ["older host", { healthy: true, version: "1.18.20" }],
-    ["newer host", { healthy: true, version: "1.18.22" }],
+    ["next minor", { healthy: true, version: "1.19.0" }],
+    ["next major", { healthy: true, version: "2.0.0" }],
+    ["prerelease", { healthy: true, version: "1.18.24-beta.1" }],
+    ["build metadata", { healthy: true, version: "1.18.24+build" }],
+    ["noncanonical patch", { healthy: true, version: "1.18.021" }],
+    ["unsafe patch integer", { healthy: true, version: `1.18.${Number.MAX_SAFE_INTEGER + 1}` }],
   ])("fails closed for %s", async (_label, health) => {
     expect(await checkHostCompatibility(exactRuntime, healthPort(health))).toEqual({
       ok: false,
       error: {
         code: "incompatible_host",
-        message: "The communicator requires Linux x64 and a healthy OpenCode 1.18.21 host.",
+        message:
+          "The communicator requires Linux x64 and a healthy OpenCode >=1.18.21 <1.19.0 host.",
         retryable: false,
       },
     });
@@ -95,7 +105,7 @@ describe("host compatibility", () => {
         {
           readIdentity: () => ({ platform: "linux", architecture: "x64", bunVersion: "embedded" }),
         },
-        healthPort({ healthy: true, version: "1.18.21" }),
+        healthPort({ healthy: true, version: "1.18.23" }),
       ),
     ).toMatchObject({ ok: true });
   });
@@ -108,7 +118,7 @@ describe("host compatibility", () => {
           throw new Error(secret);
         },
       },
-      healthPort({ healthy: true, version: "1.18.21" }),
+      healthPort({ healthy: true, version: "1.18.23" }),
     );
     expect(result).toMatchObject({ ok: false, error: { code: "incompatible_host" } });
     expect(JSON.stringify(result)).not.toContain(secret);

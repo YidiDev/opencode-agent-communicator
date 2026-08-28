@@ -97,7 +97,7 @@ function enforceOwnDataProperty(target: object, key: string, value: unknown): vo
   }
 }
 
-/** Ensure host policy evaluation reaches the ask hook; pinned 1.18.21 skips it for pre-allowed calls. */
+/** Ensure host policy evaluation reaches the ask hook; OpenCode 1.18 skips it for pre-allowed calls. */
 export function enforceMandatoryStopConfiguration(config: object): void {
   let permission: ReturnType<typeof ownDataValue>;
   try {

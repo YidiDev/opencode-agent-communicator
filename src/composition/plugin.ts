@@ -11,10 +11,10 @@ import {
   trustedWorkingDirectory,
 } from "../adapters/export/opencode-cli-trust";
 import {
-  createOpenCode11821NativeAdapter,
+  createOpenCode118NativeAdapter,
   type OpenCodeNativeAdapter,
-} from "../adapters/native/opencode-1-18-21";
-import { createOpenCode11821HealthPort } from "../adapters/native/opencode-1-18-21-health";
+} from "../adapters/native/opencode-1-18";
+import { createOpenCode118HealthPort } from "../adapters/native/opencode-1-18-health";
 import { LinuxBunSqliteStore } from "../adapters/store/sqlite-store";
 import { checkHostCompatibility } from "../application/check-host-compatibility";
 import { ParticipantDeletionLifecycle } from "../application/participant-deletion-lifecycle";
@@ -57,7 +57,7 @@ export interface CompositionDependencies {
   readonly deriveWorkspace: typeof deriveWorkspaceBinding;
   readonly createHealth: (input: PluginInput) => HostHealthPort;
   readonly runtimeIdentity: RuntimeIdentityPort;
-  readonly createNative: typeof createOpenCode11821NativeAdapter;
+  readonly createNative: typeof createOpenCode118NativeAdapter;
   readonly checkCompatibility: typeof checkHostCompatibility;
   readonly createStore: (
     options: ConstructorParameters<typeof LinuxBunSqliteStore>[0],
@@ -147,9 +147,9 @@ function createProductionExporter(
 const productionDependencies: CompositionDependencies = Object.freeze({
   parseOptions: parseCommunicatorOptions,
   deriveWorkspace: deriveWorkspaceBinding,
-  createHealth: createOpenCode11821HealthPort,
+  createHealth: createOpenCode118HealthPort,
   runtimeIdentity: productionRuntimeIdentity,
-  createNative: createOpenCode11821NativeAdapter,
+  createNative: createOpenCode118NativeAdapter,
   checkCompatibility: checkHostCompatibility,
   createStore: (options: ConstructorParameters<typeof LinuxBunSqliteStore>[0]) =>
     new LinuxBunSqliteStore(options),
@@ -259,7 +259,7 @@ export function createCompositionFactory(
       const startupAbort = new AbortController();
       const startupDeadlineMs = productionClock.nowMs() + options.startupDeadlineMs;
       // The generated legacy PluginInput client has no declared health endpoint. The narrow pinned
-      // health adapter makes the exact health call through the same 1.18.21 SDK. Runtime identity is
+      // The health adapter uses the build-time 1.18 SDK across the supported patch line. Identity is
       // checked before that call; both checks complete before any persistent resource is opened.
       const compatible = await dependencies.checkCompatibility(
         dependencies.runtimeIdentity,

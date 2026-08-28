@@ -1,7 +1,7 @@
 {
   "name": "opencode-agent-communicator",
-  "version": "0.1.0",
-  "description": "Durable, workspace-scoped session communication tools for OpenCode 1.18.21.",
+  "version": "0.1.1",
+  "description": "Durable, workspace-scoped session communication tools for OpenCode 1.18.",
   "license": "MIT",
   "author": "YidiDev",
   "homepage": "https://github.com/YidiDev/opencode-agent-communicator#readme",
@@ -42,7 +42,8 @@
     "x64"
   ],
   "engines": {
-    "bun": "1.4.0"
+    "bun": "1.4.0",
+    "opencode": ">=1.18.21 <1.19.0"
   },
   "packageManager": "bun@1.4.0",
   "scripts": {
@@ -67,8 +68,8 @@
     "prepack": "node tools/verify-package.mjs"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "1.18.21",
-    "@opencode-ai/sdk": "1.18.21",
+    "@opencode-ai/plugin": "1.18.23",
+    "@opencode-ai/sdk": "1.18.23",
     "zod": "4.1.8"
   },
   "devDependencies": {
@@ -78,10 +79,10 @@
     "@types/istanbul-lib-instrument": "1.7.8",
     "istanbul-lib-coverage": "3.2.2",
     "istanbul-lib-instrument": "6.0.3",
-    "opencode-ai": "1.18.21",
+    "opencode-ai": "1.18.23",
     "typescript": "5.9.3"
   },
   "peerDependencies": {
-    "opencode-ai": "1.18.21"
+    "opencode-ai": ">=1.18.21 <1.19.0"
   }
 }

@@ -1,4 +1,4 @@
-import { snapshotEnvelopeData } from "./opencode-1-18-21-sessions";
+import { snapshotEnvelopeData } from "./opencode-1-18-sessions";
 
 export class NativeAdapterFault extends Error {
   constructor(message: string, cause?: unknown) {

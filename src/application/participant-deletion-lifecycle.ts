@@ -1,8 +1,8 @@
 import type { WorkspaceKey } from "../domain/workspaces";
 import type { CommunicatorStartupRecoveryLifecycle } from "./communicator-startup-lifecycle";
 import {
-  isOpenCode11821SessionDeletedEvent,
-  parseOpenCode11821SessionDeletedEvent,
+  isOpenCode118SessionDeletedEvent,
+  parseOpenCode118SessionDeletedEvent,
 } from "./participant-deletion-evidence";
 import type {
   NativeParticipantPresencePort,
@@ -70,12 +70,12 @@ export class ParticipantDeletionLifecycle {
   }
 
   async handle(value: unknown): Promise<void> {
-    if (!isOpenCode11821SessionDeletedEvent(value)) return;
+    if (!isOpenCode118SessionDeletedEvent(value)) return;
     if (this.disposing || this.effects.signal.aborted) return;
     if (this.options.lifecycle.status !== "ready") return;
-    let evidence: ReturnType<typeof parseOpenCode11821SessionDeletedEvent>;
+    let evidence: ReturnType<typeof parseOpenCode118SessionDeletedEvent>;
     try {
-      evidence = parseOpenCode11821SessionDeletedEvent(value);
+      evidence = parseOpenCode118SessionDeletedEvent(value);
       if (!evidence) throw new TypeError("OpenCode session.deleted evidence is malformed.");
     } catch (cause: unknown) {
       this.fail("port_contract_violation");

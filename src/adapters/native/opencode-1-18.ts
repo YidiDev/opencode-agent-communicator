@@ -14,22 +14,14 @@ import type { HostHealthPort } from "../../domain/host";
 import { type VisibleRootSessionPort, validateSessionId } from "../../domain/sessions";
 import type { WorkspaceKey } from "../../domain/workspaces";
 import { validateWorkspaceKey } from "../../domain/workspaces";
-import {
-  createAdmissionOperations,
-  createObservationOperations,
-} from "./opencode-1-18-21-operations";
-import { createDirectParticipantPresencePort } from "./opencode-1-18-21-presence";
+import { createAdmissionOperations, createObservationOperations } from "./opencode-1-18-operations";
+import { createDirectParticipantPresencePort } from "./opencode-1-18-presence";
 import {
   createDeterministicRootSession,
   reconcileDeterministicRootSession,
   updateAndVerifySessionTitle,
-} from "./opencode-1-18-21-start";
-import {
-  envelopeData,
-  method,
-  NativeAdapterFault,
-  requireRecord,
-} from "./opencode-1-18-21-surface";
+} from "./opencode-1-18-start";
+import { envelopeData, method, NativeAdapterFault, requireRecord } from "./opencode-1-18-surface";
 
 interface V2ClientSurface {
   readonly global: { health(): Promise<unknown> };
@@ -127,7 +119,7 @@ export type OpenCodeNativeAdapter = HostHealthPort &
 function legacySurface(client: unknown): LegacyClientSurface {
   const legacyClient = requireRecord(client, "Injected legacy client is unavailable.");
   const session = legacyClient.session;
-  // The 1.18.21 runtime exposes this endpoint although PluginInput's legacy generated type omits it.
+  // Supported 1.18 runtimes expose this endpoint although the legacy generated type omits it.
   const status = method(session, "status", "Legacy session status");
   const abort = method(session, "abort", "Legacy session interrupt");
   return {
@@ -170,7 +162,7 @@ function startSessionSurface(session: V2ClientSurface["v2"]["session"]) {
   };
 }
 
-export function createOpenCode11821NativeAdapter(
+export function createOpenCode118NativeAdapter(
   input: OpenCodeNativeAdapterInput,
   dependencies: OpenCodeNativeAdapterDependencies = {},
 ): OpenCodeNativeAdapter {

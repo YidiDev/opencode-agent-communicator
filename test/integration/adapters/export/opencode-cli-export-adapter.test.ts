@@ -34,7 +34,7 @@ function nativeOutput(id = sessionId, sanitized = true): Uint8Array {
         projectID: "project",
         title: sanitized ? `[redacted:session-title:${id}]` : "title",
         directory: sanitized ? `[redacted:session-directory:${id}]` : "/private",
-        version: "1.18.21",
+        version: "1.18.23",
         time: { created: 1, updated: 2 },
       },
       messages: [
@@ -56,7 +56,7 @@ function nativeOutput(id = sessionId, sanitized = true): Uint8Array {
 
 class FakeSpawn implements ExportSpawnPort {
   readonly calls: ExportSpawnInput[] = [];
-  version = new TextEncoder().encode("1.18.21\n");
+  version = new TextEncoder().encode("1.18.23\n");
   exported = nativeOutput();
   stderr = new Uint8Array();
   exitCode = 0;

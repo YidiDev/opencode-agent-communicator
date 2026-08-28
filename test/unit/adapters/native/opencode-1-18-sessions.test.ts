@@ -4,14 +4,14 @@ import {
   mergedActivityStatus,
   parseSessionArray,
   parseV2SessionArray,
-} from "../../../../src/adapters/native/opencode-1-18-21-sessions";
+} from "../../../../src/adapters/native/opencode-1-18-sessions";
 import { validateSessionId } from "../../../../src/domain/sessions";
 
 const validated = validateSessionId("ses_truth");
 if (!validated.ok) throw new Error("invalid fixture");
 const sessionId = validated.value;
 
-describe("OpenCode 1.18.21 merged activity truth table", () => {
+describe("OpenCode 1.18.23 merged activity truth table", () => {
   test.each([
     ["absent from both", undefined, undefined, "idle"],
     ["legacy idle and V2 absent", { type: "idle" }, undefined, "idle"],
