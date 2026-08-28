@@ -80,7 +80,7 @@
     "istanbul-lib-coverage": "3.2.2",
     "istanbul-lib-instrument": "6.0.3",
     "opencode-ai": "1.18.23",
-    "typescript": "5.9.3"
+    "typescript": "7.0.2"
   },
   "peerDependencies": {
     "opencode-ai": ">=1.18.21 <1.19.0"
