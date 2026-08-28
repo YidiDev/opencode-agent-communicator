@@ -27,6 +27,7 @@ interface FixtureOptions {
   readonly startCreateResponse?: unknown;
   readonly titleUpdateResponse?: unknown;
   readonly publicPromptResponse?: unknown;
+  readonly publicMessageResponse?: unknown;
 }
 
 function envelope(data: unknown): { readonly data: unknown } {
@@ -78,9 +79,13 @@ function fixture(options: FixtureOptions = {}) {
             calls.push({ surface: "public.update", input: [input, requestOptions] });
             return options.titleUpdateResponse;
           },
-          async prompt(input, requestOptions): Promise<unknown> {
-            calls.push({ surface: "public.prompt", input: [input, requestOptions] });
+          async promptAsync(input: unknown, requestOptions: unknown): Promise<unknown> {
+            calls.push({ surface: "public.promptAsync", input: [input, requestOptions] });
             return options.publicPromptResponse;
+          },
+          async message(input: unknown, requestOptions: unknown): Promise<unknown> {
+            calls.push({ surface: "public.message", input: [input, requestOptions] });
+            return options.publicMessageResponse;
           },
         },
         v2: {
@@ -602,20 +607,28 @@ describe("OpenCode 1.18.23 native adapter start and validation boundaries", () =
   });
 });
 
-describe("OpenCode 1.18.23 native queue admission", () => {
-  test("queues exactly once and accepts exact admission evidence using native time", async () => {
+describe("OpenCode 1.18.23 public message admission", () => {
+  const observedMessage = (text = "verified envelope") => ({
+    data: {
+      info: { id: nativeMessageId, sessionID: targetSessionId, role: "user" },
+      parts: [
+        {
+          id: "prt_public",
+          sessionID: targetSessionId,
+          messageID: nativeMessageId,
+          type: "text",
+          text,
+        },
+      ],
+    },
+    response: new Response(null, { status: 200 }),
+  });
+
+  test("submits once and accepts exact fixed-message read-back", async () => {
     const controller = new AbortController();
     const fake = fixture({
-      promptResponse: envelope({
-        data: {
-          admittedSeq: 4,
-          id: nativeMessageId,
-          sessionID: targetSessionId,
-          prompt: { text: "verified envelope" },
-          delivery: "queue",
-          timeCreated: 1234,
-        },
-      }),
+      publicPromptResponse: { data: {}, response: new Response(null, { status: 204 }) },
+      publicMessageResponse: observedMessage(),
     });
     expect(
       await fake.adapter.queueMessage({
@@ -624,97 +637,28 @@ describe("OpenCode 1.18.23 native queue admission", () => {
         envelope: "verified envelope",
         abort: controller.signal,
       }),
-    ).toEqual({ kind: "admitted", admittedSeq: 4, observedAtMs: 1234 });
-    expect(fake.calls.filter((call) => call.surface === "v2.prompt")).toEqual([
+    ).toEqual({ kind: "public_message", observedAtMs: 7000 });
+    expect(fake.calls.filter((call) => call.surface === "public.promptAsync")).toEqual([
       {
-        surface: "v2.prompt",
+        surface: "public.promptAsync",
         input: [
           {
-            sessionID: "ses_target",
-            id: `msg_${"a".repeat(32)}`,
-            prompt: { text: "verified envelope" },
-            delivery: "queue",
-            resume: true,
+            sessionID: targetSessionId,
+            directory: "/workspace",
+            messageID: nativeMessageId,
+            parts: [{ type: "text", text: "verified envelope" }],
           },
           { signal: controller.signal },
         ],
       },
     ]);
+    expect(fake.calls.filter((call) => call.surface === "v2.prompt")).toHaveLength(0);
   });
 
-  test("accepts promotion and falls back to the clock only when native time is absent", async () => {
+  test("fails closed for mismatched public transcript evidence", async () => {
     const fake = fixture({
-      promptResponse: envelope({
-        data: {
-          admittedSeq: 4,
-          promotedSeq: 7,
-          id: nativeMessageId,
-          sessionID: targetSessionId,
-          prompt: { text: "verified envelope" },
-          delivery: "queue",
-        },
-      }),
-    });
-    expect(
-      await fake.adapter.queueMessage({
-        targetSessionId,
-        nativeMessageId,
-        envelope: "verified envelope",
-        abort: new AbortController().signal,
-      }),
-    ).toEqual({ kind: "promoted", admittedSeq: 4, promotedSeq: 7, observedAtMs: 7000 });
-  });
-
-  test("preserves coherent admission when abort wins only after the response is returned", async () => {
-    const controller = new AbortController();
-    const admission = {
-      admittedSeq: 4,
-      id: nativeMessageId,
-      sessionID: targetSessionId,
-      prompt: { text: "verified envelope" },
-      delivery: "queue",
-      get timeCreated() {
-        controller.abort();
-        return 12;
-      },
-    };
-    const fake = fixture({
-      promptResponse: envelope({ data: admission }),
-    });
-    expect(
-      await fake.adapter.queueMessage({
-        targetSessionId,
-        nativeMessageId,
-        envelope: "verified envelope",
-        abort: controller.signal,
-      }),
-    ).toEqual({ kind: "admitted", admittedSeq: 4, observedAtMs: 12 });
-    expect(controller.signal.aborted).toBe(true);
-  });
-
-  test.each([
-    ["mismatched session", { sessionID: "ses_other" }],
-    ["mismatched ID", { id: `msg_${"b".repeat(32)}` }],
-    ["wrong delivery", { delivery: "steer" }],
-    ["mismatched text", { prompt: { text: "other" } }],
-    ["negative sequence", { admittedSeq: -1 }],
-    ["unsafe sequence", { admittedSeq: Number.MAX_SAFE_INTEGER + 1 }],
-    ["invalid promotion", { promotedSeq: 4 }],
-    ["invalid native time", { timeCreated: Number.NaN }],
-  ])("returns unknown for %s evidence", async (_label, replacement) => {
-    const fake = fixture({
-      promptResponse: envelope({
-        data: {
-          admittedSeq: 4,
-          promotedSeq: 5,
-          id: nativeMessageId,
-          sessionID: targetSessionId,
-          prompt: { text: "verified envelope" },
-          delivery: "queue",
-          timeCreated: 10,
-          ...replacement,
-        },
-      }),
+      publicPromptResponse: { data: {}, response: new Response(null, { status: 204 }) },
+      publicMessageResponse: observedMessage("other"),
     });
     expect(
       await fake.adapter.queueMessage({
@@ -724,51 +668,30 @@ describe("OpenCode 1.18.23 native queue admission", () => {
         abort: new AbortController().signal,
       }),
     ).toEqual({ kind: "unknown" });
+    expect(fake.calls.filter((call) => call.surface === "public.promptAsync")).toHaveLength(1);
   });
 
-  test.each([
-    ["transport throw", { promptThrows: true }],
-    ["malformed envelope", { promptResponse: null }],
-    [
-      "server rejection",
-      { promptResponse: { error: {}, response: new Response(null, { status: 503 }) } },
-    ],
-    ["ambiguous error", { promptResponse: { error: {} } }],
-    ["untrusted status object", { promptResponse: { error: {}, response: { status: 404 } } }],
-  ])("returns unknown without retry for %s", async (_label, options) => {
-    const fake = fixture(options);
-    expect(
-      await fake.adapter.queueMessage({
-        targetSessionId,
-        nativeMessageId,
-        envelope: "verified envelope",
-        abort: new AbortController().signal,
-      }),
-    ).toEqual({ kind: "unknown" });
-    expect(fake.calls.filter((call) => call.surface === "v2.prompt")).toHaveLength(1);
-  });
-
-  test("returns definitive rejection only for completed 4xx while not aborted", async () => {
-    const fake = fixture({
-      promptResponse: {
-        error: { _tag: "SessionNotFoundError", sessionID: targetSessionId, message: "not found" },
-        response: new Response(null, { status: 404 }),
+  test("returns definitive rejection before read-back and does not submit when aborted", async () => {
+    const rejected = fixture({
+      publicPromptResponse: {
+        error: { _tag: "InvalidRequestError", message: "invalid" },
+        request: new Request("http://opencode.internal/session"),
+        response: new Response(null, { status: 400 }),
       },
     });
     expect(
-      await fake.adapter.queueMessage({
+      await rejected.adapter.queueMessage({
         targetSessionId,
         nativeMessageId,
         envelope: "verified envelope",
         abort: new AbortController().signal,
       }),
     ).toEqual({ kind: "definitive_rejection" });
+    expect(rejected.calls.filter((call) => call.surface === "public.message")).toHaveLength(0);
 
     const controller = new AbortController();
     controller.abort();
-    const aborted = fixture({
-      promptResponse: { error: { name: "bad request" }, response: { status: 400 } },
-    });
+    const aborted = fixture();
     expect(
       await aborted.adapter.queueMessage({
         targetSessionId,
@@ -777,23 +700,6 @@ describe("OpenCode 1.18.23 native queue admission", () => {
         abort: controller.signal,
       }),
     ).toEqual({ kind: "unknown" });
-    expect(aborted.calls.filter((call) => call.surface === "v2.prompt")).toHaveLength(0);
-
-    const racedController = new AbortController();
-    const raced = fixture({
-      onPrompt: () => racedController.abort(),
-      promptResponse: {
-        error: { name: "bad request" },
-        response: new Response(null, { status: 400 }),
-      },
-    });
-    expect(
-      await raced.adapter.queueMessage({
-        targetSessionId,
-        nativeMessageId,
-        envelope: "verified envelope",
-        abort: racedController.signal,
-      }),
-    ).toEqual({ kind: "unknown" });
+    expect(aborted.calls.filter((call) => call.surface === "public.promptAsync")).toHaveLength(0);
   });
 });

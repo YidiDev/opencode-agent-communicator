@@ -7,6 +7,13 @@ import type {
 import type { NativeMessageId } from "../../domain/generated-ids";
 import type { SessionId } from "../../domain/sessions";
 import { isAuthoritativeClientRejection } from "./opencode-1-18-admission";
+import {
+  admitPublicMessage,
+  type PublicMessageAdmissionDependencies,
+  type PublicMessageSurface,
+  snapshotPublicRecord,
+  successfulPublicData,
+} from "./opencode-1-18-public-message";
 
 interface StartSessionSurface {
   create(
@@ -24,89 +31,20 @@ interface StartSessionSurface {
   ): Promise<unknown>;
 }
 
-interface PublicStartSurface {
+interface PublicStartSurface extends PublicMessageSurface {
   updateTitle(
     input: { readonly sessionID: string; readonly directory: string; readonly title: string },
     options: { readonly signal: AbortSignal },
   ): Promise<unknown>;
-  prompt(
-    input: {
-      readonly sessionID: string;
-      readonly directory: string;
-      readonly messageID: string;
-      readonly model?: { readonly providerID: string; readonly modelID: string };
-      readonly agent?: string;
-      readonly parts: [{ readonly type: "text"; readonly text: string }];
-    },
-    options: { readonly signal: AbortSignal },
-  ): Promise<unknown>;
-}
-
-function snapshotRecord(
-  value: unknown,
-  maximumKeys: number,
-  allowedKeys?: ReadonlySet<string>,
-): Record<string, unknown> | undefined {
-  try {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-    if (![Object.prototype, null].includes(Object.getPrototypeOf(value))) return undefined;
-    const keys = Reflect.ownKeys(value);
-    if (
-      keys.length > maximumKeys ||
-      keys.some((key) => typeof key !== "string" || (allowedKeys && !allowedKeys.has(key)))
-    )
-      return undefined;
-    const output: Record<string, unknown> = Object.create(null);
-    for (const key of keys as string[]) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (!descriptor?.enumerable || !("value" in descriptor)) return undefined;
-      output[key] = descriptor.value;
-    }
-    return output;
-  } catch {
-    return undefined;
-  }
-}
-
-const envelopeKeys = new Set(["data", "request", "response"]);
-
-const requestUrlGetter = Object.getOwnPropertyDescriptor(Request.prototype, "url")?.get;
-const responseStatusGetter = Object.getOwnPropertyDescriptor(Response.prototype, "status")?.get;
-
-function genuineRequest(value: unknown): boolean {
-  if (typeof value !== "object" || value === null || !requestUrlGetter) return false;
-  try {
-    return typeof requestUrlGetter.call(value) === "string";
-  } catch {
-    return false;
-  }
-}
-
-function genuineResponseStatus(value: unknown): number | undefined {
-  if (typeof value !== "object" || value === null || !responseStatusGetter) return undefined;
-  try {
-    return responseStatusGetter.call(value);
-  } catch {
-    return undefined;
-  }
-}
-
-function successfulEnvelopeData(value: unknown): unknown {
-  const envelope = snapshotRecord(value, 3, envelopeKeys);
-  if (!envelope || !Object.hasOwn(envelope, "data")) return undefined;
-  if (Object.hasOwn(envelope, "request") && !genuineRequest(envelope.request)) return undefined;
-  if (Object.hasOwn(envelope, "response") && genuineResponseStatus(envelope.response) !== 200)
-    return undefined;
-  return envelope.data;
 }
 
 function sessionInfo(value: unknown): Record<string, unknown> | undefined {
-  const body = snapshotRecord(successfulEnvelopeData(value), 1, new Set(["data"]));
-  return body ? snapshotRecord(body.data, 32) : undefined;
+  const body = snapshotPublicRecord(successfulPublicData(value, 200), 1, new Set(["data"]));
+  return body ? snapshotPublicRecord(body.data, 32) : undefined;
 }
 
 function publicSession(value: unknown): Record<string, unknown> | undefined {
-  return snapshotRecord(successfulEnvelopeData(value), 32);
+  return snapshotPublicRecord(successfulPublicData(value, 200), 32);
 }
 
 function modelRef(
@@ -123,8 +61,8 @@ function matchesRequested(
   input: { sessionId: SessionId; directory: string; agent?: string; model?: string },
 ): boolean {
   const session = sessionInfo(value);
-  const location = session && snapshotRecord(session.location, 8);
-  const model = session && snapshotRecord(session.model, 8);
+  const location = session && snapshotPublicRecord(session.location, 8);
+  const model = session && snapshotPublicRecord(session.model, 8);
   const separator = input.model?.indexOf("/") ?? -1;
   return Boolean(
     session &&
@@ -234,7 +172,7 @@ export async function updateAndVerifySessionTitle(
 }
 
 export async function admitLegacyInitialMessage(
-  surface: Pick<PublicStartSurface, "prompt">,
+  surface: Pick<PublicStartSurface, "promptAsync" | "message">,
   directory: string,
   input: {
     readonly sessionId: SessionId;
@@ -244,42 +182,20 @@ export async function admitLegacyInitialMessage(
     readonly model?: string;
     readonly abort: AbortSignal;
   },
+  dependencies: PublicMessageAdmissionDependencies = {},
 ): Promise<NativeInitialMessageAdmission> {
-  if (input.abort.aborted) return "unknown";
-  const model = modelRef(input.model);
-  if (model === null) return "definitive_rejection";
-  try {
-    const response = await surface.prompt(
-      {
-        sessionID: input.sessionId,
-        directory,
-        messageID: input.nativeMessageId,
-        ...(input.agent === undefined ? {} : { agent: input.agent }),
-        ...(model === undefined
-          ? {}
-          : { model: { providerID: model.providerID, modelID: model.id } }),
-        parts: [{ type: "text", text: input.message }],
-      },
-      { signal: input.abort },
-    );
-    if (isAuthoritativeClientRejection(response, input.abort.aborted, input.sessionId)) {
-      return "definitive_rejection";
-    }
-    const body = snapshotRecord(successfulEnvelopeData(response), 2, new Set(["info", "parts"]));
-    const assistant = body && snapshotRecord(body.info, 32);
-    if (
-      input.abort.aborted ||
-      !body ||
-      !assistant ||
-      assistant.role !== "assistant" ||
-      assistant.sessionID !== input.sessionId ||
-      assistant.parentID !== input.nativeMessageId ||
-      !Array.isArray(body.parts) ||
-      body.parts.length > 4_096
-    )
-      return "unknown";
-    return "admitted";
-  } catch {
-    return "unknown";
-  }
+  const result = await admitPublicMessage(
+    surface,
+    directory,
+    {
+      sessionId: input.sessionId,
+      nativeMessageId: input.nativeMessageId,
+      text: input.message,
+      ...(input.agent === undefined ? {} : { agent: input.agent }),
+      ...(input.model === undefined ? {} : { model: input.model }),
+      abort: input.abort,
+    },
+    dependencies,
+  );
+  return result.kind === "observed" ? "admitted" : result.kind;
 }

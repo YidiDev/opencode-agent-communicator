@@ -52,14 +52,14 @@ function admissionResult(
   write: Extract<DeliveryStoreResult, { readonly ok: true }>,
 ): DomainResult<DeliveryMetadata> {
   if (outcome.kind === "definitive_rejection") {
-    return domainFailure("admission_failed", "Native queue admission was rejected.", false, {
+    return domainFailure("admission_failed", "Native message admission was rejected.", false, {
       delivery_id: write.delivery.id,
     });
   }
   if (outcome.kind === "unknown") {
     return domainFailure(
       "admission_unknown",
-      "Native queue admission could not be determined.",
+      "Native message admission could not be determined.",
       false,
       { delivery_id: write.delivery.id },
     );
@@ -75,6 +75,14 @@ function exactKeys(record: Record<string, unknown>, expected: readonly string[])
 export function inspectNativeAdmission(value: unknown): NativeQueueAdmission {
   const record = snapshotDataRecord(value, 4);
   if (!record) return { kind: "unknown" };
+  if (
+    exactKeys(record, ["kind", "observedAtMs"]) &&
+    record.kind === "public_message" &&
+    Number.isFinite(record.observedAtMs) &&
+    (record.observedAtMs as number) >= 0
+  ) {
+    return { kind: "public_message", observedAtMs: record.observedAtMs as number };
+  }
   if (
     exactKeys(record, ["kind"]) &&
     (record.kind === "unknown" || record.kind === "definitive_rejection")
@@ -118,7 +126,7 @@ export function inspectNativeAdmission(value: unknown): NativeQueueAdmission {
 export function claimedAdmissionUnknown(deliveryId: DeliveryId): DomainResult<never> {
   return domainFailure(
     "admission_unknown",
-    "Native queue admission could not be determined before the invocation deadline.",
+    "Native message admission could not be determined before the invocation deadline.",
     false,
     { delivery_id: deliveryId },
   );
@@ -153,6 +161,7 @@ export async function recordOutcome(
         workspaceKey,
         deliveryId,
         state: "promoted",
+        evidenceKind: "v2_queue",
         nowMs,
         admittedSeq: outcome.admittedSeq,
         promotedSeq: outcome.promotedSeq,
@@ -167,18 +176,30 @@ export async function recordOutcome(
               fencingToken,
               deliveryId,
               state: "admitted",
+              evidenceKind: "v2_queue",
               nowMs,
               admittedSeq: outcome.admittedSeq,
               evidenceObservedAtMs: outcome.observedAtMs,
             })
-        : () =>
-            ports.deliveries.completeSubmission({
-              workspaceKey,
-              fencingToken,
-              deliveryId,
-              state: outcome.kind === "definitive_rejection" ? "failed" : "admission_unknown",
-              nowMs,
-            });
+        : outcome.kind === "public_message"
+          ? () =>
+              ports.deliveries.completeSubmission({
+                workspaceKey,
+                fencingToken,
+                deliveryId,
+                state: "admitted",
+                evidenceKind: "public_message",
+                nowMs,
+                evidenceObservedAtMs: outcome.observedAtMs,
+              })
+          : () =>
+              ports.deliveries.completeSubmission({
+                workspaceKey,
+                fencingToken,
+                deliveryId,
+                state: outcome.kind === "definitive_rejection" ? "failed" : "admission_unknown",
+                nowMs,
+              });
   }
   const settlement = await runUntilAborted(abort, write);
   if (settlement.kind === "aborted") return deliveryStoreFailure("ownership_lost", deliveryId);

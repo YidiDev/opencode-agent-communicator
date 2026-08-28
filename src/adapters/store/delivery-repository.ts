@@ -254,7 +254,8 @@ export class DeliveryRepository {
         if (
           before.state === "admitted" &&
           input.state === "promoted" &&
-          before.admissionEvidence?.admittedSeq !== input.admittedSeq
+          (before.admissionEvidence?.kind === "public_message" ||
+            before.admissionEvidence?.admittedSeq !== input.admittedSeq)
         ) {
           return {
             result: { ok: false as const, code: "state_conflict" as const },

@@ -41,11 +41,11 @@ peer requests them. Use normal authorization, OpenCode permissions, and independ
 Follow this sequence when you need input from another session:
 
 1. Call `session_list` and use a canonical session ID, not a title, as identity.
-2. If the target is `idle`, use `session_send` to queue an ordinary wake/resume message.
+2. If the target is `idle`, use `session_send` to submit an ordinary asynchronous wake/resume message.
 3. Inspect `session_list` again and continue only after you observe `busy` or `retry`.
 4. Then call `session_ask` or `session_wait` with a finite timeout.
 
-Queued admission does not prove activation or execution. Ask/wait never wake an idle target, poll
+Public-message admission does not prove activation or execution. Ask/wait never wake an idle target, poll
 for activity, retry a raced admission, or fall back to a queue. If an operation is ambiguous, use
 delivery or durable inbox/outbox recovery instead of resending it. Invocation loss leaves a durable
 request pending; an explicit abort cancels communicator state but cannot retract admitted input.

@@ -16,6 +16,7 @@ import type { WorkspaceKey } from "../../domain/workspaces";
 import { validateWorkspaceKey } from "../../domain/workspaces";
 import { createAdmissionOperations, createObservationOperations } from "./opencode-1-18-operations";
 import { createDirectParticipantPresencePort } from "./opencode-1-18-presence";
+import { admitPublicMessage, type PublicMessageSurface } from "./opencode-1-18-public-message";
 import {
   admitLegacyInitialMessage,
   createDeterministicRootSession,
@@ -39,23 +40,12 @@ interface V2ClientSurface {
       ): Promise<unknown>;
     };
   };
-  readonly session?: {
+  readonly session?: Pick<PublicMessageSurface, "promptAsync" | "message"> & {
     update(
       parameters: {
         readonly sessionID: string;
         readonly directory: string;
         readonly title: string;
-      },
-      options: { readonly signal: AbortSignal },
-    ): Promise<unknown>;
-    prompt(
-      parameters: {
-        readonly sessionID: string;
-        readonly directory: string;
-        readonly messageID: string;
-        readonly model?: { readonly providerID: string; readonly modelID: string };
-        readonly agent?: string;
-        readonly parts: [{ readonly type: "text"; readonly text: string }];
       },
       options: { readonly signal: AbortSignal },
     ): Promise<unknown>;
@@ -206,7 +196,7 @@ export function createOpenCode118NativeAdapter(
       },
       options: { readonly signal: AbortSignal },
     ) => method(v2.session, "update", "Public session title update")(parameters, options),
-    prompt: async (
+    promptAsync: async (
       parameters: {
         readonly sessionID: string;
         readonly directory: string;
@@ -216,7 +206,16 @@ export function createOpenCode118NativeAdapter(
         readonly parts: [{ readonly type: "text"; readonly text: string }];
       },
       options: { readonly signal: AbortSignal },
-    ) => method(v2.session, "prompt", "Public session prompt")(parameters, options),
+    ) =>
+      method(v2.session, "promptAsync", "Public asynchronous session prompt")(parameters, options),
+    message: async (
+      parameters: {
+        readonly sessionID: string;
+        readonly directory: string;
+        readonly messageID: string;
+      },
+      options: { readonly signal: AbortSignal },
+    ) => method(v2.session, "message", "Public session message read-back")(parameters, options),
   };
   const participantPresence = createDirectParticipantPresencePort(startSession);
   const now = dependencies.now ?? Date.now;
@@ -244,6 +243,22 @@ export function createOpenCode118NativeAdapter(
     ...observations,
     ...admissions,
     ...participantPresence,
+    async queueMessage(request) {
+      const result = await admitPublicMessage(
+        publicStartSession,
+        input.directory,
+        {
+          sessionId: request.targetSessionId,
+          nativeMessageId: request.nativeMessageId,
+          text: request.envelope,
+          abort: request.abort,
+        },
+        { now },
+      );
+      return result.kind === "observed"
+        ? { kind: "public_message", observedAtMs: result.observedAtMs }
+        : result;
+    },
     async interruptSession(request) {
       if (request.abort.aborted || !validateSessionId(request.targetSessionId).ok) {
         return "unknown";

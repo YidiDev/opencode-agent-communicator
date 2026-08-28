@@ -145,12 +145,12 @@ describe("Linux private SQLite initialization", () => {
     first.close();
 
     const second = openStore({ state: location.state, ownerId: "owner-reopen", time });
-    expect(second.schemaVersion).toBe(11);
+    expect(second.schemaVersion).toBe(12);
     const migrationCount = inspect<{ count: number }>(
       second.databasePath,
       "SELECT count(*) AS count FROM schema_migrations",
     );
-    expect(migrationCount?.count).toBe(11);
+    expect(migrationCount?.count).toBe(12);
     expect(Number(await second.acquire())).toBe(Number(token) + 1);
     expect(await second.readStorageDiagnostics()).toEqual({
       journalMode: "wal",
@@ -276,7 +276,7 @@ describe("Linux private SQLite initialization", () => {
     );
     time.advance(2);
     const migrated = openStore({ state: location.state, ownerId: "expired-bootstrap", time });
-    expect(migrated.schemaVersion).toBe(11);
+    expect(migrated.schemaVersion).toBe(12);
     migrated.close();
     first.close();
   });
@@ -604,6 +604,48 @@ describe("workspace scope and admission evidence", () => {
         admissionEvidence: { admittedSeq: 40, promotedSeq: 41, observedAtMs: 10_003 },
       },
     });
+    store.close();
+  });
+
+  test("records public message admission without fabricated sequence evidence", async () => {
+    const location = temporaryState();
+    const store = openStore({ state: location.state });
+    const token = await store.acquire();
+    const input = prepared(token, 59, 10_000);
+    await store.createPrepared(input);
+    await store.claimPrepared({
+      fencingToken: token,
+      workspaceKey: workspace,
+      deliveryId: input.id,
+      nowMs: 10_001,
+    });
+    const result = await store.completeSubmission({
+      fencingToken: token,
+      workspaceKey: workspace,
+      deliveryId: input.id,
+      state: "admitted",
+      evidenceKind: "public_message",
+      evidenceObservedAtMs: 10_002,
+      nowMs: 10_002,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      delivery: {
+        state: "admitted",
+        admissionEvidence: {
+          kind: "public_message",
+          nativeMessageId: input.nativeMessageId,
+          observedAtMs: 10_002,
+        },
+      },
+    });
+    expect(
+      inspect<{ admittedSeq: number | null; evidenceKind: string }>(
+        store.databasePath,
+        `SELECT admitted_seq AS admittedSeq, admission_evidence_kind AS evidenceKind
+         FROM deliveries WHERE id = '${input.id}'`,
+      ),
+    ).toEqual({ admittedSeq: null, evidenceKind: "public_message" });
     store.close();
   });
 

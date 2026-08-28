@@ -185,6 +185,7 @@ describe("request query and repository rejection boundaries", () => {
     ).toBe("cycle");
 
     const context = contextOf(store);
+    context.database.exec("VACUUM");
     const pages = context.database
       .query<{ value: number }, []>("SELECT page_count AS value FROM pragma_page_count")
       .get()?.value;

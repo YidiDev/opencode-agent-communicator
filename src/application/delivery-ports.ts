@@ -116,11 +116,18 @@ export type CompleteSubmissionInput = DeliveryTransitionInput &
     | { readonly state: "failed" | "admission_unknown" }
     | {
         readonly state: "admitted";
+        readonly evidenceKind?: "v2_queue";
         readonly admittedSeq: number;
         readonly evidenceObservedAtMs: number;
       }
     | {
+        readonly state: "admitted";
+        readonly evidenceKind: "public_message";
+        readonly evidenceObservedAtMs: number;
+      }
+    | {
         readonly state: "promoted";
+        readonly evidenceKind?: "v2_queue";
         readonly admittedSeq: number;
         readonly promotedSeq: number;
         readonly evidenceObservedAtMs: number;
@@ -180,6 +187,7 @@ export interface DeliveryPersistencePort {
 
 export type NativeQueueAdmission =
   | { readonly kind: "admitted"; readonly admittedSeq: number; readonly observedAtMs: number }
+  | { readonly kind: "public_message"; readonly observedAtMs: number }
   | {
       readonly kind: "promoted";
       readonly admittedSeq: number;

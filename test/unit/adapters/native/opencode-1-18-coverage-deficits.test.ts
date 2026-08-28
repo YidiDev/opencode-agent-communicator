@@ -67,7 +67,15 @@ function adapter(
         experimental: { session: { list: async () => envelope([]) } },
         session: {
           update: async () => envelope(true),
-          prompt: async () => envelope(true),
+          promptAsync: async () => ({ data: {}, response: new Response(null, { status: 204 }) }),
+          message: async () => ({
+            error: {
+              _tag: "SessionNotFoundError",
+              sessionID: managedSessionId,
+              message: "not found",
+            },
+            response: new Response(null, { status: 404 }),
+          }),
           ...input.publicSession,
         },
         v2: { session: v2Session(input.session) },
@@ -172,18 +180,23 @@ describe("OpenCode 1.18.23 exact native surface failures", () => {
     ).toBe("unknown");
   });
 
-  test("routes initial start admission through the public prompt surface", async () => {
+  test("routes initial start admission through public async prompt and read-back", async () => {
     const current = adapter({
       publicSession: {
-        prompt: async () =>
-          envelope({
-            info: {
-              sessionID: managedSessionId,
-              parentID: nativeMessageId,
-              role: "assistant",
-            },
-            parts: [],
-          }),
+        message: async () => ({
+          data: {
+            info: { id: nativeMessageId, sessionID: managedSessionId, role: "user" },
+            parts: [
+              {
+                sessionID: managedSessionId,
+                messageID: nativeMessageId,
+                type: "text",
+                text: "visible",
+              },
+            ],
+          },
+          response: new Response(null, { status: 200 }),
+        }),
       },
     });
     expect(

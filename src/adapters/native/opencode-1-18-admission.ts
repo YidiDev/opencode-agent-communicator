@@ -10,7 +10,9 @@ interface AdmissionTarget {
 }
 
 type AdmissionDelivery = "queue" | "steer";
-type NativeAdmission = NativeQueueAdmission | NativeSteerAdmission;
+type NativeAdmission =
+  | Exclude<NativeQueueAdmission, { readonly kind: "public_message" }>
+  | NativeSteerAdmission;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

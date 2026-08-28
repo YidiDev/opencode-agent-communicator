@@ -30,9 +30,11 @@ The test proves the following surfaces against the live binary:
   through the live host. It proves successful list/send/delivery, ask/respond/get/ack, wait/signal,
   and approved start/stop paths; request listing; an authoritative target-role cancel rejection; and
   the exact configured export-unavailable result. Managed start evidence includes deterministic V2
-  creation followed by a public title update and blocking initial prompt; the public messages API and
-  pinned CLI export both contain the initial user message and assistant response under the requested
-  title. Dynamic request, delivery, operation, native message, and session identities are correlated
+  creation followed by a public title update and asynchronous initial prompt. The start result is
+  observed while the provider response remains gated; fixed-message read-back proves the initial
+  user turn before completion. A later packed `session_send` likewise settles before its gated
+  assistant response, and both turns appear in the public messages API and pinned CLI export under
+  the requested title. Dynamic request, delivery, operation, native message, and session identities are correlated
   across those exact outputs. This does not claim a successful cancel path or secure export, nor
   exhaustive policy/recovery coverage.
 - production receives the host's unmodified pinned `PluginInput`; there is no test client `Proxy`,

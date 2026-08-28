@@ -122,6 +122,17 @@ describe("message delivery state machine", () => {
       isCoherentDeliveryMetadata({
         ...admitted,
         admissionEvidence: {
+          kind: "public_message",
+          nativeMessageId: base.nativeMessageId,
+          state: "admitted",
+          observedAtMs: 3,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isCoherentDeliveryMetadata({
+        ...admitted,
+        admissionEvidence: {
           nativeMessageId: base.nativeMessageId,
           state: "admitted",
           admittedSeq: 4,

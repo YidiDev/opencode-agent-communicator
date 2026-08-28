@@ -38,9 +38,10 @@ function publicAdmissionEvidence(delivery: DeliveryMetadata): Record<string, unk
   const evidence = delivery.admissionEvidence;
   if (!evidence) return undefined;
   return {
+    kind: evidence.kind ?? "v2_queue",
     native_message_id: evidence.nativeMessageId,
     state: evidence.state,
-    admitted_seq: evidence.admittedSeq,
+    ...(evidence.kind !== "public_message" ? { admitted_seq: evidence.admittedSeq } : {}),
     ...(evidence.state === "promoted" ? { promoted_seq: evidence.promotedSeq } : {}),
     observed_at_ms: evidence.observedAtMs,
   };
