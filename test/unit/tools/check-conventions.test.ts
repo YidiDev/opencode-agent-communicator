@@ -80,7 +80,10 @@ describe("metadata and source directives", () => {
       "package.json",
       JSON.stringify({
         packageManager: "bun@^1.4.0",
-        dependencies: { example: "~1.2.3" },
+        dependencies: {
+          compilerApi: "npm:typescript@5.9.3",
+          example: "~1.2.3",
+        },
         peerDependencies: {
           bounded: ">=2.0.0 <3.0.0",
           broad: "^2.0.0",

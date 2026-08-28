@@ -165,6 +165,9 @@ describe("session stop final-effect boundaries", () => {
       resolvedAtMs: number,
     ): RequestMetadata => {
       const { payloadSha256: _, ...identity } = request;
+      if (resolutionState === "target_stopped") {
+        return { ...identity, resolutionState, resolvedAtMs, updatedAtMs: resolvedAtMs };
+      }
       return { ...identity, resolutionState, resolvedAtMs, updatedAtMs: resolvedAtMs };
     };
     const terminalized = [

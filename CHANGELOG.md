@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-28
+
+### Changed
+
+- Upgraded the TypeScript compiler from 5.9.3 to 7.0.2.
+- Upgraded Zod from 4.1.8 to 4.4.3.
+
 ## [0.1.4] - 2026-08-27
 
 ### Fixed
@@ -70,7 +77,8 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/YidiDev/opencode-agent-communicator/releases/tag/v0.1.4
 [0.1.3]: https://github.com/YidiDev/opencode-agent-communicator/releases/tag/v0.1.3
 [0.1.2]: https://github.com/YidiDev/opencode-agent-communicator/releases/tag/v0.1.2

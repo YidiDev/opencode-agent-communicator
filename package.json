@@ -1,6 +1,6 @@
 {
   "name": "opencode-agent-communicator",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "Durable, workspace-scoped session communication tools for OpenCode 1.18.",
   "license": "MIT",
   "author": "YidiDev",
@@ -70,7 +70,7 @@
   "dependencies": {
     "@opencode-ai/plugin": "1.18.23",
     "@opencode-ai/sdk": "1.18.23",
-    "zod": "4.1.8"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.10",
@@ -80,7 +80,8 @@
     "istanbul-lib-coverage": "3.2.2",
     "istanbul-lib-instrument": "6.0.3",
     "opencode-ai": "1.18.23",
-    "typescript": "5.9.3"
+    "typescript": "7.0.2",
+    "typescript-compiler-api": "npm:typescript@5.9.3"
   },
   "peerDependencies": {
     "opencode-ai": ">=1.18.21 <1.19.0"
