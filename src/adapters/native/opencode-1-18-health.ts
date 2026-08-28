@@ -1,13 +1,18 @@
 import type { PluginInput } from "@opencode-ai/plugin";
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 import type { HostHealthPort } from "../../domain/host";
+import { readOpenCode118Transport } from "./opencode-1-18-transport";
 
 interface PinnedHealthClient {
   readonly global: { health(): Promise<unknown> };
 }
 
 export interface OpenCode118HealthDependencies {
-  readonly createClient?: (configuration: { readonly baseUrl: string }) => PinnedHealthClient;
+  readonly createClient?: (configuration: {
+    readonly baseUrl: string;
+    readonly fetch: typeof globalThis.fetch;
+    readonly headers: Readonly<Record<string, string>>;
+  }) => PinnedHealthClient;
 }
 
 /** Minimal pinned startup proof. Constructing the client performs no host request. */
@@ -15,14 +20,15 @@ export function createOpenCode118HealthPort(
   input: PluginInput,
   dependencies: OpenCode118HealthDependencies = {},
 ): HostHealthPort {
-  // PluginInput.client is the pinned legacy generated surface and does not declare global health.
-  // Use only the missing pinned endpoint from the same package's generated V2 client.
   const createClient = dependencies.createClient ?? createOpencodeClient;
-  const pinnedClient = createClient({
-    baseUrl: input.serverUrl.toString(),
-  });
+  let pinnedClient: PinnedHealthClient | undefined;
   return Object.freeze({
     async readHealth(): Promise<unknown> {
+      // The legacy surface omits health, but carries OpenCode's network or in-process transport.
+      pinnedClient ??= createClient({
+        baseUrl: input.serverUrl.toString(),
+        ...readOpenCode118Transport(input.client),
+      });
       const response: unknown = await pinnedClient.global.health();
       if (typeof response !== "object" || response === null || Array.isArray(response))
         return response;

@@ -29,6 +29,7 @@ function v2Session(overrides: Record<string, unknown> = {}) {
 
 function legacyClient(overrides: Record<string, unknown> = {}) {
   return {
+    _client: { getConfig: () => ({ fetch: globalThis.fetch, headers: new Headers() }) },
     experimental: { session: { list: async () => envelope([]) } },
     session: {
       list: async () => envelope([]),

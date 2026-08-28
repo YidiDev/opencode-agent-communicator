@@ -43,9 +43,7 @@ export async function checkHostCompatibility(
       ? await boundedExternalCall(() => healthPort.readHealth(), context.abort, context.deadlineMs)
       : { kind: "value" as const, value: await healthPort.readHealth() };
     const version = health.kind === "value" ? supportedHealthVersion(health.value) : undefined;
-    if (!version) {
-      return incompatibleHost();
-    }
+    if (!version) return incompatibleHost();
     return { ok: true, value: { version } };
   } catch (_cause: unknown) {
     return incompatibleHost();

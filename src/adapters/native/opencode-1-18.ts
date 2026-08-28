@@ -22,6 +22,7 @@ import {
   updateAndVerifySessionTitle,
 } from "./opencode-1-18-start";
 import { envelopeData, method, NativeAdapterFault, requireRecord } from "./opencode-1-18-surface";
+import { readOpenCode118Transport } from "./opencode-1-18-transport";
 
 interface V2ClientSurface {
   readonly global: { health(): Promise<unknown> };
@@ -166,9 +167,10 @@ export function createOpenCode118NativeAdapter(
   input: OpenCodeNativeAdapterInput,
   dependencies: OpenCodeNativeAdapterDependencies = {},
 ): OpenCodeNativeAdapter {
-  const createV2 =
-    dependencies.createV2Client ?? ((configuration) => createOpencodeClient(configuration));
-  const v2 = createV2({ baseUrl: input.serverUrl.toString(), directory: input.directory });
+  const configuration = { baseUrl: input.serverUrl.toString(), directory: input.directory };
+  const v2 = dependencies.createV2Client
+    ? dependencies.createV2Client(configuration)
+    : createOpencodeClient({ ...configuration, ...readOpenCode118Transport(input.client) });
   const legacy = legacySurface(input.client);
   const listArchivedRoots = (
     parameters: { readonly roots: true; readonly archived: boolean; readonly directory: string },

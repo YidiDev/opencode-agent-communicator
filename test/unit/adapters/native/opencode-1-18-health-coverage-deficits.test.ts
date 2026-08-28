@@ -5,7 +5,13 @@ import { createOpenCode118HealthPort } from "../../../../src/adapters/native/ope
 describe("pinned startup health malformed host envelopes", () => {
   const portFor = (response: unknown) =>
     createOpenCode118HealthPort(
-      { serverUrl: new URL("http://127.0.0.1"), directory: "/workspace" } as never,
+      {
+        client: {
+          _client: { getConfig: () => ({ fetch: globalThis.fetch, headers: new Headers() }) },
+        },
+        serverUrl: new URL("http://127.0.0.1"),
+        directory: "/workspace",
+      } as never,
       { createClient: () => ({ global: { health: async () => response } }) },
     );
 
