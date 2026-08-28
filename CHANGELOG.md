@@ -6,6 +6,15 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-27
+
+### Fixed
+
+- Replaced the unreliable direct private `git+ssh` OpenCode package-cache path with a tested external
+  npm installation and absolute `file://` plugin entry.
+- Added troubleshooting for the empty-cache failure that occurs before plugin import and tool
+  registration.
+
 ## [0.1.3] - 2026-08-27
 
 ### Changed
@@ -61,7 +70,8 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/YidiDev/opencode-agent-communicator/releases/tag/v0.1.4
 [0.1.3]: https://github.com/YidiDev/opencode-agent-communicator/releases/tag/v0.1.3
 [0.1.2]: https://github.com/YidiDev/opencode-agent-communicator/releases/tag/v0.1.2
 [0.1.1]: https://github.com/YidiDev/opencode-agent-communicator/releases/tag/v0.1.1

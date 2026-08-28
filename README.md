@@ -6,8 +6,8 @@
 [![OpenCode 1.18 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** `0.1.3` supports Linux x64 and stable OpenCode versions
-`>=1.18.21 <1.19.0`. Bun `1.4.0` is required for installation and verification. Other
+**Release status:** `0.1.4` supports Linux x64 and stable OpenCode versions
+`>=1.18.21 <1.19.0`. Bun `1.4.0` is required for development and release verification. Other
 architectures, operating systems, OpenCode versions, and prereleases are unsupported.
 
 ## Contents
@@ -35,27 +35,45 @@ It does not grant one agent authority over another and does not provide remote c
 
 - Linux x64 with a local filesystem suitable for SQLite WAL
 - A stable OpenCode version in `>=1.18.21 <1.19.0`
-- Bun `1.4.0` for package installation, development, and release verification
+- npm with Git and SSH support for private package installation
+- Bun `1.4.0` for development and release verification
 - A dedicated private state directory owned by the account running OpenCode
 
 Plugin startup fails closed on an unsupported OpenCode version, operating system, or CPU architecture.
-OpenCode executes plugins in its own embedded Bun runtime, so that value is not the external Bun
-version used to install the package; the external `1.4.0` pin is enforced by package metadata and
-release gates. Network and clustered filesystems are rejected for the state store. See
+OpenCode executes plugins in its own embedded Bun runtime. The external Bun `1.4.0` pin applies to
+development and release verification, not the npm production installation; it is enforced by package
+metadata and release gates. Network and clustered filesystems are rejected for the state store. See
 [Linux SQLite store assumptions](docs/linux-sqlite-store.md) for the filesystem list and path checks.
 
 ## Install
 
-### 1. Add the plugin
+### 1. Install the plugin
 
-Pin the GitHub release tag so startup always resolves the same source:
+OpenCode `1.18.x` does not reliably populate its package cache from a private `git+ssh` plugin spec.
+Install the immutable release outside OpenCode instead:
+
+```bash
+install_root="$HOME/.local/share/opencode-agent-communicator/v0.1.4"
+install -d -m 0700 "$install_root"
+npm install --prefix "$install_root" --save-exact --ignore-scripts \
+  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.1.4"
+test -f "$install_root/node_modules/opencode-agent-communicator/src/index.ts"
+```
+
+The repository is private, so the account running npm and OpenCode must have working GitHub SSH
+access. Release tags are immutable by project policy; do not replace `v0.1.4` with `main`.
+
+### 2. Add the plugin
+
+Configure the installed source entry as an absolute `file://` URL. Replace `/home/operator` with the
+absolute home directory of the account that performed the installation:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.1.3",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v0.1.4/node_modules/opencode-agent-communicator/src/index.ts",
       {
         "policies": {
           "message": "allow",
@@ -69,15 +87,11 @@ Pin the GitHub release tag so startup always resolves the same source:
 }
 ```
 
-Supported OpenCode `1.18.x` versions accept plugin entries as either a package string or
-`[package, options]`. This
-plugin uses the tuple form because its options are strict and package-specific. OpenCode installs
-the pinned package into its package cache; no project-level clone or `bun add` is required.
+Supported OpenCode `1.18.x` versions accept plugin entries as either a source string or
+`[source, options]`. This plugin uses the tuple form because its options are strict and
+package-specific. Keep the private installation directory in place while OpenCode uses it.
 
-The repository is private, so the account running OpenCode must have working GitHub SSH access.
-Release tags are immutable by project policy; do not replace `v0.1.3` with `main`.
-
-### 2. Prepare private state
+### 3. Prepare private state
 
 The default state root is `$XDG_STATE_HOME/opencode-agent-communicator` or
 `$HOME/.local/state/opencode-agent-communicator`. To create an explicit root:
@@ -90,14 +104,15 @@ Set `stateDirectory` to that normalized absolute path if you do not want the def
 opens each path component without following symlinks and verifies the owner, mode, inode, device,
 filesystem, and SQLite sidecars before use.
 
-### 3. Restart and verify
+### 4. Restart and verify
 
 Restart every OpenCode backend that should load the plugin. Configuration and plugin changes are
 read at startup. Open a session and confirm that the tool list contains all 14 names from the table
 below. Registration is atomic: startup exposes all 14 or fails instead of leaving a partial tool set.
 
-If startup fails, run `opencode --version` and `bun --version` first. OpenCode must report a stable
-version in `>=1.18.21 <1.19.0`, and Bun must report `1.4.0`.
+If startup fails, run `opencode --version` and verify the installed entry first. OpenCode must report
+a stable version in `>=1.18.21 <1.19.0`; the configured absolute file must exist and remain readable
+by the OpenCode account.
 
 ## Configure
 
@@ -109,7 +124,7 @@ configuration are startup errors.
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.1.3",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v0.1.4/node_modules/opencode-agent-communicator/src/index.ts",
       {
         "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
         "startupDeadlineMs": 30000,
@@ -334,6 +349,7 @@ trusted account and private state/export roots. Report vulnerabilities according
 ### Startup fails
 
 - Confirm exact host versions with `opencode --version` and `bun --version`.
+- Confirm the configured `file://` entry exists and is readable by the OpenCode account.
 - Check that `stateDirectory` is absolute, normalized, dedicated, local, owned by the OpenCode user,
   and not reachable through a symlink.
 - Stop stale OpenCode backends using the same workspace and state root. Ownership takeover waits for
@@ -345,7 +361,10 @@ trusted account and private state/export roots. Report vulnerabilities according
 
 The plugin never intentionally registers a partial manifest. A missing `session_*` tool means plugin
 startup or host compatibility failed, another plugin replaced the same name, or the running backend
-has not reloaded configuration. Restart the backend and inspect its startup log.
+has not reloaded configuration. An empty directory under OpenCode's package cache means a package
+spec failed before this plugin was imported; do not configure the private `git+ssh` URL directly.
+Use the externally installed absolute `file://` entry above, restart the backend, and inspect its
+startup log.
 
 ### A target looks idle
 
@@ -373,6 +392,13 @@ entire private directory, including SQLite sidecars. Application-level acknowled
 are logical deletion, not secure erasure from old pages, snapshots, or media.
 
 ## Upgrade, migrate, or roll back
+
+### Upgrade to 0.1.4
+
+Release `0.1.4` replaces the unsupported direct private-Git cache path with an externally installed,
+absolute `file://` entry. It does not change runtime behavior, the supported host range, or the SQLite
+schema. Stop every backend, back up the complete private state directory, install tag `v0.1.4` into a
+new private versioned directory, update the plugin entry, restart OpenCode, and verify all 14 tools.
 
 ### Upgrade to 0.1.3
 
@@ -442,8 +468,9 @@ acceptance must complete all capability tests with zero skips on both glibc and 
 ### Package verification
 
 The package entry is the TypeScript source module `src/index.ts`. Supported OpenCode `1.18.x`
-versions install plugins with Bun and support source-loaded TypeScript modules. The archive includes
-only runtime source, bundled skills, operational documentation, and release/legal files.
+versions load the externally installed absolute `file://` entry in their embedded Bun runtime. The
+archive includes only runtime source, bundled skills, operational documentation, and release/legal
+files.
 
 ```bash
 bun run verify:package
@@ -456,7 +483,7 @@ exact ordered 14-tool manifest, and a reviewed
 fingerprint of every path npm will pack. It rejects path-policy drift, symlinks, executable entries,
 secret-like names, and generated/test output. The black-box test creates an archive without
 publishing it, installs it into an isolated Bun project, imports the package by name, and checks
-packaged runtime assets. Release `0.1.3` is distributed through its immutable Git tag and GitHub
+packaged runtime assets. Release `0.1.4` is distributed through its immutable Git tag and GitHub
 Release, not npm. npm remains the reviewed archive format, and the separate npm publication workflow
 can run only through an explicit manual dispatch.
 
