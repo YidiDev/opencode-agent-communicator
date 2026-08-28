@@ -444,40 +444,34 @@ async function runWaitJourney(fixture: PackedFixture, invoker: Invoker): Promise
   ).toMatchObject({ ok: false, error: { code: "not_found_or_unauthorized" } });
 }
 
-async function runStartStopJourney(invoker: Invoker, stopTargetSessionID: string): Promise<void> {
+async function runStartStopJourney(
+  fixture: PackedFixture,
+  invoker: Invoker,
+  stopTargetSessionID: string,
+): Promise<void> {
   const start = await invoker.begin("session_start", "production-session-start");
   const started = await withinLiveDeadline(start.output(), "session_start completion");
-  if (started.ok === true) {
-    expect(started).toMatchObject({
-      value: {
-        source_session_id: start.sessionID,
-        idempotency_key: "packed-live-start",
-        creation_state: "created",
-        title_state: "updated",
-        admission_state: "admitted",
-      },
-    });
-  } else {
-    expect(started).toMatchObject({
-      ok: false,
-      error: {
-        code: "native_outcome_unknown",
-        retryable: false,
-        details: {
-          operation: {
-            source_session_id: start.sessionID,
-            idempotency_key: "packed-live-start",
-            creation_state: "outcome_unknown",
-          },
-        },
-      },
-    });
-    const operation = Reflect.get(
-      Reflect.get(Reflect.get(started, "error") ?? {}, "details") ?? {},
-      "operation",
-    );
-    expect(typeof Reflect.get(operation ?? {}, "session_id")).toBe("string");
-  }
+  expect(started).toMatchObject({
+    ok: true,
+    value: {
+      source_session_id: start.sessionID,
+      idempotency_key: "packed-live-start",
+      creation_state: "created",
+      admission_state: "admitted",
+    },
+  });
+  expect(["updated", "outcome_unknown"]).toContain(
+    Reflect.get(Reflect.get(started, "value") ?? {}, "title_state"),
+  );
+  const startedSessionID = Reflect.get(Reflect.get(started, "value") ?? {}, "session_id");
+  if (typeof startedSessionID !== "string") throw new Error("session_start returned no session ID");
+  expect(
+    successful(
+      await fixture.client.session.get({ sessionID: startedSessionID }),
+      "created managed root",
+    ),
+  ).toMatchObject({ id: startedSessionID });
+  await fixture.provider.waitForRequestText("Packed managed session ready check");
   const stop = await invoker.begin(
     "session_stop",
     `production-session-stop:${stopTargetSessionID}`,
@@ -515,7 +509,7 @@ test(`runs the exact packed production plugin through OpenCode ${exactOpenCodeVe
     );
     const invoker = createInvoker(fixture.client);
     await runBasicPackedJourneys(invoker, target.id);
-    await runStartStopJourney(invoker, target.id);
+    await runStartStopJourney(fixture, invoker, target.id);
     await runAskJourney(fixture, invoker);
     await runWaitJourney(fixture, invoker);
     expect(successful(await fixture.client.instance.dispose(), "production plugin disposal")).toBe(

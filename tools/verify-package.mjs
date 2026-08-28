@@ -102,7 +102,7 @@ function packedReport(root) {
 
 export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
   const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
-  assert(packageJson.version === "0.2.1", "version must be 0.2.1");
+  assert(packageJson.version === "0.2.2", "version must be 0.2.2");
   assert(packageJson.private !== true, "package must be publishable");
   assert(packageJson.license === "MIT", "license metadata must match LICENSE");
   assert(
@@ -120,10 +120,10 @@ export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
     "OpenCode engine range must match the certified minor line",
   );
   assert(
-    packageJson.dependencies?.["@opencode-ai/plugin"] === "1.18.24",
+    packageJson.dependencies?.["@opencode-ai/plugin"] === "1.18.25",
     "plugin API must be exact",
   );
-  assert(packageJson.dependencies?.["@opencode-ai/sdk"] === "1.18.24", "SDK must be exact");
+  assert(packageJson.dependencies?.["@opencode-ai/sdk"] === "1.18.25", "SDK must be exact");
   assert(packageJson.dependencies?.zod === "4.4.3", "Zod must match the certified version");
   assert(
     packageJson.devDependencies?.typescript === "7.0.2",

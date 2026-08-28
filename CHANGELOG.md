@@ -6,6 +6,20 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-28
+
+### Fixed
+
+- Accepted the pinned SDK's genuine `request` evidence in exact native rejection envelopes, allowing
+  `session_start` to prove deterministic-ID absence and create managed root sessions.
+- Required the packed production journey to prove native session creation and initial-message
+  admission instead of accepting `creation_state: "outcome_unknown"`.
+
+### Changed
+
+- Updated the exact build-time OpenCode packages and live release evidence to `1.18.25` without
+  changing the supported stable `>=1.18.21 <1.19.0` host range.
+
 ## [0.2.1] - 2026-08-28
 
 ### Fixed
@@ -89,7 +103,8 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/YidiDev/opencode-agent-communicator/releases/tag/v0.1.4
