@@ -14,7 +14,7 @@ function validExport(sanitized: boolean): unknown {
       projectID: "project",
       title: sanitized ? `[redacted:session-title:${sessionId}]` : "private",
       directory: sanitized ? `[redacted:session-directory:${sessionId}]` : "/private",
-      version: "1.18.21",
+      version: "1.18.23",
       time: { created: 1, updated: 2 },
     },
     messages: [

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { createOpenCode11821NativeAdapter } from "../../../../src/adapters/native/opencode-1-18-21";
+import { createOpenCode118NativeAdapter } from "../../../../src/adapters/native/opencode-1-18";
 import { validateManagedSessionId } from "../../../../src/domain/generated-ids";
 import { validateSessionId } from "../../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../../src/domain/workspaces";
@@ -43,7 +43,7 @@ function legacyClient(overrides: Record<string, unknown> = {}) {
 function adapter(
   input: { client?: unknown; session?: Record<string, unknown>; now?: () => number } = {},
 ) {
-  return createOpenCode11821NativeAdapter(
+  return createOpenCode118NativeAdapter(
     {
       client: input.client === undefined ? legacyClient() : input.client,
       directory: "/workspace",
@@ -53,7 +53,7 @@ function adapter(
     {
       ...(input.now === undefined ? {} : { now: input.now }),
       createV2Client: () => ({
-        global: { health: async () => envelope({ healthy: true, version: "1.18.21" }) },
+        global: { health: async () => envelope({ healthy: true, version: "1.18.23" }) },
         experimental: { session: { list: async () => envelope([]) } },
         v2: { session: v2Session(input.session) },
       }),
@@ -61,10 +61,10 @@ function adapter(
   );
 }
 
-describe("OpenCode 1.18.21 exact native surface failures", () => {
+describe("OpenCode 1.18.23 exact native surface failures", () => {
   test("constructs the pinned SDK client when no dependency overrides are supplied", () => {
     expect(
-      createOpenCode11821NativeAdapter({
+      createOpenCode118NativeAdapter({
         client: legacyClient(),
         directory: "/workspace",
         serverUrl: new URL("http://127.0.0.1:4321/"),
@@ -86,7 +86,7 @@ describe("OpenCode 1.18.21 exact native surface failures", () => {
   });
 
   test("rejects a pinned legacy client without the runtime root listing endpoint", async () => {
-    const missing = createOpenCode11821NativeAdapter(
+    const missing = createOpenCode118NativeAdapter(
       {
         client: legacyClient({
           session: {
@@ -154,10 +154,10 @@ describe("OpenCode 1.18.21 exact native surface failures", () => {
   });
 });
 
-describe("OpenCode 1.18.21 runtime validation branches", () => {
+describe("OpenCode 1.18.23 runtime validation branches", () => {
   test("rejects malformed configured and supplied workspace identities", async () => {
     expect(() =>
-      createOpenCode11821NativeAdapter(
+      createOpenCode118NativeAdapter(
         {
           client: legacyClient(),
           directory: "/workspace",

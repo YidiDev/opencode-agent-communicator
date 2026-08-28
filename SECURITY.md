@@ -6,12 +6,13 @@ This project is prerelease software. Security fixes are provided only for the cu
 
 | Version | Supported | Required host |
 | --- | --- | --- |
-| 0.1.x | Yes | Linux x64, OpenCode 1.18.21; Bun 1.4.0 for install and verification |
+| 0.1.x | Yes | Linux x64, stable OpenCode >=1.18.21 <1.19.0; Bun 1.4.0 for install and verification |
 | Earlier development builds | No | Not applicable |
 
-Exact host compatibility is part of the security boundary. Do not use this release on another
-operating system or CPU architecture, or with another OpenCode version. Bun `1.4.0` is the supported
-package installation and verification runtime; OpenCode executes the plugin in its own embedded Bun.
+Host compatibility is part of the security boundary. Do not use this release on another operating
+system or CPU architecture, or with an OpenCode version outside the supported stable range. Bun
+`1.4.0` is the supported package installation and verification runtime; OpenCode executes the plugin
+in its own embedded Bun.
 
 ## Report a vulnerability
 

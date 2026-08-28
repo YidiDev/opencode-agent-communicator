@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import type { OpenCodeNativeAdapter } from "../../../src/adapters/native/opencode-1-18-21";
+import type { OpenCodeNativeAdapter } from "../../../src/adapters/native/opencode-1-18";
 import { parseCommunicatorOptions } from "../../../src/composition/config";
 import { createCompositionFactory } from "../../../src/composition/plugin";
 import { communicatorToolIds } from "../../../src/composition/tools";
@@ -58,7 +58,7 @@ describe("composition factory ordering", () => {
       },
       createHealth() {
         order.push("health-adapter");
-        return { readHealth: async () => ({ healthy: true, version: "1.18.21" }) };
+        return { readHealth: async () => ({ healthy: true, version: "1.18.23" }) };
       },
       createNative() {
         order.push("native");
@@ -94,7 +94,7 @@ describe("composition factory ordering", () => {
       createHealth: () => ({
         async readHealth(): Promise<unknown> {
           order.push("health-read");
-          return { healthy: true, version: "1.18.21" };
+          return { healthy: true, version: "1.18.23" };
         },
       }),
       createStore(): never {
@@ -104,7 +104,7 @@ describe("composition factory ordering", () => {
     });
 
     await expect(Reflect.apply(plugin, undefined, [{}, {}])).rejects.toThrow(
-      "requires Linux x64 and a healthy OpenCode 1.18.21 host",
+      "requires Linux x64 and a healthy OpenCode >=1.18.21 <1.19.0 host",
     );
     expect(order).toEqual([]);
   });
@@ -130,7 +130,7 @@ describe("composition factory ordering", () => {
       },
     });
     await expect(Reflect.apply(plugin, undefined, [{}, { startupDeadlineMs: 5 }])).rejects.toThrow(
-      "requires Linux x64 and a healthy OpenCode 1.18.21 host",
+      "requires Linux x64 and a healthy OpenCode >=1.18.21 <1.19.0 host",
     );
     rejectLate?.(new Error("late health rejection"));
     await Promise.resolve();
@@ -162,8 +162,8 @@ describe("composition factory ordering", () => {
         directory: "/workspace",
         worktree: "/workspace",
       }),
-      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.21" }) }),
-      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.21" } }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
+      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
       createNative: () => ({
         ...incompatibleNative(),
         readParticipantPresence: async () => "absent" as const,
@@ -199,7 +199,7 @@ describe("composition factory ordering", () => {
             projectID: "project",
             directory: "/workspace",
             title: "Deleted",
-            version: "1.18.21",
+            version: "1.18.23",
             time: { created: 1, updated: 2 },
           },
         },
@@ -230,8 +230,8 @@ describe("composition factory failure cleanup", () => {
         directory: "/workspace",
         worktree: "/workspace",
       }),
-      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.21" }) }),
-      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.21" } }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
+      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
       createNative: () => incompatibleNative(),
       createStore: () => ({ starts: {}, close: () => order.push("store-close") }) as never,
       createRuntime: () => ({ stop: () => order.push("runtime-stop") }) as never,
@@ -277,8 +277,8 @@ describe("composition factory failure cleanup", () => {
         directory: "/workspace",
         worktree: "/workspace",
       }),
-      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.21" }) }),
-      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.21" } }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
+      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
       createNative: () => incompatibleNative(),
       createStore: () => ({ close: () => order.push("store-close") }) as never,
       createRuntime: () => ({ stop: () => order.push("runtime-stop") }) as never,
@@ -308,8 +308,8 @@ describe("composition factory failure cleanup", () => {
         directory: "/workspace",
         worktree: "/workspace",
       }),
-      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.21" }) }),
-      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.21" } }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
+      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
       createNative: () => incompatibleNative(),
       createStore: () => ({ starts: {}, close: () => order.push("store-close") }) as never,
       recoverStartup: async () => ({ ok: true, value: lifecycle as never }),
@@ -350,8 +350,8 @@ describe("composition factory failure cleanup", () => {
         directory: "/workspace",
         worktree: "/workspace",
       }),
-      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.21" }) }),
-      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.21" } }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
+      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
       createNative: () => incompatibleNative(),
       createStore: () => ({ starts: {}, close: () => order.push("store-close") }) as never,
       recoverStartup: async () => ({

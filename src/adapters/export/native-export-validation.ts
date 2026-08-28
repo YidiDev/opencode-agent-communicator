@@ -1,3 +1,4 @@
+import { isSupportedOpenCodeVersion } from "../../domain/host";
 import type { SessionId } from "../../domain/sessions";
 import {
   isExportBoolean as boolean,
@@ -78,7 +79,7 @@ function sessionInfo(value: unknown, id: string, sanitized: boolean): NativeExpo
     !string(item.projectID) ||
     !string(item.directory) ||
     !string(item.title) ||
-    item.version !== "1.18.21" ||
+    !isSupportedOpenCodeVersion(item.version) ||
     !itemTime ||
     !keys(itemTime, ["created", "updated"], ["compacting", "archived"]) ||
     !number(itemTime.created) ||
@@ -247,7 +248,7 @@ function part(value: unknown, sessionId: string, messageId: string): boolean {
   }
 }
 
-/** Strictly validates the pinned 1.18.21 import envelope and all declared message/part variants. */
+/** Strictly validates the supported OpenCode 1.18 import envelope and declared variants. */
 export function validateNativeExport(
   bytes: Uint8Array,
   sessionId: SessionId,

@@ -207,7 +207,7 @@ describe("fenced participant deletion persistence", () => {
           projectID: "project",
           directory: "/workspace",
           title: "Deleted",
-          version: "1.18.21",
+          version: "1.18.23",
           time: { created: 1, updated: 2 },
         },
       },

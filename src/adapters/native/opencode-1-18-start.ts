@@ -4,7 +4,7 @@ import type {
   NativeTitleUpdate,
 } from "../../application/session-start-ports";
 import type { SessionId } from "../../domain/sessions";
-import { isAuthoritativeClientRejection } from "./opencode-1-18-21-admission";
+import { isAuthoritativeClientRejection } from "./opencode-1-18-admission";
 
 interface StartSessionSurface {
   create(

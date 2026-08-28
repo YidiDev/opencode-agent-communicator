@@ -1,21 +1,37 @@
 import { describe, expect, test } from "bun:test";
 
 describe("publish workflow trust gate", () => {
+  test("requires an explicit manual dispatch instead of publishing every release tag", async () => {
+    const workflow = await Bun.file(".github/workflows/publish.yml").text();
+
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).not.toMatch(/push:\s*\n\s*tags:/);
+  });
+
   test("gates all release work on the tagged commit being reachable from fetched main", async () => {
     const workflow = await Bun.file(".github/workflows/publish.yml").text();
     const checkout = workflow.indexOf("ref: $" + "{{ github.sha }}");
-    const fetch = workflow.indexOf("+refs/heads/main:refs/remotes/origin/main");
+    const fullHistory = workflow.indexOf("fetch-depth: 0");
     const ancestry = workflow.indexOf(
       'git merge-base --is-ancestor "$RELEASE_COMMIT" refs/remotes/origin/main',
     );
     const verification = workflow.indexOf("verification:");
 
     expect(checkout).toBeGreaterThan(-1);
-    expect(fetch).toBeGreaterThan(checkout);
-    expect(ancestry).toBeGreaterThan(fetch);
+    expect(fullHistory).toBeGreaterThan(checkout);
+    expect(ancestry).toBeGreaterThan(fullHistory);
     expect(verification).toBeGreaterThan(ancestry);
     expect(workflow).toContain("needs: metadata");
     expect(workflow).toContain("needs: archive");
+  });
+
+  test("requires manual dispatch to select the exact package tag rather than a named branch", async () => {
+    const workflow = await Bun.file(".github/workflows/publish.yml").text();
+
+    expect(workflow).toContain("RELEASE_REF: $" + "{{ github.ref }}");
+    expect(workflow).toContain("RELEASE_REF_TYPE: $" + "{{ github.ref_type }}");
+    expect(workflow).toContain('test "$RELEASE_REF_TYPE" = "tag"');
+    expect(workflow).toContain('test "$RELEASE_REF" = "refs/tags/v$package_version"');
   });
 
   test("does not install packages in the OIDC job and independently binds the archive digest", async () => {

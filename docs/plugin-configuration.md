@@ -57,7 +57,7 @@ configuration, and values above compiled safety ceilings stop startup before the
 `XDG_STATE_HOME` or `HOME/.local/state`, outside the workspace; the store verifies ownership,
 permissions, no-follow traversal, and filesystem support. This implementation fails closed on any
 runtime other than Linux x64 before it opens the state store. Linux ARM64 and all other CPU
-architectures are outside the certified `0.1.0` package scope; npm metadata also restricts
+architectures are outside the certified `0.1.1` package scope; package metadata also restricts
 installation to x64. Bun `1.4.0` remains the exact package installation and verification target.
 OpenCode executes plugins in its own embedded Bun, which is not the external installer version.
 
@@ -71,8 +71,8 @@ boundary.
 
 Export remains registered when its three trust fields are omitted or its secure adapter cannot be
 opened. Only `session_export` then returns `export_unavailable`; the other thirteen tools remain
-available. The executable must satisfy the root-owned OpenCode 1.18.21 trust checks. No shell is
-used.
+available. The executable must report a stable version in `>=1.18.21 <1.19.0` and satisfy the
+root-owned OpenCode trust checks. No shell is used.
 
 Stop has no configurable bypass and is always narrowed to `ask` by the mandatory permission hook.
 Explicit start agent/model overrides remain subject to exact allowlists even when start policy is

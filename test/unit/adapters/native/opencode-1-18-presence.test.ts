@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import {
-  classifyOpenCode11821DirectSessionPresence,
+  classifyOpenCode118DirectSessionPresence,
   createDirectParticipantPresencePort,
-} from "../../../../src/adapters/native/opencode-1-18-21-presence";
+} from "../../../../src/adapters/native/opencode-1-18-presence";
 import { validateSessionId } from "../../../../src/domain/sessions";
 
 const validated = validateSessionId("ses_presence");
@@ -15,19 +15,19 @@ function response(status: number): Response {
 
 test("classifies only correlated direct V2 success and exact correlated 404 as presence", () => {
   expect(
-    classifyOpenCode11821DirectSessionPresence(
+    classifyOpenCode118DirectSessionPresence(
       { data: { data: { id: sessionId, time: { archived: 1 } } }, response: response(200) },
       sessionId,
     ),
   ).toBe("present");
   expect(
-    classifyOpenCode11821DirectSessionPresence(
+    classifyOpenCode118DirectSessionPresence(
       { data: { data: { id: "ses_other" } }, response: response(200) },
       sessionId,
     ),
   ).toBe("unknown");
   expect(
-    classifyOpenCode11821DirectSessionPresence(
+    classifyOpenCode118DirectSessionPresence(
       {
         error: { _tag: "SessionNotFoundError", sessionID: sessionId, message: "missing" },
         response: response(404),
@@ -40,11 +40,11 @@ test("classifies only correlated direct V2 success and exact correlated 404 as p
     { _tag: "FutureError", sessionID: sessionId, message: "missing" },
   ]) {
     expect(
-      classifyOpenCode11821DirectSessionPresence({ error, response: response(404) }, sessionId),
+      classifyOpenCode118DirectSessionPresence({ error, response: response(404) }, sessionId),
     ).toBe("unknown");
   }
   expect(
-    classifyOpenCode11821DirectSessionPresence(
+    classifyOpenCode118DirectSessionPresence(
       { error: { _tag: "SessionNotFoundError", sessionID: sessionId, message: "missing" } },
       sessionId,
     ),
@@ -55,7 +55,7 @@ test("treats every non-404 status and every mixed not-found envelope as unknown"
   const error = { _tag: "SessionNotFoundError", sessionID: sessionId, message: "missing" };
   for (const status of [200, 201, 400, 401, 403, 409, 429, 500, 502, 503]) {
     expect(
-      classifyOpenCode11821DirectSessionPresence({ error, response: response(status) }, sessionId),
+      classifyOpenCode118DirectSessionPresence({ error, response: response(status) }, sessionId),
     ).toBe("unknown");
   }
   for (const mixed of [
@@ -64,7 +64,7 @@ test("treats every non-404 status and every mixed not-found envelope as unknown"
     { error, response: response(404), unexpected: true },
     { error, response: response(404), request: {}, extra: undefined },
   ]) {
-    expect(classifyOpenCode11821DirectSessionPresence(mixed, sessionId)).toBe("unknown");
+    expect(classifyOpenCode118DirectSessionPresence(mixed, sessionId)).toBe("unknown");
   }
 });
 
@@ -90,7 +90,7 @@ test("requires an exact plain-data correlated SessionNotFoundError", () => {
   });
   for (const error of [inherited, nullPrototype, symbol, extra, missing, emptyMessage, accessor]) {
     expect(
-      classifyOpenCode11821DirectSessionPresence({ error, response: response(404) }, sessionId),
+      classifyOpenCode118DirectSessionPresence({ error, response: response(404) }, sessionId),
     ).toBe("unknown");
   }
   expect(accessorReads).toBe(0);
@@ -117,7 +117,7 @@ test("rejects hostile 404 envelopes without consulting accessors or proxy traps"
     },
   );
   for (const envelope of [accessor, inherited, symbol, hostile]) {
-    expect(classifyOpenCode11821DirectSessionPresence(envelope, sessionId)).toBe("unknown");
+    expect(classifyOpenCode118DirectSessionPresence(envelope, sessionId)).toBe("unknown");
   }
   expect(reads).toBe(0);
 });
@@ -134,12 +134,12 @@ test("requires a branded Response and reads its intrinsic status without trustin
   });
   for (const nativeResponse of [inheritedResponse, responseProxy, fake, throwingStatus]) {
     expect(
-      classifyOpenCode11821DirectSessionPresence({ error, response: nativeResponse }, sessionId),
+      classifyOpenCode118DirectSessionPresence({ error, response: nativeResponse }, sessionId),
     ).toBe("unknown");
   }
   const branded = response(404);
   Object.defineProperty(branded, "status", { value: 500 });
-  expect(classifyOpenCode11821DirectSessionPresence({ error, response: branded }, sessionId)).toBe(
+  expect(classifyOpenCode118DirectSessionPresence({ error, response: branded }, sessionId)).toBe(
     "absent",
   );
 });
@@ -181,7 +181,7 @@ test("rejects hostile successful envelopes without invoking accessors", () => {
   );
   const inherited = Object.create({ data: { data: { id: sessionId } } });
   for (const value of [null, [], accessor, throwing, inherited, { unexpected: true }]) {
-    expect(classifyOpenCode11821DirectSessionPresence(value, sessionId)).toBe("unknown");
+    expect(classifyOpenCode118DirectSessionPresence(value, sessionId)).toBe("unknown");
   }
   expect(reads).toBe(0);
 });

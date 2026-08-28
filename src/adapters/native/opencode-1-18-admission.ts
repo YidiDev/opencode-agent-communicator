@@ -46,7 +46,7 @@ function safeSequence(value: unknown): value is number {
 }
 
 function observedTime(data: Record<string, unknown>, now: () => number): number | undefined {
-  // 1.18.21's successful admission response makes timeCreated the authoritative observation.
+  // The 1.18 line's successful admission response makes timeCreated authoritative.
   // The injected clock is used only when that field is absent, never when native evidence is invalid.
   if ("timeCreated" in data) {
     const timeCreated = data.timeCreated;
