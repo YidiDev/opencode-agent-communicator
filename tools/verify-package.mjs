@@ -102,7 +102,7 @@ function packedReport(root) {
 
 export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
   const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
-  assert(packageJson.version === "0.1.4", "version must be 0.1.4");
+  assert(packageJson.version === "0.2.0", "version must be 0.2.0");
   assert(packageJson.private !== true, "package must be publishable");
   assert(packageJson.license === "MIT", "license metadata must match LICENSE");
   assert(
@@ -124,6 +124,15 @@ export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
     "plugin API must be exact",
   );
   assert(packageJson.dependencies?.["@opencode-ai/sdk"] === "1.18.23", "SDK must be exact");
+  assert(packageJson.dependencies?.zod === "4.4.3", "Zod must match the certified version");
+  assert(
+    packageJson.devDependencies?.typescript === "7.0.2",
+    "TypeScript must match the certified compiler version",
+  );
+  assert(
+    packageJson.devDependencies?.["typescript-compiler-api"] === "npm:typescript@5.9.3",
+    "TypeScript compiler API alias must match the certified version",
+  );
   assert(
     packageJson.exports?.["."] === "./src/index.ts",
     "export must use the Bun-loadable source entry",
