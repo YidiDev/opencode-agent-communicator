@@ -1,41 +1,18 @@
 import type { FencingToken } from "../domain/ownership";
 import { OwnershipLostFault } from "../domain/ownership";
 import { type DomainResult, domainFailure } from "../domain/results";
-import { validateWorkspaceKey, type WorkspaceKey } from "../domain/workspaces";
+import { validateWorkspaceKey } from "../domain/workspaces";
 import { runUntilAborted } from "./abortable-operation";
 import { startReadyLifecycle } from "./communicator-ready-lifecycle";
-import type {
-  CommunicatorStartupRecoveryLifecycle,
-  CommunicatorStartupRecoverySummary,
-} from "./communicator-startup-lifecycle";
+import type { CommunicatorStartupRecoveryLifecycle } from "./communicator-startup-lifecycle";
+import { runCommunicatorStartupPhases } from "./communicator-startup-phases";
 import type {
   CommunicatorStartupRecoveryInput,
   CommunicatorStartupRecoveryPorts,
 } from "./communicator-startup-types";
-import type { RecoveryStartupBarrierPort } from "./delivery-ports";
-import { drainDeliveryRetention } from "./delivery-retention";
 import { inspectStartupBarrier } from "./message-recovery-boundaries";
-import {
-  ParticipantDeletionReconciliationFault,
-  reconcileParticipantDeletions,
-} from "./participant-deletion-reconciliation";
-import {
-  classifyStaleMessageDeliveries,
-  recoverPreparedMessageDeliveries,
-} from "./recover-message-deliveries";
-import {
-  classifyStaleSessionRequests,
-  expireDueSessionRequests,
-  recoverPreparedSessionRequests,
-} from "./recover-session-requests";
-import { recoverSessionStarts } from "./recover-session-starts";
-import {
-  drainRequestMaintenance,
-  requestStartupResultExpiryHardBudget,
-} from "./request-maintenance";
 import type { RequestRuntimeStopReason } from "./request-runtime";
-import { operationControlStopped, readSafeClockMs } from "./safe-clock";
-import { drainStartMaintenance } from "./start-maintenance";
+import { readSafeClockMs } from "./safe-clock";
 import { createLinkedStartupEffectControl } from "./startup-effect-control";
 
 export {
@@ -86,13 +63,6 @@ function validStartupInput(
   return !input.abort.aborted && now !== undefined && now < input.deadlineMs;
 }
 
-function startupControlStopped(
-  ports: CommunicatorStartupRecoveryPorts,
-  input: CommunicatorStartupRecoveryInput,
-): boolean {
-  return operationControlStopped(ports.clock, input.abort, input.deadlineMs);
-}
-
 async function verifyStartupOwnership(
   ports: CommunicatorStartupRecoveryPorts,
   fencingToken: FencingToken,
@@ -111,196 +81,6 @@ async function verifyStartupOwnership(
     );
   }
   return { ok: true, value: undefined };
-}
-
-async function runHygiene(
-  ports: CommunicatorStartupRecoveryPorts,
-  fencingToken: FencingToken,
-  workspaceKey: WorkspaceKey,
-  shouldStop: () => boolean,
-  signal: AbortSignal,
-): Promise<
-  DomainResult<{
-    readonly expiredResults: number;
-    readonly retainedRequestsDeleted: number;
-    readonly retainedRateEventsDeleted: number;
-    readonly retainedStartOperationsDeleted: number;
-    readonly retainedStartRateEventsDeleted: number;
-    readonly retainedDeliveriesDeleted: number;
-    readonly retainedDeliveryRateEventsDeleted: number;
-  }>
-> {
-  const result = await drainRequestMaintenance({
-    ports: { resultRetention: ports.resultRetention, requestRetention: ports.requestRetention },
-    fencingToken,
-    workspaceKey,
-    shouldStop,
-    abort: signal,
-    resultExpiryHardBudget: requestStartupResultExpiryHardBudget,
-  });
-  if (!result.ok) {
-    return startupFailure(
-      result.code === "ownership_lost" ? "ownership_lost" : "storage_unavailable",
-      "Request maintenance hygiene failed.",
-    );
-  }
-  const deliveryRetention = await drainDeliveryRetention({
-    persistence: ports.deliveries,
-    fencingToken,
-    workspaceKey,
-    shouldStop,
-    abort: signal,
-  });
-  if (!deliveryRetention.ok) {
-    return startupFailure(
-      deliveryRetention.code === "ownership_lost" ? "ownership_lost" : "storage_unavailable",
-      "Delivery maintenance hygiene failed.",
-    );
-  }
-  const startResult = ports.startLimits
-    ? await drainStartMaintenance({
-        starts: ports.starts,
-        limits: ports.startLimits,
-        fencingToken,
-        workspaceKey,
-        nowMs: ports.clock.nowMs(),
-        shouldStop,
-        abort: signal,
-      })
-    : { ok: true as const, deletedOperations: 0, deletedRateEvents: 0 };
-  if (!startResult.ok) {
-    return startupFailure(
-      startResult.code === "ownership_lost" ? "ownership_lost" : "storage_unavailable",
-      "Start-operation maintenance hygiene failed.",
-    );
-  }
-  return {
-    ok: true,
-    value: {
-      expiredResults: result.expiredResults,
-      retainedRequestsDeleted: result.deletedRequests,
-      retainedRateEventsDeleted: result.deletedRateEvents,
-      retainedStartOperationsDeleted: startResult.deletedOperations,
-      retainedStartRateEventsDeleted: startResult.deletedRateEvents,
-      retainedDeliveriesDeleted: deliveryRetention.deletedDeliveries,
-      retainedDeliveryRateEventsDeleted: deliveryRetention.deletedRateEvents,
-    },
-  };
-}
-
-async function runStartupPhases(
-  ports: CommunicatorStartupRecoveryPorts,
-  input: CommunicatorStartupRecoveryInput,
-  fencingToken: FencingToken,
-  startupBarrier: Awaited<ReturnType<RecoveryStartupBarrierPort["establish"]>>,
-  signal: AbortSignal,
-): Promise<DomainResult<Readonly<CommunicatorStartupRecoverySummary>>> {
-  const phaseInput = {
-    workspaceKey: input.workspaceKey,
-    fencingToken,
-    startupBarrier,
-    abort: signal,
-    deadlineMs: input.deadlineMs,
-    limit: input.limit,
-    effectSignal: signal,
-  };
-  const messagePorts = {
-    membership: ports.membership,
-    deliveries: ports.deliveries,
-    nativeQueue: ports.nativeQueue,
-    ownership: ports.ownership,
-    startupBarrier: ports.startupBarrier,
-    clock: ports.clock,
-  };
-  const requestPorts = {
-    requests: ports.requests,
-    activity: ports.activity,
-    nativeSteer: ports.nativeSteer,
-    ownership: ports.ownership,
-    notifications: ports.runtime,
-    clock: ports.clock,
-  };
-  const staleMessages = await classifyStaleMessageDeliveries(messagePorts, phaseInput);
-  if (!staleMessages.ok) return staleMessages;
-  const staleRequests = await classifyStaleSessionRequests(requestPorts, phaseInput);
-  if (!staleRequests.ok) return staleRequests;
-  let participantDeletions: Awaited<ReturnType<typeof reconcileParticipantDeletions>>;
-  try {
-    participantDeletions = await reconcileParticipantDeletions(
-      {
-        requests: ports.requests,
-        presence: ports.participantPresence,
-        notifications: ports.runtime,
-        lifecycle: { fencingToken },
-        workspaceKey: input.workspaceKey,
-      },
-      signal,
-    );
-  } catch (cause: unknown) {
-    const ownershipLost =
-      cause instanceof ParticipantDeletionReconciliationFault && cause.code === "ownership_lost";
-    return startupFailure(
-      ownershipLost ? "ownership_lost" : "storage_unavailable",
-      "Participant deletion startup reconciliation failed.",
-    );
-  }
-  const staleStarts = await recoverSessionStarts(ports.starts, ports.clock, {
-    fencingToken,
-    workspaceKey: input.workspaceKey,
-    abort: signal,
-    nativeStart: ports.nativeStart,
-  });
-  const linkedInput = { ...input, abort: signal };
-  if (startupControlStopped(ports, linkedInput)) {
-    return startupFailure("ownership_lost", "Startup ownership was lost.");
-  }
-  const currentBeforeDue = await verifyStartupOwnership(ports, fencingToken, signal);
-  if (!currentBeforeDue.ok) return currentBeforeDue;
-  const dueBefore = await expireDueSessionRequests(requestPorts, phaseInput);
-  if (!dueBefore.ok) return dueBefore;
-  const preparedMessages = await recoverPreparedMessageDeliveries(messagePorts, phaseInput);
-  if (!preparedMessages.ok) return preparedMessages;
-  const preparedRequests = await recoverPreparedSessionRequests(requestPorts, phaseInput);
-  if (!preparedRequests.ok) return preparedRequests;
-  const dueAfter = await expireDueSessionRequests(requestPorts, phaseInput);
-  if (!dueAfter.ok) return dueAfter;
-  const hygiene = await runHygiene(
-    ports,
-    fencingToken,
-    input.workspaceKey,
-    () => startupControlStopped(ports, linkedInput),
-    signal,
-  );
-  if (!hygiene.ok) return hygiene;
-  if (startupControlStopped(ports, linkedInput)) {
-    return startupFailure("ownership_lost", "Startup ownership was lost.");
-  }
-  const currentAfterHygiene = await verifyStartupOwnership(ports, fencingToken, signal);
-  if (!currentAfterHygiene.ok) return currentAfterHygiene;
-  return {
-    ok: true,
-    value: Object.freeze({
-      participantDeletionCandidates: participantDeletions.candidates,
-      participantDeletionsObserved: participantDeletions.absent,
-      participantDeletionUnknown: participantDeletions.unknown,
-      participantRequestsTerminalized: participantDeletions.terminalized,
-      staleMessages: staleMessages.value,
-      staleRequests: staleRequests.value,
-      preparedStartsAwaitingApproval: staleStarts.preparedAwaitingInvocationApproval,
-      startCreationOutcomesUnknown: staleStarts.creationOutcomesUnknown,
-      startTitleOutcomesUnknown: staleStarts.titleOutcomesUnknown,
-      startAdmissionsUnknown: staleStarts.admissionsUnknown,
-      dueRequestsBeforePrepared: dueBefore.value,
-      preparedMessagesSubmitted: preparedMessages.value.submitted,
-      preparedMessagesCancelled: preparedMessages.value.cancelled,
-      preparedRequestsObserved: preparedRequests.value.observed,
-      preparedRequestsSubmitted: preparedRequests.value.submitted,
-      preparedRequestsSkipped: preparedRequests.value.skipped,
-      requestsTerminalizedAtClaim: preparedRequests.value.terminalizedAtClaim,
-      dueRequestsAfterPrepared: dueAfter.value,
-      ...hygiene.value,
-    }),
-  };
 }
 
 export async function recoverCommunicatorStartup(
@@ -366,12 +146,13 @@ export async function recoverCommunicatorStartup(
     if (!startupBarrier) {
       return stop(startupFailure("storage_unavailable", "Startup barrier was malformed."));
     }
-    const phases = await runStartupPhases(
+    const phases = await runCommunicatorStartupPhases(
       ports,
       input,
       fencingToken,
       startupBarrier,
       effectControl.signal,
+      () => verifyStartupOwnership(ports, fencingToken, effectControl.signal),
     );
     if (!phases.ok) return stop(phases);
     const summary = phases.value;

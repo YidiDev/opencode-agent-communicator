@@ -46,7 +46,7 @@ absolute glibc/musl locations, canonicalizes each candidate, verifies a root-own
 fully root-owned, non-group/world-writable ancestor chain, and binds through the retained
 `/proc/self/fd/<fd>` object. It never asks the dynamic loader to search for `libc.so.6`; unsupported
 architectures or failed trust checks leave secure export unavailable. The source retains ARM64
-syscall numbers and absolute libc candidates for possible future work. They are not `0.1.1`
+syscall numbers and absolute libc candidates for possible future work. They are not `0.1.2`
 certification evidence or a support claim, and package metadata excludes ARM64 installation.
 
 Native export accepts only a direct ELF binary (scripts and CLI shell wrappers are unsupported) on

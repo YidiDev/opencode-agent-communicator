@@ -5,24 +5,18 @@ import { deliveryRecordsPerWorkspaceHardCeiling } from "../domain/safety-ceiling
 import type { WorkspaceKey } from "../domain/workspaces";
 import { runUntilAborted } from "./abortable-operation";
 import { deliveryStoreFailure } from "./admit-message-delivery";
-import type { MessageRecoveryPorts, StartupRecoveryBarrier } from "./delivery-ports";
-import { inspectDeliveryMetadata, inspectDeliveryMutation } from "./message-recovery-boundaries";
+import type { MessageRecoveryPorts } from "./delivery-ports";
+import { inspectDeliveryMetadata } from "./message-recovery-boundaries";
+import type { MessageRecoveryPhaseInput } from "./message-recovery-phase-types";
 import { recoverOnePreparedMessage } from "./recover-one-prepared-message";
-import { operationControlStopped, readSafeClockMs } from "./safe-clock";
+import { operationControlStopped } from "./safe-clock";
 import { snapshotDenseArray } from "./strict-port-boundaries";
 
+export { classifyStaleMessageDeliveries } from "./classify-stale-message-deliveries";
 export type { MessageRecoveryPorts, MessageRecoverySummary } from "./delivery-ports";
+export type { MessageRecoveryPhaseInput } from "./message-recovery-phase-types";
 
 export const startupRecoveryMaximumRecords = deliveryRecordsPerWorkspaceHardCeiling;
-
-export interface MessageRecoveryPhaseInput {
-  readonly workspaceKey: WorkspaceKey;
-  readonly fencingToken: FencingToken;
-  readonly startupBarrier: StartupRecoveryBarrier;
-  readonly abort: AbortSignal;
-  readonly deadlineMs?: number;
-  readonly limit: number;
-}
 
 function validPhaseInput(input: MessageRecoveryPhaseInput): boolean {
   return (
@@ -45,19 +39,6 @@ function isRecoveryStopped(
   return operationControlStopped(ports.clock, abort, deadlineMs);
 }
 
-function sameDeliveryIdentity(before: DeliveryMetadata, after: DeliveryMetadata): boolean {
-  return (
-    before.id === after.id &&
-    before.workspaceKey === after.workspaceKey &&
-    before.sourceSessionId === after.sourceSessionId &&
-    before.targetSessionId === after.targetSessionId &&
-    before.nativeMessageId === after.nativeMessageId &&
-    before.contentByteLength === after.contentByteLength &&
-    before.contentSha256 === after.contentSha256 &&
-    before.createdAtMs === after.createdAtMs
-  );
-}
-
 function inspectDeliveryBatch(
   records: readonly unknown[],
   seen: Set<string>,
@@ -71,68 +52,6 @@ function inspectDeliveryBatch(
     coherent.push(delivery);
   }
   return coherent;
-}
-
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: each rejected ownership and persistence settlement is deliberately mapped at its exact mutation boundary.
-async function classifySubmittingBatch(
-  ports: MessageRecoveryPorts,
-  workspaceKey: WorkspaceKey,
-  fencingToken: FencingToken,
-  records: readonly DeliveryMetadata[],
-  abort: AbortSignal,
-  deadlineMs: number | undefined,
-): Promise<DomainResult<number>> {
-  let changed = 0;
-  for (const delivery of records) {
-    if (isRecoveryStopped(ports, abort, deadlineMs)) {
-      return deliveryStoreFailure("ownership_lost", delivery.id);
-    }
-    if (!isCoherentDeliveryMetadata(delivery)) {
-      return deliveryStoreFailure("state_conflict", delivery.id);
-    }
-    const current = await runUntilAborted(abort, () => ports.ownership.isCurrent(fencingToken));
-    if (current.kind === "aborted" || (current.kind === "settled" && current.value !== true)) {
-      return deliveryStoreFailure("ownership_lost", delivery.id);
-    }
-    if (current.kind === "rejected") {
-      return deliveryStoreFailure(
-        current.cause instanceof OwnershipLostFault ? "ownership_lost" : "storage_unavailable",
-        delivery.id,
-      );
-    }
-    const nowMs = readSafeClockMs(ports.clock);
-    if (nowMs === undefined || isRecoveryStopped(ports, abort, deadlineMs)) {
-      return deliveryStoreFailure("ownership_lost", delivery.id);
-    }
-    const settled = await runUntilAborted(abort, () =>
-      ports.deliveries.completeSubmission({
-        fencingToken,
-        workspaceKey,
-        deliveryId: delivery.id,
-        state: "admission_unknown",
-        nowMs,
-      }),
-    );
-    if (settled.kind === "aborted") return deliveryStoreFailure("ownership_lost", delivery.id);
-    if (settled.kind === "rejected") {
-      return deliveryStoreFailure(
-        settled.cause instanceof OwnershipLostFault ? "ownership_lost" : "storage_unavailable",
-        delivery.id,
-      );
-    }
-    const result = inspectDeliveryMutation(settled.value);
-    if (!result) return deliveryStoreFailure("state_conflict", delivery.id);
-    if (!result.ok) return deliveryStoreFailure(result.code, delivery.id);
-    if (
-      result.delivery.state !== "admission_unknown" ||
-      !isCoherentDeliveryMetadata(result.delivery) ||
-      !sameDeliveryIdentity(delivery, result.delivery)
-    ) {
-      return deliveryStoreFailure("state_conflict", delivery.id);
-    }
-    changed += 1;
-  }
-  return { ok: true, value: changed };
 }
 
 async function recoveryExhausted(
@@ -150,96 +69,6 @@ async function recoveryExhausted(
   return snapshot
     ? { ok: true, value: snapshot.length === 0 }
     : deliveryStoreFailure("state_conflict");
-}
-
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the bounded loop keeps list, mutation, and exhaustion checks in one ownership phase.
-async function markSubmittingUnknown(
-  ports: MessageRecoveryPorts,
-  workspaceKey: WorkspaceKey,
-  fencingToken: FencingToken,
-  startupBarrier: StartupRecoveryBarrier,
-  abort: AbortSignal,
-  deadlineMs: number | undefined,
-  limit: number,
-): Promise<DomainResult<number>> {
-  let changed = 0;
-  const seen = new Set<string>();
-  while (true) {
-    if (isRecoveryStopped(ports, abort, deadlineMs)) return deliveryStoreFailure("ownership_lost");
-    const remaining = startupRecoveryMaximumRecords - seen.size;
-    const batchLimit = Math.min(limit, remaining);
-    const listed = await runUntilAborted(abort, () =>
-      ports.deliveries.listRecoverable({
-        fencingToken,
-        workspaceKey,
-        state: "submitting",
-        limit: batchLimit,
-        excludeClaimedByToken: fencingToken,
-        startupBarrier,
-      }),
-    );
-    if (listed.kind === "aborted") return deliveryStoreFailure("ownership_lost");
-    if (listed.kind === "rejected") {
-      return deliveryStoreFailure(
-        listed.cause instanceof OwnershipLostFault ? "ownership_lost" : "storage_unavailable",
-      );
-    }
-    const records = listed.value;
-    const batchRecords = snapshotDenseArray(records, batchLimit);
-    if (!batchRecords) {
-      return deliveryStoreFailure("state_conflict");
-    }
-    if (batchRecords.length === 0) return { ok: true, value: changed };
-    const coherentRecords = inspectDeliveryBatch(batchRecords, seen);
-    if (!coherentRecords) return deliveryStoreFailure("state_conflict");
-    const batch = await classifySubmittingBatch(
-      ports,
-      workspaceKey,
-      fencingToken,
-      coherentRecords,
-      abort,
-      deadlineMs,
-    );
-    if (!batch.ok) return batch;
-    changed += batch.value;
-    if (seen.size === startupRecoveryMaximumRecords) {
-      const exhausted = await recoveryExhausted(abort, () =>
-        ports.deliveries.listRecoverable({
-          fencingToken,
-          workspaceKey,
-          state: "submitting",
-          limit: 1,
-          excludeClaimedByToken: fencingToken,
-          startupBarrier,
-        }),
-      );
-      if (!exhausted.ok) return exhausted;
-      return exhausted.value
-        ? { ok: true, value: changed }
-        : deliveryStoreFailure("state_conflict");
-    }
-  }
-}
-
-export async function classifyStaleMessageDeliveries(
-  ports: MessageRecoveryPorts,
-  input: MessageRecoveryPhaseInput,
-): Promise<DomainResult<number>> {
-  if (!validPhaseInput(input)) {
-    return domainFailure("invalid_arguments", "Message recovery phase input is invalid.", false);
-  }
-  if (input.startupBarrier.fencingToken !== input.fencingToken) {
-    return deliveryStoreFailure("ownership_lost");
-  }
-  return markSubmittingUnknown(
-    ports,
-    input.workspaceKey,
-    input.fencingToken,
-    input.startupBarrier,
-    input.abort,
-    input.deadlineMs,
-    input.limit,
-  );
 }
 
 async function recoverPrepared(
