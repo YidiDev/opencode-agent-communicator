@@ -112,13 +112,13 @@ async function installPackedPlugin(repository: string, staging: string): Promise
     `${JSON.stringify({ private: true, dependencies: { "opencode-agent-communicator": archive } })}\n`,
   );
   const installed = Bun.spawnSync({
-    cmd: [process.execPath, "install", "--ignore-scripts"],
+    cmd: ["npm", "install", "--ignore-scripts"],
     cwd: consumer,
     stdout: "pipe",
     stderr: "pipe",
   });
   if (installed.exitCode !== 0) {
-    throw new Error(`packed install failed: ${installed.stderr.toString()}`);
+    throw new Error(`npm packed install failed: ${installed.stderr.toString()}`);
   }
   return realpath(join(consumer, "node_modules/opencode-agent-communicator/src/index.ts"));
 }
