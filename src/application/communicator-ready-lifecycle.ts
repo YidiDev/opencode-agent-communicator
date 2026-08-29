@@ -36,6 +36,7 @@ export async function startReadyLifecycle(
   let lifecycle: CommunicatorStartupRecoveryLifecycle | undefined;
   const scheduler = new RequestDeadlineScheduler({
     requests: ports.requests,
+    ...(ports.locks ? { locks: ports.locks } : {}),
     notifications: ports.runtime,
     fencingToken,
     workspaceKey: input.workspaceKey,

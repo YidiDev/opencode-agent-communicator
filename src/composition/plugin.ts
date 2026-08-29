@@ -7,6 +7,11 @@ import {
 } from "../adapters/native/opencode-1-18";
 import { createOpenCode118HealthPort } from "../adapters/native/opencode-1-18-health";
 import { LinuxBunSqliteStore } from "../adapters/store/sqlite-store";
+import { ActiveSessionAdvisoryLockNotifier } from "../application/advisory-lock-active-session-notifier";
+import type {
+  AdvisoryLockPostCommitNotificationPort,
+  AdvisoryLockWakePort,
+} from "../application/advisory-lock-use-cases";
 import { checkHostCompatibility } from "../application/check-host-compatibility";
 import { ParticipantDeletionLifecycle } from "../application/participant-deletion-lifecycle";
 import {
@@ -15,6 +20,7 @@ import {
 } from "../application/recover-communicator-startup";
 import { RequestRuntime } from "../application/request-runtime";
 import type { SessionExportAdapterPort } from "../application/session-export-ports";
+import { createGeneratedIdFactory } from "../domain/generated-ids";
 import type { HostHealthPort, RuntimeIdentityPort } from "../domain/host";
 import { ActiveInvocationRegistry } from "./active-invocations";
 import { type CommunicatorOptions, parseCommunicatorOptions } from "./config";
@@ -25,6 +31,7 @@ import {
 import { createProductionExporter } from "./plugin-exporter";
 import {
   productionClock,
+  productionEntropy,
   productionMonotonicNowMs,
   productionRuntimeIdentity,
   productionSchedulerTimers,
@@ -51,6 +58,15 @@ export interface CompositionDependencies {
     options: ConstructorParameters<typeof LinuxBunSqliteStore>[0],
   ) => LinuxBunSqliteStore;
   readonly createRuntime: () => RequestRuntime;
+  readonly createAdvisoryLockHooks: (input: {
+    readonly native: OpenCodeNativeAdapter;
+    readonly lifecycle: CommunicatorStartupRecoveryLifecycle;
+  }) => {
+    readonly wake: AdvisoryLockWakePort;
+    readonly notifications: AdvisoryLockPostCommitNotificationPort;
+    readonly dispose?: () => void;
+    readonly drain?: () => Promise<void>;
+  };
   readonly recoverStartup: typeof recoverCommunicatorStartup;
   readonly createExporter: (
     options: CommunicatorOptions,
@@ -72,6 +88,26 @@ const productionDependencies: CompositionDependencies = Object.freeze({
   createStore: (options: ConstructorParameters<typeof LinuxBunSqliteStore>[0]) =>
     new LinuxBunSqliteStore(options),
   createRuntime: () => new RequestRuntime(),
+  createAdvisoryLockHooks: ({
+    native,
+    lifecycle,
+  }: {
+    readonly native: OpenCodeNativeAdapter;
+    readonly lifecycle: CommunicatorStartupRecoveryLifecycle;
+  }) => {
+    const notifier = new ActiveSessionAdvisoryLockNotifier({
+      roots: native,
+      steer: native,
+      ids: createGeneratedIdFactory(productionEntropy),
+      timers: productionSchedulerTimers,
+    });
+    return {
+      wake: { wakeAdvisoryLockExpiry: () => lifecycle.scheduler.wake() },
+      notifications: notifier,
+      dispose: () => notifier.dispose(),
+      drain: () => notifier.drain(),
+    };
+  },
   recoverStartup: recoverCommunicatorStartup,
   createExporter: createProductionExporter,
 });
@@ -105,6 +141,8 @@ function createDisposer(input: {
   readonly invocations: ActiveInvocationRegistry;
   readonly exporterDrain: () => (() => Promise<void>) | undefined;
   readonly exporterDispose: () => (() => void) | undefined;
+  readonly advisoryLockDispose: () => (() => void) | undefined;
+  readonly advisoryLockDrain: () => (() => Promise<void>) | undefined;
   readonly store: () => LinuxBunSqliteStore | undefined;
 }): () => Promise<void> {
   let disposal: Promise<void> | undefined;
@@ -121,7 +159,10 @@ function createDisposer(input: {
       const lifecycle = input.lifecycle();
       await capture(() => input.deletion()?.dispose());
       await capture(() => lifecycle?.stop("shutdown") ?? input.runtime()?.stop("shutdown"));
+      await capture(() => input.advisoryLockDispose()?.());
       await capture(() => input.invocations.shutdown());
+      const advisoryLockDrain = input.advisoryLockDrain();
+      if (advisoryLockDrain) await capture(advisoryLockDrain);
       if (lifecycle) await capture(() => lifecycle.scheduler.drain());
       const exporterDrain = input.exporterDrain();
       if (exporterDrain) await capture(exporterDrain);
@@ -159,6 +200,8 @@ export function createCompositionFactory(
     let deletion: ParticipantDeletionLifecycle | undefined;
     let exporterDrain: (() => Promise<void>) | undefined;
     let exporterDispose: (() => void) | undefined;
+    let advisoryLockDispose: (() => void) | undefined;
+    let advisoryLockDrain: (() => Promise<void>) | undefined;
     const invocations = new ActiveInvocationRegistry();
     const dispose = createDisposer({
       lifecycle: () => lifecycle,
@@ -167,6 +210,8 @@ export function createCompositionFactory(
       invocations,
       exporterDrain: () => exporterDrain,
       exporterDispose: () => exporterDispose,
+      advisoryLockDispose: () => advisoryLockDispose,
+      advisoryLockDrain: () => advisoryLockDrain,
       store: () => store,
     });
     try {
@@ -207,6 +252,7 @@ export function createCompositionFactory(
           deliveries: store,
           nativeQueue: native,
           requests: store,
+          locks: store,
           participantPresence: native,
           activity: native,
           nativeSteer: native,
@@ -254,6 +300,9 @@ export function createCompositionFactory(
       }
       exporterDrain = exporter.drain;
       exporterDispose = exporter.dispose;
+      const advisoryLockHooks = dependencies.createAdvisoryLockHooks({ native, lifecycle });
+      advisoryLockDispose = advisoryLockHooks.dispose;
+      advisoryLockDrain = advisoryLockHooks.drain;
       const contracts = constructToolContracts({
         options,
         workspaceKey,
@@ -262,6 +311,8 @@ export function createCompositionFactory(
         runtime,
         lifecycle,
         exporter: exporter.adapter,
+        advisoryLockWake: advisoryLockHooks.wake,
+        advisoryLockNotifications: advisoryLockHooks.notifications,
       });
       const tools = bridgeContracts(contracts, invocations, workspace);
       return {

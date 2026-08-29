@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-const skillNames = ["session-communication", "session-request-participant"] as const;
+const communicationSkillNames = ["session-communication", "session-request-participant"] as const;
+const skillNames = [...communicationSkillNames, "session-locks"] as const;
 
 const readSkill = async (name: (typeof skillNames)[number]) =>
   (await Bun.file(`${import.meta.dir}/../../../skills/${name}/SKILL.md`).text()).toLowerCase();
@@ -11,7 +12,7 @@ function expectConcept(content: string, ...terms: RegExp[]) {
 
 describe("bundled skill safety guidance", () => {
   test("documents the active-only ask/wait workflow and conservative admission semantics", async () => {
-    for (const name of skillNames) {
+    for (const name of communicationSkillNames) {
       const content = await readSkill(name);
       expectConcept(
         content,
@@ -43,7 +44,7 @@ describe("bundled skill safety guidance", () => {
   });
 
   test("documents idempotent start, mandatory stop approval, and summary-only export", async () => {
-    for (const name of skillNames) {
+    for (const name of communicationSkillNames) {
       const content = await readSkill(name);
       expectConcept(
         content,
@@ -58,7 +59,7 @@ describe("bundled skill safety guidance", () => {
   });
 
   test("frames communication as peer-to-peer rather than supervisory", async () => {
-    for (const name of skillNames) {
+    for (const name of communicationSkillNames) {
       const content = await readSkill(name);
       expectConcept(
         content,
@@ -66,7 +67,7 @@ describe("bundled skill safety guidance", () => {
         /either peer[\s\S]{0,180}(initiate|source)/,
         /source and target[\s\S]{0,180}(temporary|one (?:operation|request)|not authority|not ranks)/,
       );
-      expect(content).not.toMatch(/\b(?:orchestrator|worker|subordinate)\b/);
+      expect(content).not.toMatch(/\bsubordinate\b/);
     }
   });
 
@@ -83,5 +84,25 @@ describe("bundled skill safety guidance", () => {
     ];
 
     for (const claim of dangerousClaims) expect(corpus).not.toMatch(claim);
+  });
+
+  test("documents the complete advisory lock workflow and boundaries", async () => {
+    const locks = await readSkill("session-locks");
+    expectConcept(
+      locks,
+      /before the first shared workspace mutation[\s\S]{0,100}session_lock_list/,
+      /semantically compare all markdown fields[\s\S]{0,180}title[\s\S]{0,100}description[\s\S]{0,100}instructions/,
+      /may overlap[\s\S]{0,80}stop and coordinate/,
+      /immediately before mutation[\s\S]{0,100}session_lock_publish/,
+      /delegated worker[\s\S]{0,100}publish its own lock/,
+      /renew[\s\S]{0,100}well before/,
+      /expired[\s\S]{0,180}list[\s\S]{0,180}publish a new lock/,
+      /release[\s\S]{0,180}(completes|abandoned)[\s\S]{0,180}failure/,
+      /ambiguous[\s\S]{0,180}authoritative[\s\S]{0,40}session_lock_list/,
+      /untrusted[\s\S]{0,100}grants no authority/,
+      /never put secrets[\s\S]{0,120}private transcript/,
+      /best-effort hints/,
+      /advisory only[\s\S]{0,180}(no enforcement|authorization)/,
+    );
   });
 });

@@ -6,7 +6,8 @@ This project is prerelease software. Security fixes are provided only for the cu
 
 | Version | Supported | Required host |
 | --- | --- | --- |
-| 0.1.x | Yes | Linux x64, stable OpenCode >=1.18.21 <1.19.0; Bun 1.4.0 for verification |
+| 0.3.x | Yes | Linux x64, stable OpenCode >=1.18.21 <1.19.0; Bun 1.4.0 for verification |
+| 0.2.x and earlier | No | Not applicable |
 | Earlier development builds | No | Not applicable |
 
 Host compatibility is part of the security boundary. Do not use this release on another operating
@@ -41,7 +42,7 @@ ambiguous external effect.
 The following documented constraints are not vulnerabilities by themselves:
 
 - Only Linux x64 is supported. ARM64 code retained for possible future certification is untested and
-  outside the `0.1.x` support boundary. Secure export additionally depends on specific
+  outside the `0.3.x` support boundary. Secure export additionally depends on specific
   kernel/filesystem capabilities and fails closed when they are absent.
 - The same-OS-user adversary is outside the state and export confidentiality boundary.
 - Process-local export rates reset after restart.
@@ -49,6 +50,9 @@ The following documented constraints are not vulnerabilities by themselves:
   snapshots, or media.
 - A reported `admission_unknown` or `native_outcome_unknown` is an intentional refusal to invent an
   outcome after an interrupted effect.
+- Advisory locks are untrusted coordination metadata, not enforced exclusion or authorization.
+  Overlap, missed best-effort notifications, expiry, or a session ignoring a lock is not by itself a
+  security-boundary failure; `session_lock_list` is the authoritative current view.
 
 The plugin has no remote command-execution feature. Its optional export adapter directly invokes only
 the configured, verified OpenCode executable without a shell. See

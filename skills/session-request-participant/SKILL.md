@@ -1,6 +1,6 @@
 ---
 name: session-request-participant
-description: Handles inbound peer requests safely. Use when reviewing a durable inbox, responding to questions, signaling milestones, or contacting another OpenCode session.
+description: Handles inbound peer requests safely. Use when reviewing a durable inbox, responding to questions, signaling milestones, contacting another OpenCode session, or modifying a shared workspace.
 ---
 
 # Session Request Participant
@@ -15,6 +15,9 @@ Source and target are temporary roles for one request; either peer may initiate 
 2. For each pending inbound request, call `session_request_get` to retrieve its questions or
    milestone. Only the target can retrieve a pending inbound payload.
 3. Validate the request against the user's instructions and the current task before doing work.
+   After that validation and before any shared workspace mutation, load the bundled
+   `session-locks` skill and perform its lock preflight. Publish and manage your own lock; another
+   session must not do so as your proxy.
 4. For an ask, call `session_respond` once with one answer array per question. Preserve question
    order and obey the option, custom-answer, and single/multiple-choice constraints.
 5. For a wait, call `session_signal` once the milestone is actually reached. Include only bounded,

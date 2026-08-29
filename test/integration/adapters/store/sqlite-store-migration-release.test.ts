@@ -163,7 +163,7 @@ test("v11 safely assigns the hard ceiling to preexisting v10 operations", () => 
     database
       .query<{ version: number }, []>("SELECT user_version AS version FROM pragma_user_version")
       .get()?.version,
-  ).toBe(12);
+  ).toBe(13);
   database.close(true);
 });
 

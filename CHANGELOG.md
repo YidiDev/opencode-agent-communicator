@@ -6,6 +6,30 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-28
+
+### Added
+
+- Added `session_lock_list`, `session_lock_publish`, `session_lock_release`, and
+  `session_lock_renew` in the canonical 18-tool manifest for workspace-scoped, time-bounded advisory
+  coordination.
+- Added SQLite schema v13 with fenced persistence, bounded expiry cleanup, holder-only mutation,
+  active-lock quotas, opaque keyset pagination, and canonical ISO 8601 public timestamps.
+- Added best-effort mutation notifications to observed `busy`/`retry` peers and the bundled
+  `session-locks` workflow skill.
+
+### Changed
+
+- Added concise lock preflight guidance to the bundled `session-communication` and
+  `session-request-participant` skills while preserving independent peer authority boundaries.
+- Expanded packed-package, black-box, and live production harness contracts to 18 tools and three
+  skills, including a publish/list/renew/release journey.
+
+### Security
+
+- Documented that lock Markdown is untrusted, active-list state is authoritative, notifications are
+  hints only, and advisory locks provide neither enforcement nor authorization.
+
 ## [0.2.5] - 2026-08-28
 
 ### Changed
@@ -142,7 +166,8 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.2...v0.2.3

@@ -59,6 +59,10 @@ interface ActiveTarget {
 
 const toolIds = [
   "session_list",
+  "session_lock_list",
+  "session_lock_publish",
+  "session_lock_release",
+  "session_lock_renew",
   "session_send",
   "session_delivery_get",
   "session_ask",
@@ -334,8 +338,13 @@ async function assertPackedRegistration(fixture: PackedFixture): Promise<void> {
   const packedRoot = dirname(dirname(entryPath));
   expect(loadedConfig.skills?.paths).toContain(join(packedRoot, "skills"));
   const skills = successful(await client.app.skills({ directory: isolation.project }), "skills");
-  expect(skills.map((skill) => skill.name)).toContain("session-communication");
-  expect(skills.map((skill) => skill.name)).toContain("session-request-participant");
+  expect(skills.map((skill) => skill.name).sort()).toEqual(
+    expect.arrayContaining([
+      "session-locks",
+      "session-communication",
+      "session-request-participant",
+    ]),
+  );
 }
 
 function createInvoker(client: Client): Invoker {
@@ -425,6 +434,58 @@ async function runBasicPackedJourneys(invoker: Invoker): Promise<void> {
     ok: false,
     error: { code: "export_unavailable" },
   });
+}
+
+async function runLockJourney(invoker: Invoker): Promise<void> {
+  const published = await invoker.begin("session_lock_publish", "production-lock-publish");
+  const publishOutput = await published.output();
+  expect(publishOutput).toMatchObject({
+    ok: true,
+    value: {
+      lock: {
+        held_by_session_id: published.sessionID,
+        title: "Packed release surface",
+        description: "Exercise the packed advisory lock journey.",
+        instructions: "Coordinate before touching packed acceptance files.",
+      },
+      notification: {
+        eligible: expect.any(Number),
+        admitted: expect.any(Number),
+        unknown: expect.any(Number),
+      },
+    },
+  });
+  const lockID = Reflect.get(
+    Reflect.get(Reflect.get(publishOutput, "value") ?? {}, "lock") ?? {},
+    "lock_id",
+  );
+  if (typeof lockID !== "string") throw new Error("session_lock_publish returned no lock ID");
+
+  expect(await invoker.invoke("session_lock_list", "production-lock-list")).toMatchObject({
+    ok: true,
+    value: { locks: [{ lock_id: lockID, held_by_session_id: published.sessionID }] },
+  });
+  expect(
+    await invoker.invoke(
+      "session_lock_renew",
+      `production-lock-renew:${lockID}`,
+      published.sessionID,
+    ),
+  ).toMatchObject({ ok: true, value: { lock: { lock_id: lockID } } });
+  expect(
+    await invoker.invoke(
+      "session_lock_release",
+      `production-lock-release:${lockID}`,
+      published.sessionID,
+    ),
+  ).toMatchObject({ ok: true, value: { lock: { lock_id: lockID } } });
+  expect(
+    await invoker.invoke(
+      "session_lock_list",
+      "production-lock-list-after-release",
+      published.sessionID,
+    ),
+  ).toMatchObject({ ok: true, value: { locks: [] } });
 }
 
 async function runAskJourney(fixture: PackedFixture, invoker: Invoker): Promise<void> {
@@ -609,6 +670,7 @@ test(`runs the exact packed production plugin through OpenCode ${exactOpenCodeVe
     );
     const invoker = createInvoker(fixture.client);
     await runBasicPackedJourneys(invoker);
+    await runLockJourney(invoker);
     await runStartStopJourney(fixture, invoker, target.id);
     await runAskJourney(fixture, invoker);
     await runWaitJourney(fixture, invoker);

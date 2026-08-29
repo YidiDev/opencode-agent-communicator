@@ -105,6 +105,32 @@ function textResponse(): Response {
 }
 
 function productionToolResponse(serialized: string): Response | undefined {
+  if (serialized.includes("production-lock-list-after-release")) {
+    return toolResponse("session_lock_list");
+  }
+  if (serialized.includes("production-lock-list")) return toolResponse("session_lock_list");
+  if (serialized.includes("production-lock-publish")) {
+    return toolResponse(
+      "session_lock_publish",
+      JSON.stringify({
+        ttl_seconds: 300,
+        title: "Packed release surface",
+        description: "Exercise the packed advisory lock journey.",
+        instructions: "Coordinate before touching packed acceptance files.",
+      }),
+    );
+  }
+  const lockRenew = serialized.match(/production-lock-renew:(lck_[a-z0-9]+)/)?.[1];
+  if (lockRenew) {
+    return toolResponse(
+      "session_lock_renew",
+      JSON.stringify({ lock_id: lockRenew, ttl_seconds: 300 }),
+    );
+  }
+  const lockRelease = serialized.match(/production-lock-release:(lck_[a-z0-9]+)/)?.[1];
+  if (lockRelease) {
+    return toolResponse("session_lock_release", JSON.stringify({ lock_id: lockRelease }));
+  }
   if (serialized.includes("production-session-list")) return toolResponse("session_list");
   const send = serialized.match(/production-session-send:(ses_[A-Za-z0-9]+)/)?.[1];
   if (send) {

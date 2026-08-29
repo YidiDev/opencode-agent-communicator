@@ -1,12 +1,50 @@
+import type {
+  AdvisoryLockListValue,
+  AdvisoryLockMutationValue,
+} from "../application/advisory-lock-use-cases";
 import type { VisibleRootSession } from "../application/list-visible-root-sessions";
 import type {
   ParticipantRequestGet,
   ParticipantRequestMetadata,
 } from "../application/request-ports";
+import type { AdvisoryLock } from "../domain/advisory-locks";
 import type { DeliveryMetadata, ParticipantDelivery } from "../domain/deliveries";
 import type { PendingRequestPayload, RetainedRequestResult } from "../domain/request-types";
 import type { SessionExportSummary } from "../domain/session-export";
 import type { StartOperation } from "../domain/session-start";
+
+function canonicalUtcDate(epochMs: number): string {
+  if (!Number.isSafeInteger(epochMs) || epochMs < 0 || epochMs > 8_640_000_000_000_000) {
+    throw new TypeError("Advisory lock timestamp is outside the safe ISO 8601 range.");
+  }
+  return new Date(epochMs).toISOString();
+}
+
+export function publicAdvisoryLock(value: AdvisoryLock): Record<string, unknown> {
+  return {
+    lock_id: value.lockId,
+    held_by_session_id: value.holderSessionId,
+    title: value.title,
+    description: value.description,
+    instructions: value.instructions,
+    created_at: canonicalUtcDate(value.createdAtMs),
+    renewed_at: canonicalUtcDate(value.renewedAtMs),
+    expires_at: canonicalUtcDate(value.expiresAtMs),
+  };
+}
+
+export function publicAdvisoryLockMutation(
+  value: AdvisoryLockMutationValue,
+): Record<string, unknown> {
+  return { lock: publicAdvisoryLock(value.lock), notification: value.notification };
+}
+
+export function publicAdvisoryLockList(value: AdvisoryLockListValue): Record<string, unknown> {
+  return {
+    locks: value.locks.map(publicAdvisoryLock),
+    ...(value.nextCursor === undefined ? {} : { next_cursor: value.nextCursor }),
+  };
+}
 
 export function publicSessionExport(value: SessionExportSummary): Record<string, unknown> {
   return {

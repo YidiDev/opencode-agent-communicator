@@ -1,5 +1,9 @@
 import type { OpenCodeNativeAdapter } from "../adapters/native/opencode-1-18";
 import type { LinuxBunSqliteStore } from "../adapters/store/sqlite-store";
+import type {
+  AdvisoryLockPostCommitNotificationPort,
+  AdvisoryLockWakePort,
+} from "../application/advisory-lock-use-cases";
 import type { RequestDeadlineTimerPort } from "../application/blocking-session-request-boundaries";
 import type { CommunicatorStartupRecoveryLifecycle } from "../application/communicator-startup-lifecycle";
 import type { ClockPort } from "../application/delivery-ports";
@@ -14,6 +18,12 @@ import { createSessionAskTool } from "../tools/session-ask";
 import { createSessionDeliveryGetTool } from "../tools/session-delivery-get";
 import { createSessionExportTool } from "../tools/session-export";
 import { createSessionListTool } from "../tools/session-list";
+import {
+  createSessionLockListTool,
+  createSessionLockPublishTool,
+  createSessionLockReleaseTool,
+  createSessionLockRenewTool,
+} from "../tools/session-locks";
 import { createSessionRequestAckTool } from "../tools/session-request-ack";
 import { createSessionRequestCancelTool } from "../tools/session-request-cancel";
 import { createSessionRequestGetTool } from "../tools/session-request-get";
@@ -34,6 +44,10 @@ import {
 
 export const communicatorToolIds = Object.freeze([
   "session_list",
+  "session_lock_list",
+  "session_lock_publish",
+  "session_lock_release",
+  "session_lock_renew",
   "session_send",
   "session_delivery_get",
   "session_ask",
@@ -103,6 +117,8 @@ export function constructToolContracts(input: {
   /** Controlled composition seams used by deterministic deadline regression tests. */
   readonly clock?: ClockPort;
   readonly blockingTimers?: RequestDeadlineTimerPort;
+  readonly advisoryLockWake?: AdvisoryLockWakePort;
+  readonly advisoryLockNotifications?: AdvisoryLockPostCommitNotificationPort;
 }) {
   const { options, workspaceKey, native, store, runtime, lifecycle } = input;
   const clock = input.clock ?? productionClock;
@@ -142,12 +158,23 @@ export function constructToolContracts(input: {
     digest: productionSha256,
   };
   const policies = options.policies ?? {};
+  const advisoryLocks = {
+    ...common,
+    locks: store,
+    ids,
+    ...(input.advisoryLockWake ? { wake: input.advisoryLockWake } : {}),
+    ...(input.advisoryLockNotifications ? { notifications: input.advisoryLockNotifications } : {}),
+  };
   return Object.freeze({
     session_list: createSessionListTool(
       { ...common, sessions: native },
       workspaceKey,
       invocationDeadlineMs,
     ),
+    session_lock_list: createSessionLockListTool(advisoryLocks, identityScope),
+    session_lock_publish: createSessionLockPublishTool(advisoryLocks, identityScope),
+    session_lock_release: createSessionLockReleaseTool(advisoryLocks, identityScope),
+    session_lock_renew: createSessionLockRenewTool(advisoryLocks, identityScope),
     session_send: createSessionSendTool(
       {
         ...common,

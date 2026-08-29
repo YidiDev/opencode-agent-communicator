@@ -1,6 +1,7 @@
 import type { SessionId } from "./sessions";
 
 export type DeliveryId = string & { readonly deliveryId: unique symbol };
+export type AdvisoryLockId = string & { readonly advisoryLockId: unique symbol };
 export type NativeMessageId = string & { readonly nativeMessageId: unique symbol };
 export type RequestId = string & { readonly requestId: unique symbol };
 export type StartOperationId = string & { readonly startOperationId: unique symbol };
@@ -11,6 +12,7 @@ export const generatedIdPolicy = {
   encoding: "lowercase hexadecimal",
   prefixes: {
     delivery: "dlv_",
+    advisoryLock: "lck_",
     nativeMessage: "msg_",
     request: "req_",
     managedSession: "ses_",
@@ -18,7 +20,13 @@ export const generatedIdPolicy = {
   },
 } as const;
 
-type GeneratedId = DeliveryId | NativeMessageId | RequestId | SessionId | StartOperationId;
+type GeneratedId =
+  | AdvisoryLockId
+  | DeliveryId
+  | NativeMessageId
+  | RequestId
+  | SessionId
+  | StartOperationId;
 type Validation<Value extends GeneratedId> =
   | { readonly ok: true; readonly value: Value }
   | { readonly ok: false; readonly message: string };
@@ -34,6 +42,14 @@ export interface GeneratedIdFactory {
   requestId(): RequestId;
   managedSessionId(): SessionId;
   startOperationId(): StartOperationId;
+}
+
+export interface AdvisoryLockIdFactory {
+  advisoryLockId(): AdvisoryLockId;
+}
+
+export function validateAdvisoryLockId(value: unknown): Validation<AdvisoryLockId> {
+  return validate(value, generatedIdPolicy.prefixes.advisoryLock, "Advisory lock ID");
 }
 
 function validate<Value extends GeneratedId>(
@@ -77,8 +93,12 @@ function encodeRandom(entropy: CryptographicEntropyPort, prefix: string): string
   return encoded;
 }
 
-export function createGeneratedIdFactory(entropy: CryptographicEntropyPort): GeneratedIdFactory {
+export function createGeneratedIdFactory(
+  entropy: CryptographicEntropyPort,
+): GeneratedIdFactory & AdvisoryLockIdFactory {
   return {
+    advisoryLockId: () =>
+      encodeRandom(entropy, generatedIdPolicy.prefixes.advisoryLock) as AdvisoryLockId,
     deliveryId: () => encodeRandom(entropy, generatedIdPolicy.prefixes.delivery) as DeliveryId,
     nativeMessageId: () =>
       encodeRandom(entropy, generatedIdPolicy.prefixes.nativeMessage) as NativeMessageId,

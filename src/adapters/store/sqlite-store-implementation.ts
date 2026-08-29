@@ -1,3 +1,4 @@
+import type { AdvisoryLockPersistencePort } from "../../application/advisory-lock-ports";
 import type {
   CompleteSubmissionInput,
   DeliveryClaimResult,
@@ -54,8 +55,51 @@ export class LinuxBunSqliteStore
     RequestParticipantQueryPort,
     SessionStopPersistencePort,
     ParticipantDeletionPersistencePort,
-    DeliveryRetentionPersistencePort
+    DeliveryRetentionPersistencePort,
+    AdvisoryLockPersistencePort
 {
+  async publish(
+    input: Parameters<AdvisoryLockPersistencePort["publish"]>[0],
+  ): ReturnType<AdvisoryLockPersistencePort["publish"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.advisoryLockRepository.publish(input));
+  }
+
+  async list(
+    input: Parameters<AdvisoryLockPersistencePort["list"]>[0],
+  ): ReturnType<AdvisoryLockPersistencePort["list"]> {
+    this.assertOpen();
+    return this.access.inspect(() => this.advisoryLockRepository.list(input));
+  }
+
+  async renew(
+    input: Parameters<AdvisoryLockPersistencePort["renew"]>[0],
+  ): ReturnType<AdvisoryLockPersistencePort["renew"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.advisoryLockRepository.renew(input));
+  }
+
+  async release(
+    input: Parameters<AdvisoryLockPersistencePort["release"]>[0],
+  ): ReturnType<AdvisoryLockPersistencePort["release"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.advisoryLockRepository.release(input));
+  }
+
+  async cleanupExpired(
+    input: Parameters<AdvisoryLockPersistencePort["cleanupExpired"]>[0],
+  ): ReturnType<AdvisoryLockPersistencePort["cleanupExpired"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.advisoryLockRepository.cleanupExpired(input));
+  }
+
+  async readNextExpiry(
+    input: Parameters<AdvisoryLockPersistencePort["readNextExpiry"]>[0],
+  ): ReturnType<AdvisoryLockPersistencePort["readNextExpiry"]> {
+    this.assertOpen();
+    return this.access.inspect(() => this.advisoryLockRepository.readNextExpiry(input));
+  }
+
   async createPrepared(input: PrepareDeliveryInput): Promise<DeliveryStoreResult>;
   async createPrepared(input: PrepareRequestInput): Promise<RequestStoreResult>;
   async createPrepared(

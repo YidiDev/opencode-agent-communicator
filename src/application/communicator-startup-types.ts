@@ -1,4 +1,5 @@
 import type { WorkspaceKey } from "../domain/workspaces";
+import type { AdvisoryLockPersistencePort } from "./advisory-lock-ports";
 import type {
   ClockPort,
   CurrentWorkspaceMembershipPort,
@@ -38,6 +39,7 @@ export interface CommunicatorStartupRecoveryPorts {
     RequestAdmissionPersistencePort &
     RequestDeadlinePersistencePort &
     ParticipantDeletionPersistencePort;
+  readonly locks?: AdvisoryLockPersistencePort;
   readonly participantPresence: NativeParticipantPresencePort;
   readonly activity: RequestParticipantActivityPort;
   readonly nativeSteer: NativeSteerAdmissionPort;

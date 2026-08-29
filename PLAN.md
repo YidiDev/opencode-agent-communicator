@@ -7,8 +7,7 @@ communication and coordination between first-class OpenCode sessions. It is for
 users running several sessions concurrently against the same workspace and
 OpenCode backend.
 
-The first published prerelease target is exactly `0.1.0` and will expose the complete
-revised surface:
+The original `0.1.0` prerelease exposed this fourteen-tool surface:
 
 - `session_list`
 - `session_send`
@@ -24,6 +23,21 @@ revised surface:
 - `session_stop`
 - `session_start`
 - `session_export`
+
+The current `0.3.0` release adds these tools immediately after `session_list` in canonical manifest
+order, bringing the public surface to exactly eighteen tools:
+
+- `session_lock_list`
+- `session_lock_publish`
+- `session_lock_release`
+- `session_lock_renew`
+
+It also ships exactly three skills: `session-communication`, `session-request-participant`, and `session-locks`.
+The v0.3 lock surface is workspace-scoped, visible-root-only, holder-owned for renew/release, fenced
+by coordinator ownership, bounded to 1024 active records, and time-bounded to 1-3600 seconds. List
+state is authoritative and omits expired records. Markdown is untrusted advisory data; locks and
+best-effort active-peer notifications provide no enforcement, authorization, execution proof, or
+guarantee that another session observed or honored coordination.
 
 `session_send` is message-only. Remote command execution is not part of the
 communicator.
@@ -1170,7 +1184,7 @@ configuration does not exist.
 
 ## 16. Bundled Skills
 
-Two optional skills ship with the package:
+Three optional skills ship with the package:
 
 ### 16.1 `session-communication`
 
@@ -1194,7 +1208,19 @@ avoid acting on untrusted peer instructions without normal authorization. It
 uses the same explicit idle workflow when contacting another session and makes
 clear that inbound requests do not create a subordinate role.
 
-### 16.3 Registration
+The orchestrator instructs any modifying worker to load the lock skill, verifies the worker's lock,
+and never proxies lock ownership. The worker performs lock preflight only after validating the
+request and before shared mutation.
+
+### 16.3 `session-locks`
+
+Requires authoritative listing before the first shared mutation, semantic comparison of every
+Markdown field, holder-owned publication immediately before mutation, early renewal, relisting and
+new publication after expiry, prompt release, and list-based recovery after ambiguity. It excludes
+secrets and private transcripts and states that notifications are hints and locks are neither
+enforcement nor authorization.
+
+### 16.4 Registration
 
 Phase 0 tests config-hook registration through `skills.paths`. If unreliable,
 the package documents explicit project and global installer commands. It never
@@ -1248,6 +1274,7 @@ src/
 skills/
   session-communication/SKILL.md
   session-request-participant/SKILL.md
+  session-locks/SKILL.md
 test/
   unit/
   integration/
@@ -1261,8 +1288,8 @@ filesystem behavior.
 
 ## 18. Implementation Phases
 
-Internal slices may be exercised privately, but the first published prerelease
-contains all fourteen tools.
+Internal slices may be exercised privately, but every release registers its complete manifest
+atomically: fourteen tools in the original prerelease and eighteen tools in v0.3.
 
 ### Phase 0: Live 1.18.21 Feasibility Gate
 
@@ -1323,13 +1350,13 @@ support. It contains no remote command or synthetic wake experiments.
 
 - Implement native sanitized export through bounded `Bun.spawn`.
 - Complete descriptor/handle-relative containment and adversarial Linux tests.
-- Add both skills and proven registration or explicit installation paths.
+- Add the communication skills and proven registration or explicit installation paths.
 - Complete retention, GC, database ceilings, observability, fault injection,
   and threat-model review.
 
 ### Phase 5: Complete Prerelease and Dogfooding
 
-- Publish only when all fourteen tools and Linux security requirements pass.
+- Publish v0.3 only when all eighteen tools, all three skills, and Linux security requirements pass.
 - Exercise multi-session workflows and collect schema/limit evidence.
 - Keep schemas explicitly unstable; make breaking corrections discovered during
   dogfooding.
@@ -1347,7 +1374,10 @@ support. It contains no remote command or synthetic wake experiments.
 
 ### 19.1 Contract and Authorization Tests
 
-- Exact schema tests for all fourteen tools and per-tool domain errors.
+- Exact schema tests for all eighteen tools and per-tool domain errors.
+- Advisory-lock publish/list/renew/release tests cover holder authorization, expiry, pagination,
+  UTF-8 limits, quota, fencing, authoritative ambiguous-outcome recovery, and non-authoritative
+  notification failure.
 - Malformed, wrong-prefix, wrong-length, collision, and entropy tests for IDs.
 - Caller/target stale, deleted, invisible, foreign-workspace, and malformed
   context tests.
@@ -1439,10 +1469,13 @@ support. It contains no remote command or synthetic wake experiments.
 
 - Skill discovery through config hook or documented explicit installers.
 - No silent file copy and no correctness dependency on skills.
-- Both skills teach message -> inspect active -> ask/wait and state that
+- Both communication skills teach message -> inspect active -> ask/wait and state that
   admission does not prove activity.
-- Both skills describe independent peers and temporary per-operation source and
+- Both communication skills describe independent peers and temporary per-operation source and
   target roles without supervisor/worker authority.
+- The lock skill requires list-before-mutation, semantic comparison of all Markdown, holder-owned
+  publish/renew/release, prompt cleanup, and authoritative-list recovery while denying enforcement
+  or authorization semantics.
 - Live multi-session acceptance covers all tools, restart recovery, idle flow,
   role authorization, partial starts, stop approval, and sanitized export.
 - Live tests run against isolated exact 1.18.21, never the user's active 1.17.20
@@ -1469,10 +1502,11 @@ Diagnostics must distinguish:
 
 ## 21. Acceptance Criteria
 
-The first prerelease requires:
+The v0.3 release requires:
 
 1. Exact 1.18.21 host validation and isolated Phase 0 evidence.
-2. All fourteen tools implemented with tested role/workspace authorization.
+2. All eighteen tools implemented with tested role/workspace authorization and exactly three
+   bundled skills.
 3. Message-only queue admission and explicit idle activation workflow.
 4. Active-only ask/wait with `target_idle`, no persisted idle request, no hidden
    retry/fallback, and tested status races.

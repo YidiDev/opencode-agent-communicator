@@ -258,3 +258,40 @@ test("stop drains each in-flight maintenance phase without reading or arming aft
     expect(scheduler.status).toBe("stopped");
   }
 });
+
+test("a stop racing timer installation clears the uncommitted handle without reactivating", async () => {
+  const faults: string[] = [];
+  let scheduler!: RequestDeadlineScheduler;
+  let clearCalls = 0;
+  const timers: RequestDeadlineTimerPort = {
+    set: () => {
+      scheduler.stop();
+      return 17;
+    },
+    clear: (handle) => {
+      expect(handle).toBe(17);
+      clearCalls += 1;
+      throw new Error("native timer cleanup failed");
+    },
+  };
+  scheduler = new RequestDeadlineScheduler({
+    requests: {
+      expireDueRequests: async () => ({ ok: true, requests: [] }),
+      readNextPendingDeadline: async () => ({ storeObservedAtMs: 0, maximumSleepMs: 100 }),
+    },
+    notifications: { notifyTerminal: () => undefined },
+    fencingToken: token,
+    workspaceKey,
+    timers,
+    nowMonotonicMs: () => 0,
+    onFault: (fault) => {
+      faults.push(fault.code);
+      return undefined;
+    },
+  });
+  scheduler.start();
+  await scheduler.drain();
+  expect(clearCalls).toBe(1);
+  expect(faults).toEqual([]);
+  expect(scheduler.status).toBe("stopped");
+});
