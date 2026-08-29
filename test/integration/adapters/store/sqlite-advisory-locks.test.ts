@@ -215,7 +215,7 @@ describe("SQLite advisory lock persistence", () => {
       database
         .query<{ version: number }, []>("SELECT user_version AS version FROM pragma_user_version")
         .get()?.version,
-    ).toBe(14);
+    ).toBe(15);
     expect(
       database
         .query<{ strict: number }, []>(
@@ -223,7 +223,7 @@ describe("SQLite advisory lock persistence", () => {
         )
         .get()?.strict,
     ).toBe(1);
-    expect(sqliteStoreMigrations).toHaveLength(14);
+    expect(sqliteStoreMigrations).toHaveLength(15);
     database.close(true);
   });
 });

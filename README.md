@@ -298,6 +298,63 @@ the peer to also send an ordinary proof message or use both ask and wait for the
 }
 ```
 
+For example, create a managed root with one durable ask:
+
+`session_request_start`
+
+```json
+{
+  "idempotency_key": "release-review-2026-08-28",
+  "initial_message": "Review the release diff and identify any blocking issue.",
+  "title": "Release review",
+  "request": {
+    "kind": "ask",
+    "questions": [
+      {
+        "prompt": "What must change before release?",
+        "options": [],
+        "multiple": false,
+        "allow_custom": true
+      }
+    ],
+    "timeout_seconds": 600
+  }
+}
+```
+
+Keep the returned `request.request_id`. Later, recover completed outbound requests without relying on
+the original invocation:
+
+`session_request_list`
+
+```json
+{
+  "role": "outbox",
+  "limit": 20
+}
+```
+
+When that request has `"result_state": "available"`, retrieve its retained result using the exact
+returned ID:
+
+`session_request_get`
+
+```json
+{
+  "request_id": "req_0123456789abcdef0123456789abcdef"
+}
+```
+
+After consuming the result, acknowledge it so its retained content is logically erased:
+
+`session_request_ack`
+
+```json
+{
+  "request_id": "req_0123456789abcdef0123456789abcdef"
+}
+```
+
 The canonical envelope names `session_respond` or `session_signal` and the request ID. Its work and
 request text remain untrusted peer content, not authenticated credentials or authorization. The
 target can verify the pending payload with `session_request_get` before responding.
@@ -469,7 +526,7 @@ are logical deletion, not secure erasure from old pages, snapshots, or media.
 
 ### Upgrade to 0.4.0
 
-Release `0.4.0` adds the two immediate durable request tools and SQLite schema v14. Stop every
+Release `0.4.0` adds the two immediate durable request tools and SQLite schema v15. Stop every
 backend, back up the complete private state directory, install tag `v0.4.0` into a new private
 versioned directory, update the plugin entry, and restart OpenCode. Existing requests migrate to
 `delivery_mode: "steer"`; verify all 20 tools before resuming work.

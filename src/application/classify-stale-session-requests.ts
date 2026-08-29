@@ -60,11 +60,12 @@ async function classifyOneStaleRequest(
         readonly evidenceObservedAtMs: number;
       }) = { ...base, outcome: "delivery_unknown" };
   if (request.deliveryMode === "initial") {
-    const readLinked = ports.requestStarts?.readSessionRequestStartByOperation;
+    const requestStarts = ports.requestStarts;
     const linkedStartOperationId = request.linkedStartOperationId;
-    if (!readLinked || !linkedStartOperationId) {
+    if (!requestStarts?.readSessionRequestStartByOperation || !linkedStartOperationId) {
       return requestRecoveryFailure("storage_unavailable");
     }
+    const readLinked = requestStarts.readSessionRequestStartByOperation.bind(requestStarts);
     const linkedSettlement = await runUntilAborted(input.effectSignal, () =>
       readLinked({
         fencingToken: input.fencingToken,
@@ -96,7 +97,12 @@ async function classifyOneStaleRequest(
         admittedSeq: 0,
         evidenceObservedAtMs: ports.clock.nowMs(),
       };
-    } else if (operation.admissionState === "failed" || operation.creationState === "failed") {
+    } else if (
+      operation.admissionState === "failed" ||
+      operation.creationState === "failed" ||
+      operation.creationState === "request_terminal" ||
+      (operation.creationState === "created" && operation.admissionState === "payload_unavailable")
+    ) {
       completionInput = { ...base, outcome: "delivery_failed" };
     } else if (operation.admissionState !== "admission_unknown") {
       return requestRecoveryFailure("storage_unavailable");

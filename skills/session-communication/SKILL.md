@@ -39,6 +39,57 @@ Example request payload:
 Recover the result with `session_request_list` and `session_request_get`, then acknowledge it with
 `session_request_ack`. The target may respond or signal before the source checks in.
 
+Complete managed-root example:
+
+1. Call `session_request_start` with one stable idempotency key and the complete work and request:
+
+```json
+{
+  "idempotency_key": "release-review-2026-08-28",
+  "initial_message": "Review the release diff and identify any blocking issue.",
+  "title": "Release review",
+  "request": {
+    "kind": "ask",
+    "questions": [
+      {
+        "prompt": "What must change before release?",
+        "options": [],
+        "multiple": false,
+        "allow_custom": true
+      }
+    ],
+    "timeout_seconds": 600
+  }
+}
+```
+
+2. Keep the returned `request.request_id`. Later call `session_request_list` to recover outbound
+   metadata, including a result that became available before the source checked again:
+
+```json
+{
+  "role": "outbox",
+  "limit": 20
+}
+```
+
+3. When the matching item has `"result_state": "available"`, call `session_request_get` with that
+   exact ID:
+
+```json
+{
+  "request_id": "req_0123456789abcdef0123456789abcdef"
+}
+```
+
+4. After consuming the returned answer, call `session_request_ack` with the same ID:
+
+```json
+{
+  "request_id": "req_0123456789abcdef0123456789abcdef"
+}
+```
+
 Use the older active-only blocking workflow only when the caller must remain blocked:
 
 1. Call `session_list` and identify the target by its canonical session ID. Treat titles as

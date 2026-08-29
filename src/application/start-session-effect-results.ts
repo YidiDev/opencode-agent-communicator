@@ -76,6 +76,14 @@ export function projectStartOutcome(operation: StartOperation): DomainResult<Sta
   }
   if (operation.admissionState === "failed")
     return partialStartFailure("admission_failed", operation);
+  if (operation.creationState === "request_terminal") {
+    return domainFailure(
+      "start_payload_unavailable",
+      "The linked request became terminal before session creation; no managed root was started.",
+      false,
+      { operation },
+    );
+  }
   if (
     operation.titleState === "payload_unavailable" ||
     operation.admissionState === "payload_unavailable"

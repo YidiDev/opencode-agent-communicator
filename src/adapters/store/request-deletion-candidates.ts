@@ -25,8 +25,15 @@ export function listParticipantDeletionCandidates(
         const rows = context.database
           .query<{ readonly sessionId: unknown; readonly priority: unknown }, [string]>(
             `SELECT session_id AS sessionId, MIN(priority) AS priority FROM (
-             SELECT target_session_id AS session_id, 0 AS priority FROM requests
+             SELECT target_session_id AS session_id, 0 AS priority FROM requests AS request
               WHERE workspace_key = ?1 AND resolution_state = 'pending'
+                AND NOT (delivery_mode = 'initial' AND EXISTS (
+                  SELECT 1 FROM start_operations AS start
+                   WHERE start.workspace_key = request.workspace_key
+                     AND start.id = request.linked_start_operation_id
+                     AND start.session_id = request.target_session_id
+                     AND start.creation_state IN ('prepared','submitting','outcome_unknown')
+                ))
              UNION ALL
              SELECT source_session_id, 1 FROM requests
               WHERE workspace_key = ?1 AND resolution_state = 'pending'

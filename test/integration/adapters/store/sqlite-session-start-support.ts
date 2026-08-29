@@ -45,14 +45,14 @@ export function ids(index: number) {
   };
 }
 
-export function openStore() {
+export function openStore(now: () => number = () => 10_000) {
   const root = mkdtempSync(join(tmpdir(), "communicator-start-"));
   roots.push(root);
   return new LinuxBunSqliteStore({
     stateDirectory: join(root, "state"),
     workspaceKey: workspace,
     ownerId: "start-test",
-    nowWallMs: () => 10_000,
-    nowMonotonicMs: () => 10_000,
+    nowWallMs: now,
+    nowMonotonicMs: now,
   });
 }

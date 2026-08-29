@@ -43,6 +43,10 @@ import { validateRequestId } from "../../domain/generated-ids";
 import type { FencingToken } from "../../domain/ownership";
 import type { SessionId } from "../../domain/sessions";
 import type { WorkspaceKey } from "../../domain/workspaces";
+import {
+  selectStartOperation,
+  settleTerminalLinkedStart,
+} from "./session-request-start-correlation";
 import { SqliteStoreCore } from "./sqlite-store-core";
 import {
   hydrateStartOperation,
@@ -92,23 +96,28 @@ export class LinuxBunSqliteStore
     NonNullable<SessionRequestStartPersistencePort["readSessionRequestStartByOperation"]>
   > {
     this.assertOpen();
-    return this.access.inspect(() => {
-      this.ownershipRepository.assertOrdinaryWorkAllowed(input.fencingToken);
-      if (input.workspaceKey !== this.context.workspaceKey) return undefined;
-      const row = this.context.database
-        .query<StartOperationRow, [string, string]>(
-          `SELECT ${startOperationColumns} FROM start_operations
-           WHERE workspace_key = ? AND id = ?`,
-        )
-        .get(input.workspaceKey, input.operationId);
-      if (!row) return undefined;
-      const operation = hydrateStartOperation(row);
-      const request = this.requestRepository.getRequestMetadata({
-        fencingToken: input.fencingToken,
-        workspaceKey: input.workspaceKey,
-        requestId: requestIdForStart(operation.id),
-      });
-      return request?.linkedStartOperationId === operation.id ? { operation, request } : undefined;
+    return this.access.mutate(() => {
+      return this.context.database
+        .transaction(() => {
+          this.ownershipRepository.assertCurrent(input.fencingToken);
+          if (input.workspaceKey !== this.context.workspaceKey) return undefined;
+          let operation = selectStartOperation(this.context, input.workspaceKey, input.operationId);
+          if (!operation) return undefined;
+          const request = this.requestRepository.getRequestMetadataForRecovery({
+            fencingToken: input.fencingToken,
+            workspaceKey: input.workspaceKey,
+            requestId: requestIdForStart(operation.id),
+          });
+          if (request?.linkedStartOperationId !== operation.id) return undefined;
+          if (request.resolutionState !== "pending") {
+            settleTerminalLinkedStart(this.context, operation, request);
+            const settled = selectStartOperation(this.context, input.workspaceKey, operation.id);
+            if (!settled) throw new Error("Settled linked start operation is absent.");
+            operation = settled;
+          }
+          return { operation, request };
+        })
+        .immediate();
     });
   }
 
@@ -116,35 +125,46 @@ export class LinuxBunSqliteStore
     input: Parameters<SessionRequestStartPersistencePort["readSessionRequestStart"]>[0],
   ): ReturnType<SessionRequestStartPersistencePort["readSessionRequestStart"]> {
     this.assertOpen();
-    return this.access.inspect(() => {
-      this.ownershipRepository.assertOrdinaryWorkAllowed(input.fencingToken);
-      if (input.workspaceKey !== this.context.workspaceKey) {
-        return { ok: false as const, code: "state_conflict" as const };
-      }
-      const row = this.context.database
-        .query<
-          StartOperationRow & { readonly idempotencyDigest: string },
-          [string, string, string]
-        >(
-          `SELECT ${startOperationColumns},
-             COALESCE(idempotency_arguments_sha256, arguments_sha256) AS idempotencyDigest
-           FROM start_operations
-           WHERE workspace_key = ? AND source_session_id = ? AND idempotency_key = ?`,
-        )
-        .get(input.workspaceKey, input.sourceSessionId, input.idempotencyKey);
-      if (!row) return { ok: true as const, found: false as const };
-      if (row.idempotencyDigest !== input.idempotencyArgumentsSha256) {
-        return { ok: false as const, code: "idempotency_conflict" as const };
-      }
-      const operation = hydrateStartOperation(row);
-      const request = this.requestRepository.getRequestMetadata({
-        fencingToken: input.fencingToken,
-        workspaceKey: input.workspaceKey,
-        requestId: requestIdForStart(operation.id),
-      });
-      return request?.linkedStartOperationId === operation.id
-        ? { ok: true as const, found: true as const, operation, request }
-        : { ok: false as const, code: "state_conflict" as const };
+    return this.access.mutate(() => {
+      return this.context.database
+        .transaction(() => {
+          this.ownershipRepository.assertOrdinaryWorkAllowed(input.fencingToken);
+          if (input.workspaceKey !== this.context.workspaceKey) {
+            return { ok: false as const, code: "state_conflict" as const };
+          }
+          const row = this.context.database
+            .query<
+              StartOperationRow & { readonly idempotencyDigest: string },
+              [string, string, string]
+            >(
+              `SELECT ${startOperationColumns},
+                 COALESCE(idempotency_arguments_sha256, arguments_sha256) AS idempotencyDigest
+               FROM start_operations
+               WHERE workspace_key = ? AND source_session_id = ? AND idempotency_key = ?`,
+            )
+            .get(input.workspaceKey, input.sourceSessionId, input.idempotencyKey);
+          if (!row) return { ok: true as const, found: false as const };
+          if (row.idempotencyDigest !== input.idempotencyArgumentsSha256) {
+            return { ok: false as const, code: "idempotency_conflict" as const };
+          }
+          let operation = hydrateStartOperation(row);
+          const request = this.requestRepository.getRequestMetadata({
+            fencingToken: input.fencingToken,
+            workspaceKey: input.workspaceKey,
+            requestId: requestIdForStart(operation.id),
+          });
+          if (request?.linkedStartOperationId !== operation.id) {
+            return { ok: false as const, code: "state_conflict" as const };
+          }
+          if (request.resolutionState !== "pending") {
+            settleTerminalLinkedStart(this.context, operation, request);
+            const settled = selectStartOperation(this.context, input.workspaceKey, operation.id);
+            if (!settled) throw new Error("Settled linked start operation is absent.");
+            operation = settled;
+          }
+          return { ok: true as const, found: true as const, operation, request };
+        })
+        .immediate();
     });
   }
 

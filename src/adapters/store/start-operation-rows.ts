@@ -20,6 +20,7 @@ export interface StartOperationRow {
   readonly requestedAgent?: unknown;
   readonly requestedModel?: unknown;
   readonly titleRequested?: unknown;
+  readonly terminalReason?: unknown;
   readonly creationState: unknown;
   readonly titleState: unknown;
   readonly admissionState: unknown;
@@ -32,7 +33,9 @@ export const startOperationColumns = `id, workspace_key AS workspaceKey,
   arguments_sha256 AS argumentsSha256, session_id AS sessionId,
   native_message_id AS nativeMessageId, requested_agent AS requestedAgent,
   requested_model AS requestedModel, title_requested AS titleRequested,
-  creation_state AS creationState,
+  terminal_reason AS terminalReason,
+  CASE WHEN terminal_reason = 'request_terminal' THEN 'request_terminal'
+    ELSE creation_state END AS creationState,
   title_state AS titleState, admission_state AS admissionState,
   created_at_ms AS createdAtMs, updated_at_ms AS updatedAtMs`;
 
@@ -44,7 +47,7 @@ const creationStates = new Set([
   "policy_denied",
   "approval_rejected",
   "outcome_unknown",
-  "payload_unavailable",
+  "request_terminal",
 ]);
 const titleStates = new Set([
   "not_started",
@@ -87,6 +90,10 @@ export function hydrateStartOperation(row: StartOperationRow): StartOperation {
     (typeof row.requestedAgent === "string" && !validateStartAgent(row.requestedAgent).ok) ||
     (typeof row.requestedModel === "string" && !validateStartModel(row.requestedModel).ok) ||
     (row.titleRequested !== undefined && row.titleRequested !== 0 && row.titleRequested !== 1) ||
+    (row.terminalReason !== null &&
+      row.terminalReason !== undefined &&
+      row.terminalReason !== "request_terminal") ||
+    (row.terminalReason === "request_terminal" && row.creationState !== "request_terminal") ||
     typeof row.idempotencyKey !== "string" ||
     typeof row.argumentsSha256 !== "string" ||
     !/^[0-9a-f]{64}$/.test(row.argumentsSha256) ||

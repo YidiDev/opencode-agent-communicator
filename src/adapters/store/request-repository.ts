@@ -65,6 +65,13 @@ export class RequestRepository {
     return selectRequest(this.context, input.workspaceKey, input.requestId);
   }
 
+  getRequestMetadataForRecovery(input: RequestTransitionInput): RequestMetadata | undefined {
+    this.ownership.assertCurrent(input.fencingToken);
+    if (input.workspaceKey !== this.context.workspaceKey || !validateRequestId(input.requestId).ok)
+      return undefined;
+    return selectRequest(this.context, input.workspaceKey, input.requestId);
+  }
+
   private selectPayloadRow(workspace: string, id: string): PayloadRow | undefined {
     return (
       this.context.database

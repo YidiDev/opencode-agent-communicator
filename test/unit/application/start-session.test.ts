@@ -366,6 +366,21 @@ test("never projects any submitting start step as success", () => {
       admissionState: "payload_unavailable",
     }),
   ).toMatchObject({ ok: false, error: { code: "start_payload_unavailable" } });
+  expect(
+    projectStartOutcome({
+      ...base,
+      creationState: "request_terminal",
+      titleState: "skipped",
+      admissionState: "payload_unavailable",
+    }),
+  ).toMatchObject({
+    ok: false,
+    error: {
+      code: "start_payload_unavailable",
+      message:
+        "The linked request became terminal before session creation; no managed root was started.",
+    },
+  });
 });
 
 test("commits authoritative creation even when caller visibility is lost immediately afterward", async () => {
