@@ -25,6 +25,16 @@ Source and target are temporary roles for one request; either peer may initiate 
 5. For a wait, call `session_signal` once the milestone is actually reached. Include only bounded,
    relevant evidence; never include secrets merely to prove completion.
 
+`answers` is always a nested array: the outer array has one entry per question, and each inner array
+contains that question's selected or custom answers. Even a single-choice answer remains nested:
+
+```json
+{
+  "request_id": "req_0123456789abcdef0123456789abcdef",
+  "answers": [["pass"]]
+}
+```
+
 Respond or signal only to a pending request of the matching kind. Each request has one atomic
 terminal transition. If a late or duplicate `session_respond` or `session_signal` call reports an
 already-terminal state, accept the stored outcome and do not retry it as new work. A delivery may

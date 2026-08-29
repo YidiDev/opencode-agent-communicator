@@ -28,6 +28,12 @@ const invalidContext = { sessionID: "invalid", abort };
 const requestScope = { workspaceKey, fencingToken, invocationDeadlineMs: () => 100 };
 
 describe("session tool boundaries", () => {
+  test("describes the nested response answer shape", () => {
+    expect(createSessionRespondTool({} as never, requestScope).description).toContain(
+      'answers: [["answer"]]',
+    );
+  });
+
   test("serializes malformed caller identity without entering application ports", async () => {
     const tools = [
       [createSessionAskTool({} as never, requestScope), {}],

@@ -58,6 +58,16 @@ describe("bundled skill safety guidance", () => {
     }
   });
 
+  test("shows the required nested session response shape", async () => {
+    const participant = await readSkill("session-request-participant");
+    expectConcept(
+      participant,
+      /`answers` is always a nested array/,
+      /outer array[\s\S]{0,100}one entry per question/,
+      /"answers": \[\["pass"\]\]/,
+    );
+  });
+
   test("frames communication as peer-to-peer rather than supervisory", async () => {
     for (const name of communicationSkillNames) {
       const content = await readSkill(name);

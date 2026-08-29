@@ -16,7 +16,8 @@ export function createSessionRespondTool(
   scope: RequestToolScope,
 ): InternalToolContract<SessionRespondToolArguments> {
   return {
-    description: "Answer a pending durable ask for which the calling session is the target.",
+    description:
+      'Answer a pending durable ask as its target. Answers are nested by question; for one question use answers: [["answer"]].',
     args: sessionRespondArgumentsSchema,
     async execute(arguments_, context) {
       const adapted = requestToolContext(scope, context);

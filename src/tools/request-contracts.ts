@@ -130,9 +130,15 @@ export const sessionRespondArgumentsSchema = z
   .object({
     request_id: requestIdSchema(),
     answers: z
-      .array(z.array(z.string()).max(requestLimits.maximumAnswersPerQuestion))
+      .array(
+        z
+          .array(z.string())
+          .max(requestLimits.maximumAnswersPerQuestion)
+          .describe("Selected or custom answers for one question."),
+      )
       .min(requestLimits.minimumQuestions)
-      .max(requestLimits.maximumQuestions),
+      .max(requestLimits.maximumQuestions)
+      .describe('One inner answer array per question, in order; for example [["pass"]].'),
   })
   .strict()
   .superRefine((value, context) => {
