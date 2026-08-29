@@ -158,7 +158,7 @@ async function recursionAllowed(
   return !ports.policy.allowManagedSessionRecursion && managed
     ? domainFailure(
         "permission_denied",
-        "Managed sessions cannot recursively start sessions.",
+        "Communicator-started sessions cannot start additional sessions under the current policy.",
         false,
       )
     : { ok: true, value: true };

@@ -9,7 +9,7 @@ export class StartEffectContractFault extends Error {
 export function startStoreFailure(code: StartStoreFailureCode): DomainResult<never> {
   const messages: Record<StartStoreFailureCode, string> = {
     idempotency_conflict: "The idempotency key was already used with different arguments.",
-    quota_exceeded: "The managed-session quota was exceeded.",
+    quota_exceeded: "The communicator-started session quota was exceeded.",
     unresolved_provenance_quota_exceeded:
       "The unresolved session-creation provenance quota was exceeded; operator reconciliation is required.",
     rate_limited: "The session-start rate limit was exceeded.",

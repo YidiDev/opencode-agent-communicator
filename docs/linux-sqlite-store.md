@@ -90,7 +90,8 @@ erasable initial-message payload. Native read-back must prove the deterministic 
 in the pinned directory with the requested overrides. Exact matches atomically confirm provenance;
 proven stable absence and collisions atomically release it. The pinned API's exact 404 is not stable
 absence after submission because an accepted create may commit later. Uncertain observations stay in
-a separate hard-bounded `unresolved` provenance class and do not consume ordinary managed-session quota.
+a separate hard-bounded `unresolved` provenance class and do not consume the ordinary quota for
+communicator-started sessions.
 
 All pending schema migrations run in one `BEGIN IMMEDIATE` bootstrap transaction.
 Before its first DDL statement, startup inspects both legacy (pre-v3) and current
@@ -114,7 +115,7 @@ that exact 4096 bound and a residual probe, while pending prepared and expiry wo
 remain bounded at 1024.
 
 Participant-deletion reconciliation uses no schema migration. A fenced query unions distinct
-pending target/source IDs, available-result source IDs, and `created` managed-session provenance,
+pending target/source IDs, available-result source IDs, and `created` session-start provenance,
 with a compiled 7168-row hard ceiling. Presence is classified for the complete candidate snapshot
 before mutation. One immediate transaction receives the validated absent-ID set as a single JSON1
 value, retires matching created provenance, erases results owned by absent sources, validates and

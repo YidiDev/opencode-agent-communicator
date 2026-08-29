@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-const skillNames = ["session-orchestrator", "session-worker"] as const;
+const skillNames = ["session-communication", "session-request-participant"] as const;
 
 function parseFrontmatter(content: string): Readonly<Record<string, string>> {
   const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(content)?.[1];

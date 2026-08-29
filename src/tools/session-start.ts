@@ -25,7 +25,7 @@ export function createSessionStartTool(
 ): InternalToolContract<SessionStartToolArguments> {
   return {
     description:
-      "Create one managed root session with durable source-scoped idempotency and mandatory invocation-specific approval by default.",
+      "Create one independent root session with durable source-scoped idempotency and mandatory invocation-specific approval by default.",
     args: sessionStartArgumentsSchema,
     async execute(arguments_, context) {
       const caller = toolCallerSession(context.sessionID);

@@ -25,7 +25,7 @@ export const expectedToolIds = Object.freeze([
 // renamed, or reordered archive entry requires an explicit review and fingerprint update.
 export const expectedPackedPathPolicy = Object.freeze({
   entryCount: 251,
-  sha256: "676cda1b0f3d0e25828035983b01a2e3b9227cb01d927c160725dbfd5d71cfa4",
+  sha256: "c2c58407241eba3b5bd631209e396524132f497636498bc184153c7b1245c958",
 });
 
 const forbiddenPathSegments = new Set([
@@ -102,7 +102,7 @@ function packedReport(root) {
 
 export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
   const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
-  assert(packageJson.version === "0.2.4", "version must be 0.2.4");
+  assert(packageJson.version === "0.2.5", "version must be 0.2.5");
   assert(packageJson.private !== true, "package must be publishable");
   assert(packageJson.license === "MIT", "license metadata must match LICENSE");
   assert(

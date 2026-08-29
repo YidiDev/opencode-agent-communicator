@@ -6,6 +6,18 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-08-28
+
+### Changed
+
+- Reframed the plugin around durable communication between independent, first-class peer sessions;
+  source and target are temporary operation roles, and peer content remains advisory rather than
+  authoritative.
+- Renamed the bundled `session-orchestrator` and `session-worker` skills to
+  `session-communication` and `session-request-participant`.
+- Clarified that communicator-created session provenance supports idempotency, quotas, recovery, and
+  chained-start policy without creating a supervisor/worker hierarchy.
+
 ## [0.2.4] - 2026-08-28
 
 ### Fixed
@@ -130,7 +142,8 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.1...v0.2.2

@@ -264,7 +264,7 @@ async function launchPackedFixture(): Promise<PackedFixture> {
   const provider = launchDeterministicProvider({
     gateText: [
       "production-target-active",
-      "Packed managed session ready check",
+      "Packed peer session ready check",
       "packed live delivery",
     ],
   });
@@ -334,8 +334,8 @@ async function assertPackedRegistration(fixture: PackedFixture): Promise<void> {
   const packedRoot = dirname(dirname(entryPath));
   expect(loadedConfig.skills?.paths).toContain(join(packedRoot, "skills"));
   const skills = successful(await client.app.skills({ directory: isolation.project }), "skills");
-  expect(skills.map((skill) => skill.name)).toContain("session-orchestrator");
-  expect(skills.map((skill) => skill.name)).toContain("session-worker");
+  expect(skills.map((skill) => skill.name)).toContain("session-communication");
+  expect(skills.map((skill) => skill.name)).toContain("session-request-participant");
 }
 
 function createInvoker(client: Client): Invoker {
@@ -478,7 +478,7 @@ async function runStartStopJourney(
   stopTargetSessionID: string,
 ): Promise<void> {
   const start = await invoker.begin("session_start", "production-session-start");
-  const initialGate = await fixture.provider.waitForText("Packed managed session ready check");
+  const initialGate = await fixture.provider.waitForText("Packed peer session ready check");
   const started = await withinLiveDeadline(start.output(), "session_start completion");
   expect(started).toMatchObject({
     ok: true,
@@ -495,28 +495,28 @@ async function runStartStopJourney(
   expect(
     successful(
       await fixture.client.session.get({ sessionID: startedSessionID }),
-      "created managed root",
+      "created peer root",
     ),
   ).toMatchObject({
     id: startedSessionID,
-    title: "Packed managed target",
+    title: "Packed peer target",
   });
   const admittedTranscript = successful(
     await fixture.client.session.messages({ sessionID: startedSessionID }),
-    "managed admitted public transcript",
+    "peer admitted public transcript",
   );
   expect(admittedTranscript.some((message) => message.info.role === "user")).toBe(true);
-  expect(JSON.stringify(admittedTranscript)).toContain("Packed managed session ready check");
-  initialGate.release("packed managed initial complete");
+  expect(JSON.stringify(admittedTranscript)).toContain("Packed peer session ready check");
+  initialGate.release("packed peer initial complete");
   const transcript = await waitForPublicTranscript(
     fixture.client,
     startedSessionID,
-    "packed managed initial complete",
+    "packed peer initial complete",
   );
   expect(transcript.some((message) => message.info.role === "user")).toBe(true);
   expect(transcript.some((message) => message.info.role === "assistant")).toBe(true);
-  expect(JSON.stringify(transcript)).toContain("Packed managed session ready check");
-  await waitForIdleTarget(fixture.client, startedSessionID, "managed initial");
+  expect(JSON.stringify(transcript)).toContain("Packed peer session ready check");
+  await waitForIdleTarget(fixture.client, startedSessionID, "peer initial");
 
   const send = await invoker.begin("session_send", `production-session-send:${startedSessionID}`);
   const sendGate = await fixture.provider.waitForText("packed live delivery", initialGate.sequence);
@@ -546,16 +546,12 @@ async function runStartStopJourney(
     JSON.stringify(
       successful(
         await fixture.client.session.messages({ sessionID: startedSessionID }),
-        "managed sent public transcript",
+        "peer sent public transcript",
       ),
     ),
   ).toContain("packed live delivery");
-  sendGate.release("packed managed follow-up complete");
-  await waitForPublicTranscript(
-    fixture.client,
-    startedSessionID,
-    "packed managed follow-up complete",
-  );
+  sendGate.release("packed peer follow-up complete");
+  await waitForPublicTranscript(fixture.client, startedSessionID, "packed peer follow-up complete");
   const exported = await runBoundedProcess({
     command: fixture.cliPath,
     arguments: ["export", startedSessionID],
@@ -570,12 +566,12 @@ async function runStartStopJourney(
   };
   expect(exportDocument.info).toMatchObject({
     id: startedSessionID,
-    title: "Packed managed target",
+    title: "Packed peer target",
   });
   expect(exportDocument.messages?.length).toBeGreaterThanOrEqual(4);
-  expect(exported.stdout).toContain("Packed managed session ready check");
+  expect(exported.stdout).toContain("Packed peer session ready check");
   expect(exported.stdout).toContain("packed live delivery");
-  expect(exported.stdout).toContain("packed managed follow-up complete");
+  expect(exported.stdout).toContain("packed peer follow-up complete");
   const stop = await invoker.begin(
     "session_stop",
     `production-session-stop:${stopTargetSessionID}`,

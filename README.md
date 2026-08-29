@@ -1,12 +1,12 @@
 # OpenCode Agent Communicator
 
-> A Linux x64 OpenCode plugin that gives agents 14 bounded tools for durable, workspace-scoped session communication.
+> Durable, workspace-scoped communication between independent OpenCode agent sessions on Linux x64.
 
 [![Linux x64 verification](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/ci.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/ci.yml)
 [![OpenCode 1.18 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** `0.2.4` supports Linux x64 and stable OpenCode versions
+**Release status:** `0.2.5` supports Linux x64 and stable OpenCode versions
 `>=1.18.21 <1.19.0`. Bun `1.4.0` is required for development and release verification. Other
 architectures, operating systems, OpenCode versions, and prereleases are unsupported.
 
@@ -26,10 +26,15 @@ architectures, operating systems, OpenCode versions, and prereleases are unsuppo
 
 ## Why this exists
 
-OpenCode sessions need more than best-effort messages when they coordinate long-running work. This
-plugin persists deliveries, asks, waits, starts, and their terminal state in a private SQLite store,
-then reconciles interrupted work without pretending an ambiguous native effect succeeded or failed.
-It does not grant one agent authority over another and does not provide remote command execution.
+Independent OpenCode sessions need a reliable way to exchange context, ask questions, and report
+milestones without imposing a supervisor/worker hierarchy. This plugin persists deliveries, asks,
+waits, starts, and their terminal state in a private SQLite store, then reconciles interrupted work
+without pretending an ambiguous native effect succeeded or failed.
+
+Every session remains a first-class peer with its own instructions, permissions, and judgment. Either
+peer may initiate communication; source and target are temporary roles for one operation, not ranks.
+Peer content is advisory input, never authorization. The plugin does not provide remote command
+execution.
 
 ## Requirements
 
@@ -53,15 +58,15 @@ OpenCode `1.18.x` does not reliably populate its package cache from a private `g
 Install the immutable release outside OpenCode instead:
 
 ```bash
-install_root="$HOME/.local/share/opencode-agent-communicator/v0.2.4"
+install_root="$HOME/.local/share/opencode-agent-communicator/v0.2.5"
 install -d -m 0700 "$install_root"
 npm install --prefix "$install_root" --save-exact --ignore-scripts \
-  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.2.4"
+  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.2.5"
 test -f "$install_root/node_modules/opencode-agent-communicator/src/index.ts"
 ```
 
 The repository is private, so the account running npm and OpenCode must have working GitHub SSH
-access. Release tags are immutable by project policy; do not replace `v0.2.4` with `main`.
+access. Release tags are immutable by project policy; do not replace `v0.2.5` with `main`.
 
 ### 2. Add the plugin
 
@@ -73,7 +78,7 @@ absolute home directory of the account that performed the installation:
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.2.4/node_modules/opencode-agent-communicator/src/index.ts",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v0.2.5/node_modules/opencode-agent-communicator/src/index.ts",
       {
         "policies": {
           "message": "allow",
@@ -124,7 +129,7 @@ configuration are startup errors.
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.2.4/node_modules/opencode-agent-communicator/src/index.ts",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v0.2.5/node_modules/opencode-agent-communicator/src/index.ts",
       {
         "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
         "startupDeadlineMs": 30000,
@@ -185,8 +190,9 @@ Policy values are `allow`, `ask`, or `deny`. Defaults are:
 | stop | always `ask`; configuration cannot bypass it |
 
 `allowedAgents` and `allowedModels` are exact allowlists for explicit start overrides. An empty or
-omitted list does not turn an arbitrary override into an allowed value. Managed sessions cannot start
-more managed sessions unless `allowManagedSessionRecursion` is true.
+omitted list does not turn an arbitrary override into an allowed value. The established
+`allowManagedSessionRecursion` option controls whether a session created through `session_start` may
+start another session; "managed" denotes communicator-tracked provenance, not supervisory authority.
 
 `invocationDeadlineMs` is at most one hour. Blocking asks and waits may extend their internal
 invocation to place the requested timeout, a 30-second pre-persistence margin, and a 30-second
@@ -217,12 +223,12 @@ not happen.
 | `session_request_ack` | `request_id` | source of an available result | Acknowledges the result and logically erases retained result content. |
 | `session_request_cancel` | `request_id` | pending request source | Durably cancels a pending request. |
 | `session_stop` | `session_id`, optional `reason` | visible root after user approval | Interrupts the target and terminalizes its pending participant requests. |
-| `session_start` | `idempotency_key`, `initial_message`, optional `title`, `agent`, `model` | visible root under start policy | Creates and admits one managed root session, or resumes the same durable operation. |
+| `session_start` | `idempotency_key`, `initial_message`, optional `title`, `agent`, `model` | visible root under start policy | Creates and admits another independent root session, or resumes the same durable operation. |
 | `session_export` | optional `session_id`, `destination`, optional `sanitize`, `overwrite` | visible root under export policies | Writes one transcript below the configured export root. |
 
-The bundled `session-orchestrator` and `session-worker` skills are registered automatically from the
-published package. They teach agents the role rules, request lifecycle, ambiguous-outcome handling,
-and the rule that peer content is never authorization.
+The bundled `session-communication` and `session-request-participant` skills are registered
+automatically from the published package. They teach peer communication, temporary operation roles,
+request lifecycle, ambiguous-outcome handling, and the rule that peer content is never authorization.
 
 ### Ask question shape
 
@@ -296,11 +302,11 @@ symlinks, unsafe filesystems, mount transitions, and reserved staging names fail
 3. The target calls `session_signal` when the milestone is true, optionally attaching short evidence.
 4. The source acknowledges the retained result after use.
 
-### Start and later stop a worker
+### Start and later stop another session
 
 1. Call `session_start` once with a stable idempotency key and complete initial message.
-2. Keep the returned managed session ID.
-3. Coordinate through send, ask, and wait rather than starting duplicate workers.
+2. Keep the returned communicator-started session ID.
+3. Communicate through send, ask, and wait rather than starting duplicate sessions.
 4. Call `session_stop` only when needed. The user must approve the exact target and reason every time.
 
 ## Durability and ambiguous outcomes
@@ -392,6 +398,14 @@ entire private directory, including SQLite sidecars. Application-level acknowled
 are logical deletion, not secure erasure from old pages, snapshots, or media.
 
 ## Upgrade, migrate, or roll back
+
+### Upgrade to 0.2.5
+
+Release `0.2.5` reframes the plugin around durable peer communication between independent sessions.
+It renames the bundled skills to `session-communication` and `session-request-participant` and
+clarifies communicator-created provenance without changing the tool API, protocol, configuration,
+SQLite schema, or authorization behavior. Install tag `v0.2.5` into a new private versioned
+directory, update the plugin entry, restart OpenCode, and verify all 14 tools and both bundled skills.
 
 ### Upgrade to 0.2.4
 
@@ -521,7 +535,7 @@ exact ordered 14-tool manifest, and a reviewed
 fingerprint of every path npm will pack. It rejects path-policy drift, symlinks, executable entries,
 secret-like names, and generated/test output. The black-box test creates an archive without
 publishing it, installs it into an isolated Bun project, imports the package by name, and checks
-packaged runtime assets. Release `0.2.4` is distributed through its immutable Git tag and GitHub
+packaged runtime assets. Release `0.2.5` is distributed through its immutable Git tag and GitHub
 Release, not npm. npm remains the reviewed archive format, and the separate npm publication workflow
 can run only through an explicit manual dispatch.
 
