@@ -39,6 +39,9 @@ const attackerUid = 10_002;
 const databaseName = "communicator.sqlite3";
 const driverPath = process.argv[1] ?? "test/acceptance/store/driver.ts";
 const controlRoot = "/control";
+const storeLeaseDurationMs = 1_000;
+const crashLeaseDurationMs = 5_000;
+const takeoverGraceMs = 100;
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`acceptance assertion failed: ${message}`);
@@ -69,13 +72,17 @@ function fixture(token: FencingToken, index: number): PrepareDeliveryInput {
   };
 }
 
-function openStore(state: string, ownerId: string): LinuxBunSqliteStore {
+function openStore(
+  state: string,
+  ownerId: string,
+  leaseDurationMs = storeLeaseDurationMs,
+): LinuxBunSqliteStore {
   return new LinuxBunSqliteStore({
     stateDirectory: state,
     workspaceKey: workspace,
     ownerId,
-    leaseDurationMs: 1_000,
-    takeoverGraceMs: 100,
+    leaseDurationMs,
+    takeoverGraceMs,
     busyTimeoutMs: 200,
     limits: { databaseBytes: 8 * 1024 * 1024 },
   });
@@ -90,6 +97,12 @@ async function waitFor(path: string, timeoutMs = 5_000): Promise<void> {
   while (!existsSync(path)) {
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${path}`);
     await Bun.sleep(20);
+  }
+}
+
+async function waitUntil(timestampMs: number): Promise<void> {
+  while (Date.now() < timestampMs) {
+    await Bun.sleep(Math.min(50, timestampMs - Date.now()));
   }
 }
 
@@ -259,7 +272,7 @@ function attackerProbe(state: string): void {
 }
 
 async function crashVictim(state: string): Promise<void> {
-  const store = openStore(state, "crash-victim");
+  const store = openStore(state, "crash-victim", crashLeaseDurationMs);
   const token = await store.acquire();
   const preparedInput = fixture(token, 20);
   assert((await store.createPrepared(preparedInput)).ok, "crash prepared fixture is durable");
@@ -272,13 +285,20 @@ async function crashVictim(state: string): Promise<void> {
     nowMs: Date.now(),
   });
   assert(claim.ok && claim.delivery.state === "submitting", "crash fixture is submitting");
-  writeFileSync(marker("crash-data"), JSON.stringify({ token: Number(token), id: input.id }));
+  writeFileSync(
+    marker("crash-data"),
+    JSON.stringify({
+      token: Number(token),
+      id: input.id,
+      takeoverNotBeforeMs: Date.now() + crashLeaseDurationMs + takeoverGraceMs,
+    }),
+  );
   writeFileSync(marker("crash-ready"), "ready");
   await new Promise(() => undefined);
 }
 
 async function recoveryWorker(state: string, staleTokenNumber: number): Promise<void> {
-  const store = openStore(state, "takeover");
+  const store = openStore(state, "takeover", crashLeaseDurationMs);
   let nativeCalls = 0;
   const callLedger = marker("native-call-ledger");
   const result = await recoverMessageDeliveries(
@@ -407,7 +427,7 @@ function launchWorker(mode: string, args: readonly string[], uid = victimUid): C
   });
 }
 
-async function waitChild(child: ChildProcess, timeoutMs = 15_000): Promise<ChildResult> {
+async function waitChild(child: ChildProcess, timeoutMs = 30_000): Promise<ChildResult> {
   let stdout = "";
   let stderr = "";
   child.stdout?.on("data", (chunk) => {
@@ -550,11 +570,14 @@ async function crashScenario(root: string): Promise<void> {
   const state = join(root, "crash-state");
   const crashed = launchWorker("crash-victim", [state]);
   await waitFor(marker("crash-ready"));
-  const data = JSON.parse(readFileSync(marker("crash-data"), "utf8")) as { token: number };
+  const data = JSON.parse(readFileSync(marker("crash-data"), "utf8")) as {
+    token: number;
+    takeoverNotBeforeMs: number;
+  };
   crashed.kill("SIGKILL");
   const death = await waitChild(crashed);
   assert(death.signal === "SIGKILL", "victim really died by SIGKILL");
-  await Bun.sleep(1_250);
+  await waitUntil(data.takeoverNotBeforeMs);
   await requireSuccess(launchWorker("recovery", [state, String(data.token)]), "SIGKILL recovery");
 }
 

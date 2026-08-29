@@ -11,6 +11,7 @@ const result = spawnSync(
   process.execPath,
   [
     "test",
+    "--timeout=15000",
     "--preload",
     "./tools/coverage-preload.ts",
     "test/unit",

@@ -14,7 +14,7 @@ if (process.env.REQUIRE_SECURE_EXPORT_CAPABILITY !== "1") {
 
 const result = spawnSync(
   process.execPath,
-  ["test", "--reporter=junit", `--reporter-outfile=${reportPath}`, ...testFiles],
+  ["test", "--timeout=15000", "--reporter=junit", `--reporter-outfile=${reportPath}`, ...testFiles],
   { stdio: "inherit", env: process.env },
 );
 

@@ -225,6 +225,11 @@ test/
 - Every bug fix MUST include a regression test that fails without the fix.
 - Tests MUST be deterministic and independent of execution order.
 - Arbitrary sleeps MUST NOT be used for coordination.
+- Regular, coverage, and capability test entrypoints use a 15-second per-test ceiling to tolerate
+  hosted-runner scheduling and instrumentation overhead without retries. Tests that inherently need
+  longer MUST declare their own finite timeout.
+- Process-based store acceptance allows 30 seconds for a child process while retaining the
+  harness's 120-second per-container kill boundary.
 - Clocks, randomness, native APIs, and external effects MUST be injectable at
   the relevant port.
 - Unit tests SHOULD test public behavior rather than private implementation.
