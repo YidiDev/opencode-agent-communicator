@@ -25,6 +25,19 @@ export class RequestStopRepository {
   stopPendingRequests(
     input: Parameters<SessionStopPersistencePort["stopPendingRequests"]>[0],
   ): StopPendingRequestsResult {
+    return this.stop(input, false);
+  }
+
+  stopPendingBlockingRequests(
+    input: Parameters<SessionStopPersistencePort["stopPendingRequests"]>[0],
+  ): StopPendingRequestsResult {
+    return this.stop(input, true);
+  }
+
+  private stop(
+    input: Parameters<SessionStopPersistencePort["stopPendingRequests"]>[0],
+    blockingOnly: boolean,
+  ): StopPendingRequestsResult {
     if (
       input.workspaceKey !== this.context.workspaceKey ||
       !validateWorkspaceKey(input.workspaceKey).ok ||
@@ -34,7 +47,9 @@ export class RequestStopRepository {
     }
     const atLimit = requestPageLimitReached(this.context);
     try {
-      return this.context.database.transaction(() => this.stopOwned(input)).immediate();
+      return this.context.database
+        .transaction(() => this.stopOwned(input, blockingOnly))
+        .immediate();
     } catch (cause: unknown) {
       const failure = requestFailure(cause, atLimit);
       return {
@@ -46,13 +61,16 @@ export class RequestStopRepository {
 
   private stopOwned(
     input: Parameters<SessionStopPersistencePort["stopPendingRequests"]>[0],
+    blockingOnly: boolean,
   ): StopPendingRequestsResult {
     this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
+    const scope = blockingOnly ? " AND delivery_mode = 'steer'" : "";
     const rows = this.context.database
       .query<RequestRow, [string, string]>(
         `SELECT ${requestMetadataColumns} FROM requests
          WHERE workspace_key = ? AND resolution_state = 'pending'
            AND (target_session_id = ?2 OR source_session_id = ?2)
+           ${scope}
          ORDER BY id LIMIT ${pendingRequestsPerWorkspaceHardCeiling + 1}`,
       )
       .all(input.workspaceKey, input.stoppedSessionId);
@@ -80,21 +98,24 @@ export class RequestStopRepository {
       `DELETE FROM request_results WHERE request_id IN (
          SELECT id FROM requests WHERE workspace_key = ? AND resolution_state = 'pending'
            AND (target_session_id = ?2 OR source_session_id = ?2)
-       )`,
+           ${scope}
+        )`,
       [input.workspaceKey, input.stoppedSessionId],
     );
     this.context.database.run(
       `DELETE FROM request_payloads WHERE request_id IN (
          SELECT id FROM requests WHERE workspace_key = ? AND resolution_state = 'pending'
            AND (target_session_id = ?2 OR source_session_id = ?2)
-       )`,
+           ${scope}
+        )`,
       [input.workspaceKey, input.stoppedSessionId],
     );
     this.context.database.run(
       `DELETE FROM request_wait_edges WHERE request_id IN (
          SELECT id FROM requests WHERE workspace_key = ? AND resolution_state = 'pending'
            AND (target_session_id = ?2 OR source_session_id = ?2)
-       )`,
+           ${scope}
+        )`,
       [input.workspaceKey, input.stoppedSessionId],
     );
     const changed = this.context.database.run(
@@ -104,8 +125,9 @@ export class RequestStopRepository {
          retained_content_byte_length = NULL, result_state = 'none', result_byte_length = NULL,
          result_sha256 = NULL, result_available_at_ms = NULL, result_expires_at_ms = NULL,
          result_expired_at_ms = NULL, acknowledged_at_ms = NULL
-       WHERE workspace_key = ?1 AND resolution_state = 'pending'
-         AND (target_session_id = ?2 OR source_session_id = ?2)`,
+        WHERE workspace_key = ?1 AND resolution_state = 'pending'
+          AND (target_session_id = ?2 OR source_session_id = ?2)
+          ${scope}`,
       [input.workspaceKey, input.stoppedSessionId, nowMs],
     );
     if (changed.changes !== requests.length) {

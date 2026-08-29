@@ -218,7 +218,7 @@ export async function blockUntilRequestTerminal(
       } else {
         if (first.durable.kind === "aborted") {
           if (cancelTask) return await cancelTask;
-          return _storageFailure();
+          continue;
         }
         const durable = first.durable.value;
         if (!durable.ok) {

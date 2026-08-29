@@ -135,6 +135,7 @@ async function applyApprovedStop(
       }
       const stopped = await stopExternal(context, () =>
         terminalizeStoppedParticipant({
+          scope: "all",
           requests: ports.requests,
           notifications: ports.notifications,
           fencingToken,

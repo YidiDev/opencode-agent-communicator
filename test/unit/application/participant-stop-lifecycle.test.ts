@@ -17,6 +17,7 @@ import { validateSessionId } from "../../../src/domain/sessions";
 import type { WorkspaceKey } from "../../../src/domain/workspaces";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 import { deferred } from "../../support/blocking-request-fixture";
+import { requestFixture } from "../../support/request-store";
 
 function valid<Value>(
   value: { readonly ok: true; readonly value: Value } | { readonly ok: false },
@@ -67,7 +68,7 @@ function fixture(timerOverrides?: {
       calls.push("list");
       return { ok: true as const, sessionIds: candidates };
     },
-    async stopPendingRequests(): Promise<StopPendingRequestsResult> {
+    async stopPendingBlockingRequests(): Promise<StopPendingRequestsResult> {
       calls.push("persist");
       return { ok: true as const, terminalized: [] };
     },
@@ -206,7 +207,7 @@ test("revalidates idle hints and ignores stale, invisible, unknown, and failed o
   await rejected.handler.dispose();
 });
 
-test("coalesces duplicate idle work and allows a later busy-to-idle cycle", async () => {
+test("coalesces concurrent idle work and revalidates later idle hints", async () => {
   const value = fixture();
   const observed = deferred<void>();
   const release = deferred<ParticipantStopActivity>();
@@ -222,11 +223,11 @@ test("coalesces duplicate idle work and allows a later busy-to-idle cycle", asyn
   await Promise.all([first, duplicate]);
   expect(value.calls).toEqual(["observe", "persist"]);
   await value.handler.handle(idleEvent());
-  expect(value.calls).toEqual(["observe", "persist"]);
+  expect(value.calls).toEqual(["observe", "persist", "observe", "persist"]);
   await value.handler.handle(statusEvent("busy"));
   value.native.observeParticipantActivity = async () => "idle";
   await value.handler.handle(idleEvent());
-  expect(value.calls).toEqual(["observe", "persist", "persist"]);
+  expect(value.calls).toEqual(["observe", "persist", "observe", "persist", "persist"]);
   await value.handler.dispose();
 });
 
@@ -242,7 +243,7 @@ test("fails closed on malformed evidence and invalid persistence output", async 
     ["storage_unavailable", "stop:shutdown"],
   ] as const) {
     const persistence = fixture();
-    persistence.requests.stopPendingRequests = async () => ({ ok: false, code });
+    persistence.requests.stopPendingBlockingRequests = async () => ({ ok: false, code });
     await expect(persistence.handler.handle(idleEvent())).rejects.toThrow("failed closed");
     expect(persistence.calls).toEqual(["observe", "clear", stop]);
   }
@@ -314,7 +315,33 @@ test("maps unexpected persistence exceptions to storage failure", async () => {
   expect(value.calls).toEqual(["clear", "stop:shutdown"]);
 });
 
-test("bounds concurrent event work and remembered idle sessions", async () => {
+test("rejects a non-blocking request returned by scoped idle persistence", async () => {
+  const prepared = await requestFixture(
+    token,
+    1_000,
+    "ses_source",
+    "ses_participant",
+    workspaceKey,
+  );
+  const { payloadSha256: _, ...identity } = prepared.request;
+  const value = fixture();
+  value.requests.stopPendingBlockingRequests = async () => ({
+    ok: true,
+    terminalized: [
+      {
+        ...identity,
+        deliveryMode: "queue",
+        resolutionState: "target_stopped",
+        resolvedAtMs: 2_000,
+        updatedAtMs: 2_000,
+      },
+    ],
+  });
+  await expect(value.handler.handle(idleEvent())).rejects.toThrow("failed closed");
+  expect(value.calls).toEqual(["observe", "clear", "stop:shutdown"]);
+});
+
+test("bounds concurrent event work and revalidates later idle hints", async () => {
   const concurrent = fixture();
   concurrent.native.observeParticipantActivity = async () => {
     concurrent.calls.push("observe");

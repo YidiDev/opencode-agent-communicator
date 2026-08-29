@@ -25,7 +25,6 @@ import type { CommittedRequestNotificationPort } from "./request-notification-po
 import { snapshotDataRecord, snapshotDenseArray } from "./strict-port-boundaries";
 
 export const participantStopMaximumConcurrentEvents = 64;
-export const participantStopMaximumRememberedSessions = 1_024;
 export const participantStopAntiEntropyIntervalMs = 30_000;
 
 export interface ParticipantStopTimerPort {
@@ -57,7 +56,6 @@ export class ParticipantStopLifecycle {
   private readonly effects = new AbortController();
   private readonly active = new Set<Promise<unknown>>();
   private readonly inFlight = new Map<SessionId, Promise<boolean>>();
-  private readonly rememberedIdle = new Set<SessionId>();
   private readonly timers: ParticipantStopTimerPort;
   private timerHandle: unknown;
   private timerArmed = false;
@@ -81,11 +79,7 @@ export class ParticipantStopLifecycle {
       this.fail("port_contract_violation");
       throw cause;
     }
-    if (evidence.activity !== "idle") {
-      this.rememberedIdle.delete(evidence.sessionId);
-      return;
-    }
-    if (this.rememberedIdle.has(evidence.sessionId)) return;
+    if (evidence.activity !== "idle") return;
     await this.runHint(evidence.sessionId);
   }
 
@@ -115,7 +109,7 @@ export class ParticipantStopLifecycle {
     this.inFlight.set(sessionId, operation);
     this.active.add(operation);
     try {
-      if (await operation) this.remember(sessionId);
+      await operation;
     } finally {
       this.active.delete(operation);
       this.inFlight.delete(sessionId);
@@ -140,6 +134,7 @@ export class ParticipantStopLifecycle {
         }
         if (this.effects.signal.aborted) return false;
         await terminalizeStoppedParticipant({
+          scope: "blocking",
           requests: this.options.requests,
           notifications: this.options.notifications,
           fencingToken: this.options.lifecycle.fencingToken,
@@ -159,13 +154,6 @@ export class ParticipantStopLifecycle {
       this.fail(code);
       throw new Error("Participant stop persistence failed closed.", { cause });
     }
-  }
-
-  private remember(sessionId: SessionId): void {
-    this.rememberedIdle.add(sessionId);
-    if (this.rememberedIdle.size <= participantStopMaximumRememberedSessions) return;
-    const oldest = this.rememberedIdle.values().next().value;
-    if (oldest !== undefined) this.rememberedIdle.delete(oldest);
   }
 
   private armPeriodic(): void {

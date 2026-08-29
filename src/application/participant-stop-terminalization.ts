@@ -2,6 +2,7 @@ import { type FencingToken, OwnershipLostFault } from "../domain/ownership";
 import type { RequestMetadata } from "../domain/request-types";
 import type { SessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
+import type { ParticipantStopPersistencePort } from "./participant-stop-ports";
 import type { CommittedRequestNotificationPort } from "./request-notification-port";
 import {
   createTerminalNotificationEvent,
@@ -19,16 +20,24 @@ export class ParticipantStopTerminalizationFault extends Error {
   }
 }
 
-export async function terminalizeStoppedParticipant(input: {
-  readonly requests: SessionStopPersistencePort;
-  readonly notifications: CommittedRequestNotificationPort;
-  readonly fencingToken: FencingToken;
-  readonly workspaceKey: WorkspaceKey;
-  readonly stoppedSessionId: SessionId;
-}): Promise<readonly RequestMetadata[]> {
+export async function terminalizeStoppedParticipant(
+  input: {
+    readonly notifications: CommittedRequestNotificationPort;
+    readonly fencingToken: FencingToken;
+    readonly workspaceKey: WorkspaceKey;
+    readonly stoppedSessionId: SessionId;
+  } & (
+    | { readonly scope: "all"; readonly requests: SessionStopPersistencePort }
+    | { readonly scope: "blocking"; readonly requests: ParticipantStopPersistencePort }
+  ),
+): Promise<readonly RequestMetadata[]> {
   let raw: unknown;
   try {
-    raw = await input.requests.stopPendingRequests({
+    const stop =
+      input.scope === "all"
+        ? input.requests.stopPendingRequests.bind(input.requests)
+        : input.requests.stopPendingBlockingRequests.bind(input.requests);
+    raw = await stop({
       fencingToken: input.fencingToken,
       workspaceKey: input.workspaceKey,
       stoppedSessionId: input.stoppedSessionId,
@@ -44,6 +53,12 @@ export async function terminalizeStoppedParticipant(input: {
     throw new ParticipantStopTerminalizationFault(
       inspected.error.code === "ownership_lost" ? "ownership_lost" : "storage_failure",
     );
+  }
+  if (
+    input.scope === "blocking" &&
+    inspected.value.some((request) => (request.deliveryMode ?? "steer") !== "steer")
+  ) {
+    throw new ParticipantStopTerminalizationFault("port_contract_violation");
   }
   for (const request of inspected.value) {
     notifyTerminalSafely(

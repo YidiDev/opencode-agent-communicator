@@ -687,17 +687,17 @@ bypass it. Approval binds source, target, and the exact reason digest.
 If the approved target is already idle, the result is `already_idle`; no native
 interrupt occurs. Applicable communicator requests are still terminated.
 
-Stopping a session transitions pending requests by role:
+An approved `session_stop` transitions every pending request by role:
 
 - Requests targeting the stopped session become `target_stopped`.
 - Requests sourced by the stopped session become `source_stopped`.
 
 Each transition is atomic, logically erases payload/result content, and rejects
-late actions with the stored reason. Here `source_stopped`/`target_stopped` mean
-the participant ceased active execution, either through an approved
-communicator stop or a fresh authoritative idle observation. They do not assert
-that a native interrupt occurred. This is why an already-idle stop still
-terminates requests with those reasons.
+late actions with the stored reason. A fresh authoritative idle observation applies the same
+role-specific outcomes only to blocking steer requests created by `session_ask` or `session_wait`;
+queued `session_request_send` and initial `session_request_start` work remains durable. These states
+do not assert that a native interrupt occurred. This is why an already-idle approved stop still
+terminates every pending request with those reasons.
 
 Pinned `session.idle` and idle `session.status` events are wake hints only. The
 coordinator revalidates the exact visible root and current idle state through
@@ -901,11 +901,12 @@ single successful compare-and-set transition wins.
 
 ### 9.5 Target Later Becomes Idle
 
-A request validly created while the target was active remains pending if the
-target later becomes idle. The communicator creates no reminder or wake. The
-target can retrieve it from its inbox after later resumption. It remains pending
-until response, signal, deadline, explicit source cancellation, stop, or
-participant deletion.
+A durable request created through `session_request_send` or `session_request_start` remains pending
+if the target later becomes idle. The communicator creates no reminder or wake. The target can
+retrieve it from its inbox after later resumption. It remains pending until response, signal,
+deadline, explicit source cancellation, approved stop, or participant deletion. Blocking
+`session_ask` and `session_wait` requests instead transition to the participant's role-specific
+stopped outcome after an authoritative idle observation.
 
 ### 9.6 Participant Deletion
 

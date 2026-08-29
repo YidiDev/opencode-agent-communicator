@@ -162,6 +162,46 @@ describe("fenced session stop request terminalization", () => {
     store.close();
   });
 
+  test("idle reconciliation stops only blocking requests while explicit stop remains broad", async () => {
+    const store = openRequestStore();
+    const token = await store.acquire();
+    const stopped = requestSession("ses_stopped");
+    const blocking = await requestFixture(token, 1_000, "ses_peerA", "ses_stopped");
+    const queued = {
+      ...(await requestFixture(token, 1_001, "ses_peerB", "ses_stopped")),
+      deliveryMode: "queue" as const,
+    };
+    expect((await store.createPrepared(blocking)).ok).toBe(true);
+    expect((await store.createPrepared(queued)).ok).toBe(true);
+
+    const idle = await store.stopPendingBlockingRequests({
+      fencingToken: token,
+      workspaceKey: requestTestWorkspace(),
+      stoppedSessionId: stopped,
+    });
+    expect(idle.ok).toBe(true);
+    if (!idle.ok) throw new Error(idle.code);
+    expect(idle.terminalized.map((request) => request.id)).toEqual([blocking.request.id]);
+    expect(privateCounts(store.databasePath, blocking.request.id)).toMatchObject({
+      resolution: "target_stopped",
+      payloads: 0,
+    });
+    expect(privateCounts(store.databasePath, queued.request.id)).toMatchObject({
+      resolution: "pending",
+      payloads: 1,
+    });
+
+    const explicit = await store.stopPendingRequests({
+      fencingToken: token,
+      workspaceKey: requestTestWorkspace(),
+      stoppedSessionId: stopped,
+    });
+    expect(explicit.ok).toBe(true);
+    if (!explicit.ok) throw new Error(explicit.code);
+    expect(explicit.terminalized.map((request) => request.id)).toEqual([queued.request.id]);
+    store.close();
+  });
+
   test("rejects a stale owner without changing pending content", async () => {
     const store = openRequestStore();
     const token = await store.acquire();

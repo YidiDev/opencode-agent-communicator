@@ -157,10 +157,7 @@ export async function runImmediateRequestJourneys(
       `production-request-cancel:${pendingRequestID}`,
       pending.sessionID,
     ),
-  ).toMatchObject({
-    ok: false,
-    error: { code: "target_stopped", retryable: false },
-  });
+  ).toMatchObject({ ok: true, value: { request_id: pendingRequestID, state: "cancelled" } });
 
   const started = await invoker.begin(
     "session_request_start",
@@ -205,10 +202,7 @@ export async function runImmediateRequestJourneys(
   });
   expect(
     await invoker.invoke("session_signal", "production-process-wait-request", startedSessionID),
-  ).toMatchObject({
-    ok: false,
-    error: { code: "target_stopped", retryable: false },
-  });
+  ).toMatchObject({ ok: true, value: { request_id: startedRequestID, state: "reached" } });
   expect(
     await invoker.invoke(
       "session_request_get",
@@ -218,14 +212,20 @@ export async function runImmediateRequestJourneys(
   ).toMatchObject({
     ok: true,
     value: {
-      outcome: "metadata",
+      outcome: "available_result",
       metadata: {
         request_id: startedRequestID,
         linked_start_operation_id: operationID,
         delivery_mode: "initial",
-        resolution_state: "target_stopped",
-        result_state: "none",
       },
+      result: { kind: "wait", evidence: "artifact://packed-live" },
     },
   });
+  expect(
+    await invoker.invoke(
+      "session_request_ack",
+      `production-request-ack:${startedRequestID}`,
+      started.sessionID,
+    ),
+  ).toMatchObject({ ok: true, value: { request_id: startedRequestID, state: "acknowledged" } });
 }

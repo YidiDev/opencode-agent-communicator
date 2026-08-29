@@ -293,6 +293,52 @@ test("a committed stop wake interrupts a never-settling authoritative read", asy
   expect(reads).toBe(2);
 });
 
+test("a request-deadline wake retries an interrupted authoritative read", async () => {
+  const request = (await requestFixture(token)).request;
+  let reads = 0;
+  let expired = false;
+  let fire = (): void => undefined;
+  const terminal = {
+    outcome: "metadata",
+    view: "source_unsuccessful_terminal",
+    metadata: {
+      ...metadata(request),
+      resolutionState: "deadline_expired",
+      resolvedAtMs: request.deadlineAtMs,
+      updatedAtMs: request.deadlineAtMs,
+    },
+    terminalized: [],
+  };
+  const harness = setup(
+    request,
+    async () => {
+      reads += 1;
+      return expired ? terminal : new Promise(() => undefined);
+    },
+    {
+      scheduler: { wake: () => (expired = true) },
+      deadlineTimer: {
+        arm: (_delay: number, wake: () => void) => {
+          fire = wake;
+          return { cancel: () => undefined };
+        },
+      },
+    } as never,
+  );
+  const blocked = blockUntilRequestTerminal(
+    harness.ports,
+    harness.context,
+    request,
+    harness.registration,
+    payload,
+    new AbortController(),
+  );
+  while (reads === 0) await Promise.resolve();
+  fire();
+  expect(await blocked).toMatchObject({ ok: false, error: { code: "deadline_expired" } });
+  expect(reads).toBe(2);
+});
+
 test("an abort reports ownership loss when cancellation and reconciliation cannot settle", async () => {
   const request = (await requestFixture(token)).request;
   const abort = new AbortController();
