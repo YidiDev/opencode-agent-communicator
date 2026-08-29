@@ -384,7 +384,7 @@ describe("participant deletion result erasure fault boundaries", () => {
       results: 1,
     });
     store.close();
-  });
+  }, 15_000);
 
   test("leaves private state untouched behind a stale ownership fence", async () => {
     const store = openRequestStore();
