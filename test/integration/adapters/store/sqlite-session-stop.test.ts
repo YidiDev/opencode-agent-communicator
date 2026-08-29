@@ -8,9 +8,11 @@ import { stopSession } from "../../../../src/application/stop-session";
 import {
   cleanupRequestStoreRoots,
   openRequestStore,
+  requestClock,
   requestFixture,
   requestSession,
   requestTestWorkspace,
+  requestWorkspace,
 } from "../../../support/request-store";
 
 afterEach(cleanupRequestStoreRoots);
@@ -174,6 +176,15 @@ describe("fenced session stop request terminalization", () => {
     expect((await store.createPrepared(blocking)).ok).toBe(true);
     expect((await store.createPrepared(queued)).ok).toBe(true);
 
+    const candidates = await store.listParticipantStopCandidates({
+      fencingToken: token,
+      workspaceKey: requestTestWorkspace(),
+    });
+    expect(candidates).toEqual({
+      ok: true,
+      sessionIds: [blocking.request.sourceSessionId, stopped].sort(),
+    });
+
     const idle = await store.stopPendingBlockingRequests({
       fencingToken: token,
       workspaceKey: requestTestWorkspace(),
@@ -201,25 +212,93 @@ describe("fenced session stop request terminalization", () => {
     expect(explicit.terminalized.map((request) => request.id)).toEqual([queued.request.id]);
     store.close();
   });
+});
 
-  test("rejects a stale owner without changing pending content", async () => {
-    const store = openRequestStore();
-    const token = await store.acquire();
-    const fixture = await requestFixture(token);
-    expect((await store.createPrepared(fixture)).ok).toBe(true);
-    const stale = (token + 1) as typeof token;
-    expect(
-      await store.stopPendingRequests({
-        fencingToken: stale,
-        workspaceKey: requestTestWorkspace(),
-        stoppedSessionId: fixture.request.targetSessionId,
-      }),
-    ).toEqual({ ok: false, code: "ownership_lost" });
-    expect(privateCounts(store.databasePath, fixture.request.id)).toMatchObject({
-      resolution: "pending",
-      payloads: 1,
-      edges: 1,
-    });
-    store.close();
+test("rejects a stale owner without changing pending content", async () => {
+  const store = openRequestStore();
+  const token = await store.acquire();
+  const fixture = await requestFixture(token);
+  expect((await store.createPrepared(fixture)).ok).toBe(true);
+  const stale = (token + 1) as typeof token;
+  expect(
+    await store.stopPendingRequests({
+      fencingToken: stale,
+      workspaceKey: requestTestWorkspace(),
+      stoppedSessionId: fixture.request.targetSessionId,
+    }),
+  ).toEqual({ ok: false, code: "ownership_lost" });
+  expect(privateCounts(store.databasePath, fixture.request.id)).toMatchObject({
+    resolution: "pending",
+    payloads: 1,
+    edges: 1,
   });
+  store.close();
+});
+
+test("leaves overdue pending requests for deadline expiry", async () => {
+  const clock = requestClock();
+  const store = openRequestStore({ nowWallMs: clock.wall, nowMonotonicMs: clock.monotonic });
+  const token = await store.acquire();
+  const fixture = await requestFixture(token, 1_000);
+  expect((await store.createPrepared(fixture)).ok).toBe(true);
+  clock.set(fixture.request.deadlineAtMs);
+
+  expect(
+    await store.stopPendingRequests({
+      fencingToken: token,
+      workspaceKey: requestTestWorkspace(),
+      stoppedSessionId: fixture.request.targetSessionId,
+    }),
+  ).toEqual({ ok: true, terminalized: [] });
+  expect(privateCounts(store.databasePath, fixture.request.id)).toMatchObject({
+    resolution: "pending",
+    payloads: 1,
+    edges: 1,
+  });
+
+  const expired = await store.expireDueRequests({
+    fencingToken: token,
+    workspaceKey: requestTestWorkspace(),
+    limit: 10,
+  });
+  expect(expired).toMatchObject({ ok: true });
+  expect(privateCounts(store.databasePath, fixture.request.id)).toMatchObject({
+    resolution: "deadline_expired",
+    payloads: 0,
+    edges: 0,
+  });
+  store.close();
+});
+
+test("fails closed for invalid, stale, and malformed participant stop candidate reads", async () => {
+  const store = openRequestStore();
+  const token = await store.acquire();
+  expect(
+    await store.listParticipantStopCandidates({
+      fencingToken: token,
+      workspaceKey: requestWorkspace("other-workspace"),
+    }),
+  ).toEqual({ ok: false, code: "storage_unavailable" });
+  expect(
+    await store.listParticipantStopCandidates({
+      fencingToken: (token + 1) as typeof token,
+      workspaceKey: requestTestWorkspace(),
+    }),
+  ).toEqual({ ok: false, code: "ownership_lost" });
+
+  const fixture = await requestFixture(token);
+  expect((await store.createPrepared(fixture)).ok).toBe(true);
+  const corruption = new Database(store.databasePath, { strict: true });
+  corruption.exec("PRAGMA ignore_check_constraints = ON");
+  corruption.run("UPDATE requests SET source_session_id = 'bad' WHERE id = ?", [
+    fixture.request.id,
+  ]);
+  corruption.close(true);
+  expect(
+    await store.listParticipantStopCandidates({
+      fencingToken: token,
+      workspaceKey: requestTestWorkspace(),
+    }),
+  ).toEqual({ ok: false, code: "storage_unavailable" });
+  store.close();
 });

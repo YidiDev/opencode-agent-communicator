@@ -1,8 +1,15 @@
 import type {
+  ParticipantStopCandidatesResult,
+  ParticipantStopPersistencePort,
+} from "../../application/participant-stop-ports";
+import type {
   SessionStopPersistencePort,
   StopPendingRequestsResult,
 } from "../../application/session-stop-ports";
-import { pendingRequestsPerWorkspaceHardCeiling } from "../../domain/safety-ceilings";
+import {
+  participantStopCandidatesHardCeiling,
+  pendingRequestsPerWorkspaceHardCeiling,
+} from "../../domain/safety-ceilings";
 import { validateSessionId } from "../../domain/sessions";
 import { validateWorkspaceKey } from "../../domain/workspaces";
 import type { OwnershipRepository } from "./ownership-repository";
@@ -32,6 +39,54 @@ export class RequestStopRepository {
     input: Parameters<SessionStopPersistencePort["stopPendingRequests"]>[0],
   ): StopPendingRequestsResult {
     return this.stop(input, true);
+  }
+
+  listParticipantStopCandidates(
+    input: Parameters<ParticipantStopPersistencePort["listParticipantStopCandidates"]>[0],
+  ): ParticipantStopCandidatesResult {
+    if (
+      input.workspaceKey !== this.context.workspaceKey ||
+      !validateWorkspaceKey(input.workspaceKey).ok
+    ) {
+      return { ok: false, code: "storage_unavailable" };
+    }
+    const atLimit = requestPageLimitReached(this.context);
+    try {
+      return this.context.database
+        .transaction(() => {
+          this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
+          const nowMs = requestStoreNowMs(this.context);
+          const rows = this.context.database
+            .query<{ readonly sessionId: unknown }, [string, number]>(
+              `SELECT session_id AS sessionId FROM (
+                 SELECT target_session_id AS session_id FROM requests
+                  WHERE workspace_key = ?1 AND resolution_state = 'pending'
+                    AND delivery_mode = 'steer' AND deadline_at_ms > ?2
+                 UNION
+                 SELECT source_session_id AS session_id FROM requests
+                  WHERE workspace_key = ?1 AND resolution_state = 'pending'
+                    AND delivery_mode = 'steer' AND deadline_at_ms > ?2
+               ) ORDER BY session_id LIMIT ${participantStopCandidatesHardCeiling + 1}`,
+            )
+            .all(input.workspaceKey, nowMs);
+          if (rows.length > participantStopCandidatesHardCeiling) {
+            throw new StoreIntegrityError("Participant stop candidates exceeded their hard bound.");
+          }
+          const sessionIds = rows.map((row) => {
+            const id = validateSessionId(row.sessionId);
+            if (!id.ok) throw new StoreIntegrityError("Participant stop candidate was malformed.");
+            return id.value;
+          });
+          return { ok: true as const, sessionIds: Object.freeze(sessionIds) };
+        })
+        .immediate();
+    } catch (cause: unknown) {
+      const failure = requestFailure(cause, atLimit);
+      return {
+        ok: false,
+        code: failure.code === "ownership_lost" ? "ownership_lost" : "storage_unavailable",
+      };
+    }
   }
 
   private stop(
@@ -65,20 +120,21 @@ export class RequestStopRepository {
   ): StopPendingRequestsResult {
     this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
     const scope = blockingOnly ? " AND delivery_mode = 'steer'" : "";
+    const nowMs = requestStoreNowMs(this.context);
     const rows = this.context.database
-      .query<RequestRow, [string, string]>(
+      .query<RequestRow, [string, string, number]>(
         `SELECT ${requestMetadataColumns} FROM requests
          WHERE workspace_key = ? AND resolution_state = 'pending'
            AND (target_session_id = ?2 OR source_session_id = ?2)
+           AND deadline_at_ms > ?3
            ${scope}
          ORDER BY id LIMIT ${pendingRequestsPerWorkspaceHardCeiling + 1}`,
       )
-      .all(input.workspaceKey, input.stoppedSessionId);
+      .all(input.workspaceKey, input.stoppedSessionId, nowMs);
     if (rows.length > pendingRequestsPerWorkspaceHardCeiling) {
       throw new StoreIntegrityError("Pending stop notification metadata exceeded its hard bound.");
     }
     if (rows.length === 0) return { ok: true, terminalized: Object.freeze([]) };
-    const nowMs = requestStoreNowMs(this.context);
     const requests = rows.map(hydrateRequest);
     for (const request of requests) {
       if (request.resolutionState !== "pending" || nowMs < request.updatedAtMs) {
@@ -98,25 +154,28 @@ export class RequestStopRepository {
       `DELETE FROM request_results WHERE request_id IN (
          SELECT id FROM requests WHERE workspace_key = ? AND resolution_state = 'pending'
            AND (target_session_id = ?2 OR source_session_id = ?2)
+           AND deadline_at_ms > ?3
            ${scope}
         )`,
-      [input.workspaceKey, input.stoppedSessionId],
+      [input.workspaceKey, input.stoppedSessionId, nowMs],
     );
     this.context.database.run(
       `DELETE FROM request_payloads WHERE request_id IN (
          SELECT id FROM requests WHERE workspace_key = ? AND resolution_state = 'pending'
            AND (target_session_id = ?2 OR source_session_id = ?2)
+           AND deadline_at_ms > ?3
            ${scope}
         )`,
-      [input.workspaceKey, input.stoppedSessionId],
+      [input.workspaceKey, input.stoppedSessionId, nowMs],
     );
     this.context.database.run(
       `DELETE FROM request_wait_edges WHERE request_id IN (
          SELECT id FROM requests WHERE workspace_key = ? AND resolution_state = 'pending'
            AND (target_session_id = ?2 OR source_session_id = ?2)
+           AND deadline_at_ms > ?3
            ${scope}
         )`,
-      [input.workspaceKey, input.stoppedSessionId],
+      [input.workspaceKey, input.stoppedSessionId, nowMs],
     );
     const changed = this.context.database.run(
       `UPDATE requests SET
@@ -127,6 +186,7 @@ export class RequestStopRepository {
          result_expired_at_ms = NULL, acknowledged_at_ms = NULL
         WHERE workspace_key = ?1 AND resolution_state = 'pending'
           AND (target_session_id = ?2 OR source_session_id = ?2)
+          AND deadline_at_ms > ?3
           ${scope}`,
       [input.workspaceKey, input.stoppedSessionId, nowMs],
     );

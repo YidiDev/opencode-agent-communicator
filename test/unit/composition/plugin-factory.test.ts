@@ -25,7 +25,8 @@ function incompatibleNative(): OpenCodeNativeAdapter {
       targetVisible: false,
       targetStatus: "unknown",
     }),
-    observeParticipantActivity: async () => "unknown",
+    observeParticipantActivities: async (_workspace, sessionIds) =>
+      sessionIds.map((sessionId) => ({ sessionId, activity: "unknown" as const })),
     interruptSession: async () => "unknown",
     createRootSession: async () => "unknown",
     reconcileRootSession: async () => "unknown",
@@ -143,6 +144,7 @@ describe("composition factory ordering", () => {
     const lifecycle = {
       fencingToken: 1 as never,
       status: "ready",
+      effectSignal: new AbortController().signal,
       assertReady: () => undefined,
       stop: () => order.push("lifecycle-stop"),
       scheduler: { drain: async () => order.push("scheduler-drain") },
@@ -171,7 +173,11 @@ describe("composition factory ordering", () => {
         readParticipantPresence: async () => "absent" as const,
       }),
       createStore: () => store as never,
-      createRuntime: () => ({ stop: () => order.push("runtime-stop") }) as never,
+      createRuntime: () =>
+        ({
+          effectSignal: new AbortController().signal,
+          stop: () => order.push("runtime-stop"),
+        }) as never,
       recoverStartup: async () => {
         order.push("recovery");
         return { ok: true, value: lifecycle as never };
@@ -236,11 +242,16 @@ describe("composition factory failure cleanup", () => {
       checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
       createNative: () => incompatibleNative(),
       createStore: () => ({ starts: {}, close: () => order.push("store-close") }) as never,
-      createRuntime: () => ({ stop: () => order.push("runtime-stop") }) as never,
+      createRuntime: () =>
+        ({
+          effectSignal: new AbortController().signal,
+          stop: () => order.push("runtime-stop"),
+        }) as never,
       recoverStartup: async () => ({
         ok: true,
         value: {
           fencingToken: 1 as never,
+          effectSignal: new AbortController().signal,
           assertReady: () => undefined,
           stop: () => order.push("lifecycle-stop"),
           scheduler: {
@@ -283,7 +294,11 @@ describe("composition factory failure cleanup", () => {
       checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
       createNative: () => incompatibleNative(),
       createStore: () => ({ close: () => order.push("store-close") }) as never,
-      createRuntime: () => ({ stop: () => order.push("runtime-stop") }) as never,
+      createRuntime: () =>
+        ({
+          effectSignal: new AbortController().signal,
+          stop: () => order.push("runtime-stop"),
+        }) as never,
       recoverStartup: async () => domainFailure("storage_unavailable", "recovery failed", true),
     });
 
@@ -295,6 +310,7 @@ describe("composition factory failure cleanup", () => {
     const order: string[] = [];
     const lifecycle = {
       fencingToken: 1 as never,
+      effectSignal: new AbortController().signal,
       assertReady: () => undefined,
       stop: () => {
         order.push("lifecycle-stop");
@@ -359,6 +375,7 @@ describe("composition factory failure cleanup", () => {
       recoverStartup: async () => ({
         ok: true,
         value: {
+          effectSignal: new AbortController().signal,
           stop: () => order.push("lifecycle-stop"),
           scheduler: { drain: async () => order.push("scheduler-drain") },
         } as never,

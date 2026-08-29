@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import type { ParticipantDeletionCandidatesResult } from "../../../src/application/participant-deletion-ports";
 import { ParticipantOperationGate } from "../../../src/application/participant-operation-gate";
 import {
   isOpenCode118ParticipantActivityEvent,
@@ -9,7 +8,10 @@ import {
   ParticipantStopLifecycle,
   participantStopAntiEntropyIntervalMs,
 } from "../../../src/application/participant-stop-lifecycle";
-import type { ParticipantStopActivity } from "../../../src/application/participant-stop-ports";
+import type {
+  ParticipantStopActivity,
+  ParticipantStopCandidatesResult,
+} from "../../../src/application/participant-stop-ports";
 import type { StopPendingRequestsResult } from "../../../src/application/session-stop-ports";
 import { validateFencingToken } from "../../../src/domain/ownership";
 import type { SessionId } from "../../../src/domain/sessions";
@@ -47,24 +49,33 @@ function statusEvent(activity: "busy" | "idle" | "retry") {
   };
 }
 
-function fixture(timerOverrides?: {
-  set(delayMs: number, wake: () => void): unknown;
-  clear(handle: unknown): void;
-}) {
+function fixture(
+  timerOverrides?: {
+    set(delayMs: number, wake: () => void): unknown;
+    clear(handle: unknown): void;
+  },
+  lifecycleInitiallyStopped = false,
+) {
   const calls: string[] = [];
   let activity: ParticipantStopActivity = "idle";
   let callback: (() => void) | undefined;
   let candidates: readonly SessionId[] = [];
+  let stoppedFault: unknown;
+  const lifecycleEffects = new AbortController();
+  if (lifecycleInitiallyStopped) lifecycleEffects.abort("already_stopped");
   const lifecycle = {
     fencingToken: token,
-    status: "ready",
-    stop(reason: string) {
+    status: lifecycleInitiallyStopped ? "stopped" : "ready",
+    effectSignal: lifecycleEffects.signal,
+    stop(reason: string, fault?: unknown) {
       calls.push(`stop:${reason}`);
+      stoppedFault = fault;
       this.status = "stopped";
+      lifecycleEffects.abort(reason);
     },
   };
   const requests = {
-    async listParticipantDeletionCandidates(): Promise<ParticipantDeletionCandidatesResult> {
+    async listParticipantStopCandidates(): Promise<ParticipantStopCandidatesResult> {
       calls.push("list");
       return { ok: true as const, sessionIds: candidates };
     },
@@ -74,13 +85,13 @@ function fixture(timerOverrides?: {
     },
   };
   const native = {
-    async observeParticipantActivity(
+    async observeParticipantActivities(
       _workspace: WorkspaceKey,
-      _session: SessionId,
+      sessionIds: readonly SessionId[],
       _abort: AbortSignal,
-    ): Promise<ParticipantStopActivity> {
+    ) {
       calls.push("observe");
-      return activity;
+      return sessionIds.map((sessionId) => ({ sessionId, activity }));
     },
   };
   const operations = new ParticipantOperationGate();
@@ -119,6 +130,9 @@ function fixture(timerOverrides?: {
     runPeriodic() {
       callback?.();
     },
+    stoppedFault() {
+      return stoppedFault;
+    },
   };
 }
 
@@ -138,6 +152,28 @@ describe("OpenCode participant activity evidence", () => {
         activity,
       });
     }
+    expect(
+      parseOpenCode118ParticipantActivityEvent({
+        ...statusEvent("retry"),
+        properties: {
+          sessionID: participant,
+          status: {
+            type: "retry",
+            attempt: 1,
+            message: "retrying",
+            action: {
+              reason: "quota",
+              provider: "provider",
+              title: "Retry later",
+              message: "Rate limited",
+              label: "Details",
+              link: "https://example.invalid/help",
+            },
+            next: 10,
+          },
+        },
+      }),
+    ).toEqual({ sessionId: participant, activity: "retry" });
     expect(parseOpenCode118ParticipantActivityEvent({ type: "message.updated" })).toBeUndefined();
     expect(isOpenCode118ParticipantActivityEvent(idleEvent())).toBe(true);
     expect(isOpenCode118ParticipantActivityEvent(null)).toBe(false);
@@ -155,6 +191,19 @@ describe("OpenCode participant activity evidence", () => {
         properties: {
           sessionID: participant,
           status: { type: "retry", attempt: -1, message: "x", next: 1 },
+        },
+      },
+      {
+        type: "session.status",
+        properties: {
+          sessionID: participant,
+          status: {
+            type: "retry",
+            attempt: 1,
+            message: "x",
+            action: { reason: "quota" },
+            next: 1,
+          },
         },
       },
     ]) {
@@ -199,7 +248,7 @@ test("revalidates idle hints and ignores stale, invisible, unknown, and failed o
     await value.handler.dispose();
   }
   const rejected = fixture();
-  rejected.native.observeParticipantActivity = async () => {
+  rejected.native.observeParticipantActivities = async () => {
     throw new Error("native unavailable");
   };
   await rejected.handler.handle(idleEvent());
@@ -207,14 +256,26 @@ test("revalidates idle hints and ignores stale, invisible, unknown, and failed o
   await rejected.handler.dispose();
 });
 
+test("rejects incomplete activity snapshots and starts inert after lifecycle shutdown", async () => {
+  const incomplete = fixture();
+  incomplete.native.observeParticipantActivities = async () => [];
+  await expect(incomplete.handler.handle(idleEvent())).rejects.toThrow("failed closed");
+
+  const stopped = fixture(undefined, true);
+  await stopped.handler.handle(idleEvent());
+  expect(stopped.calls).toEqual([]);
+  await stopped.handler.dispose();
+});
+
 test("coalesces concurrent idle work and revalidates later idle hints", async () => {
   const value = fixture();
   const observed = deferred<void>();
   const release = deferred<ParticipantStopActivity>();
-  value.native.observeParticipantActivity = async () => {
+  value.native.observeParticipantActivities = async (_workspace, sessionIds) => {
     value.calls.push("observe");
     observed.resolve();
-    return release.promise;
+    const activity = await release.promise;
+    return sessionIds.map((sessionId) => ({ sessionId, activity }));
   };
   const first = value.handler.handle(idleEvent());
   await observed.promise;
@@ -225,7 +286,8 @@ test("coalesces concurrent idle work and revalidates later idle hints", async ()
   await value.handler.handle(idleEvent());
   expect(value.calls).toEqual(["observe", "persist", "observe", "persist"]);
   await value.handler.handle(statusEvent("busy"));
-  value.native.observeParticipantActivity = async () => "idle";
+  value.native.observeParticipantActivities = async (_workspace, sessionIds) =>
+    sessionIds.map((sessionId) => ({ sessionId, activity: "idle" as const }));
   await value.handler.handle(idleEvent());
   expect(value.calls).toEqual(["observe", "persist", "observe", "persist", "persist"]);
   await value.handler.dispose();
@@ -266,6 +328,23 @@ test("periodically reconciles bounded pending participant candidates", async () 
   expect(malformed.calls).toContain("stop:shutdown");
 });
 
+test("batches anti-entropy activity snapshots under the participant gate", async () => {
+  const value = fixture();
+  value.setCandidates(
+    Array.from({ length: 65 }, (_, index) => valid(validateSessionId(`ses_batch${index}`))),
+  );
+  value.runPeriodic();
+  for (
+    let index = 0;
+    index < 500 && value.calls.filter((call) => call === "persist").length < 65;
+    index += 1
+  )
+    await Promise.resolve();
+  expect(value.calls.filter((call) => call === "observe")).toHaveLength(2);
+  expect(value.calls.filter((call) => call === "persist")).toHaveLength(65);
+  await value.handler.dispose();
+});
+
 test("fails closed on malformed activity, duplicate candidates, and ownership loss", async () => {
   const activity = fixture();
   activity.setActivity("malformed" as never);
@@ -280,7 +359,7 @@ test("fails closed on malformed activity, duplicate candidates, and ownership lo
   expect(duplicate.calls).toContain("stop:shutdown");
 
   const ownership = fixture();
-  ownership.requests.listParticipantDeletionCandidates = async () => ({
+  ownership.requests.listParticipantStopCandidates = async () => ({
     ok: false,
     code: "ownership_lost",
   });
@@ -291,18 +370,19 @@ test("fails closed on malformed activity, duplicate candidates, and ownership lo
 });
 
 test("fails closed when periodic persistence rejects or returns an unavailable result", async () => {
-  for (const listParticipantDeletionCandidates of [
+  for (const listParticipantStopCandidates of [
     async () => {
       throw new Error("storage unavailable");
     },
     async () => ({ ok: false as const, code: "storage_unavailable" as const }),
   ]) {
     const value = fixture();
-    value.requests.listParticipantDeletionCandidates = listParticipantDeletionCandidates;
+    value.requests.listParticipantStopCandidates = listParticipantStopCandidates;
     value.runPeriodic();
     for (let index = 0; index < 20 && value.lifecycle.status === "ready"; index += 1)
       await Promise.resolve();
     expect(value.calls).toContain("stop:shutdown");
+    expect((value.stoppedFault() as { code?: unknown }).code).toBe("storage_failure");
   }
 });
 
@@ -343,7 +423,7 @@ test("rejects a non-blocking request returned by scoped idle persistence", async
 
 test("bounds concurrent event work and revalidates later idle hints", async () => {
   const concurrent = fixture();
-  concurrent.native.observeParticipantActivity = async () => {
+  concurrent.native.observeParticipantActivities = async () => {
     concurrent.calls.push("observe");
     return new Promise(() => undefined);
   };
@@ -363,6 +443,12 @@ test("bounds concurrent event work and revalidates later idle hints", async () =
   await concurrent.handler.dispose();
   await Promise.all(active);
 
+  const duplicate = fixture();
+  duplicate.native.observeParticipantActivities = async () => new Promise(() => undefined);
+  const duplicateActive = Array.from({ length: 64 }, () => duplicate.handler.handle(idleEvent()));
+  await expect(duplicate.handler.handle(idleEvent())).rejects.toThrow("concurrency exceeded");
+  await Promise.all(duplicateActive);
+
   const remembered = fixture();
   for (let index = 0; index < 1_025; index += 1) {
     await remembered.handler.handle({
@@ -376,6 +462,25 @@ test("bounds concurrent event work and revalidates later idle hints", async () =
   });
   expect(remembered.calls.filter((call) => call === "persist")).toHaveLength(1_026);
   await remembered.handler.dispose();
+});
+
+test("lifecycle shutdown aborts an in-flight idle observation before persistence", async () => {
+  const value = fixture();
+  const started = deferred<void>();
+  const release = deferred<void>();
+  value.native.observeParticipantActivities = async (_workspace, sessionIds) => {
+    value.calls.push("observe");
+    started.resolve();
+    await release.promise;
+    return sessionIds.map((sessionId) => ({ sessionId, activity: "idle" as const }));
+  };
+  const handling = value.handler.handle(idleEvent());
+  await started.promise;
+  value.lifecycle.stop("shutdown");
+  await handling;
+  release.resolve();
+  expect(value.calls).not.toContain("persist");
+  await value.handler.dispose();
 });
 
 test("contains timer setup, timer cleanup, and closed-gate faults", async () => {
@@ -411,7 +516,7 @@ test("contains timer setup, timer cleanup, and closed-gate faults", async () => 
 test("disposal aborts hostile activity reads and rejects later events", async () => {
   const value = fixture();
   let observed: AbortSignal | undefined;
-  value.native.observeParticipantActivity = async (_workspace, _session, abort) => {
+  value.native.observeParticipantActivities = async (_workspace, _sessions, abort) => {
     observed = abort;
     return new Promise(() => undefined);
   };

@@ -133,26 +133,47 @@ export function createObservationOperations(
         targetStatus: mergedActivityStatus(statuses, active, targetSessionId),
       });
     },
-    async observeParticipantActivity(workspaceKey, participantSessionId, abort) {
+    async observeParticipantActivities(workspaceKey, participantSessionIds, abort) {
       assertWorkspaceBinding(workspaceKey, context.configuredWorkspace);
-      if (!validateSessionId(participantSessionId).ok || abort.aborted) return "unknown";
+      if (
+        !Array.isArray(participantSessionIds) ||
+        participantSessionIds.length < 1 ||
+        participantSessionIds.length > 64 ||
+        participantSessionIds.some((id) => !validateSessionId(id).ok)
+      ) {
+        throw new NativeAdapterFault("Participant activity identities are malformed.");
+      }
+      if (abort.aborted) {
+        return participantSessionIds.map((sessionId) => ({ sessionId, activity: "unknown" }));
+      }
       const [rootsResult, statusResult, activeResult] = await Promise.all([
         context.listVisibleRoots({ signal: abort }),
         context.readStatus({ signal: abort }),
         context.active({ signal: abort }),
       ]);
-      if (abort.aborted) return "unknown";
+      if (abort.aborted) {
+        return participantSessionIds.map((sessionId) => ({ sessionId, activity: "unknown" }));
+      }
       const roots = parseSessionArray(
         envelopeData(rootsResult, "Legacy current root listing"),
         "Current root listing",
       );
-      if (!roots.some((root) => root.id === participantSessionId)) return "not_visible";
+      const visible = new Set(roots.map((root) => root.id));
       const statuses = parseActivityMap(
         envelopeData(statusResult, "Legacy status"),
         "Legacy status",
       );
       const active = parseActiveMap(activeResult);
-      return mergedActivityStatus(statuses, active, participantSessionId);
+      return Object.freeze(
+        participantSessionIds.map((sessionId) =>
+          Object.freeze({
+            sessionId,
+            activity: visible.has(sessionId)
+              ? mergedActivityStatus(statuses, active, sessionId)
+              : ("not_visible" as const),
+          }),
+        ),
+      );
     },
   };
 }

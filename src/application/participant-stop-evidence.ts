@@ -31,10 +31,14 @@ function exactRecord(value: unknown, required: readonly string[]): DataRecord | 
   }
 }
 
-function parseStatus(value: unknown): "busy" | "retry" | "idle" | undefined {
+export function parseOpenCode118ParticipantStatus(
+  value: unknown,
+): "busy" | "retry" | "idle" | undefined {
   const record = exactRecord(value, ["type"]);
   if (record?.type === "busy" || record?.type === "idle") return record.type;
-  const retry = exactRecord(value, ["type", "attempt", "message", "next"]);
+  const retry =
+    exactRecord(value, ["type", "attempt", "message", "next"]) ??
+    exactRecord(value, ["type", "attempt", "message", "action", "next"]);
   if (
     retry?.type !== "retry" ||
     !Number.isSafeInteger(retry.attempt) ||
@@ -46,6 +50,20 @@ function parseStatus(value: unknown): "busy" | "retry" | "idle" | undefined {
     retry.next < 0
   )
     return undefined;
+  if (Object.hasOwn(retry, "action")) {
+    const action =
+      exactRecord(retry.action, ["reason", "provider", "title", "message", "label"]) ??
+      exactRecord(retry.action, ["reason", "provider", "title", "message", "label", "link"]);
+    if (
+      !action ||
+      [action.reason, action.provider, action.title, action.message, action.label].some(
+        (item) => typeof item !== "string" || item.length > 65_536,
+      ) ||
+      (Object.hasOwn(action, "link") &&
+        (typeof action.link !== "string" || action.link.length > 65_536))
+    )
+      return undefined;
+  }
   return "retry";
 }
 
@@ -70,7 +88,9 @@ export function parseOpenCode118ParticipantActivityEvent(
       : exactRecord(event.properties, ["sessionID", "status"]);
   const id = properties && validateSessionId(properties.sessionID);
   const activity =
-    event.type === "session.idle" ? "idle" : properties && parseStatus(properties.status);
+    event.type === "session.idle"
+      ? "idle"
+      : properties && parseOpenCode118ParticipantStatus(properties.status);
   if (!properties || !id?.ok || activity === undefined) {
     throw new TypeError(`OpenCode ${String(event.type)} evidence is malformed.`);
   }

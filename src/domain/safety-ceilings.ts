@@ -11,6 +11,8 @@ export const participantDeletionCandidatesHardCeiling =
   pendingRequestsPerWorkspaceHardCeiling * 2 +
   availableResultsPerWorkspaceHardCeiling +
   managedSessionsPerWorkspaceHardCeiling;
+/** Distinct source and target participants from pending blocking requests. */
+export const participantStopCandidatesHardCeiling = pendingRequestsPerWorkspaceHardCeiling * 2;
 /** Ambiguous deterministic creates are isolated from the ordinary managed-session budget. */
 export const unresolvedStartProvenancePerWorkspaceHardCeiling = 128;
 export const startOperationsRecoveryHardCeiling = 1_024;

@@ -1,6 +1,7 @@
 import { type SessionId, validateSessionId } from "../domain/sessions";
 
 export const participantOperationMaximumQueued = 4_096;
+export const participantOperationMaximumKeys = 64;
 
 export class ParticipantOperationAbortedFault extends Error {
   override readonly name = "ParticipantOperationAbortedFault";
@@ -37,19 +38,30 @@ export class ParticipantOperationGate implements ParticipantOperationPort {
   private readonly active = new Set<Promise<unknown>>();
   private closed = false;
 
-  async run<Value>(
+  run<Value>(
+    participantIds: readonly SessionId[],
+    abort: AbortSignal,
+    operation: () => Promise<Value>,
+  ): Promise<Value> {
+    const active = this.execute(participantIds, abort, operation);
+    this.active.add(active);
+    void active.then(
+      () => this.active.delete(active),
+      () => this.active.delete(active),
+    );
+    return active;
+  }
+
+  private async execute<Value>(
     participantIds: readonly SessionId[],
     abort: AbortSignal,
     operation: () => Promise<Value>,
   ): Promise<Value> {
     const keys = this.canonicalKeys(participantIds);
     await this.acquire(keys, abort);
-    const active = Promise.resolve().then(operation);
-    this.active.add(active);
     try {
-      return await active;
+      return await operation();
     } finally {
-      this.active.delete(active);
       for (const key of keys) this.held.delete(key);
       this.dispatch();
     }
@@ -69,7 +81,11 @@ export class ParticipantOperationGate implements ParticipantOperationPort {
   }
 
   private canonicalKeys(participantIds: readonly SessionId[]): readonly SessionId[] {
-    if (!Array.isArray(participantIds) || participantIds.length < 1 || participantIds.length > 2) {
+    if (
+      !Array.isArray(participantIds) ||
+      participantIds.length < 1 ||
+      participantIds.length > participantOperationMaximumKeys
+    ) {
       throw new TypeError("Participant operation keys are malformed.");
     }
     const unique = new Set<SessionId>();

@@ -116,6 +116,22 @@ describe("participant operation gate", () => {
     expect(drained).toBe(true);
   });
 
+  test("drain sees work acquired immediately before its first suspension", async () => {
+    const gate = new ParticipantOperationGate();
+    const release = deferred<void>();
+    const active = gate.run([first], new AbortController().signal, () => release.promise);
+    gate.close();
+    let drained = false;
+    const draining = gate.drain().then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    const drainedBeforeRelease = drained;
+    release.resolve();
+    await Promise.all([active, draining]);
+    expect(drainedBeforeRelease).toBe(false);
+  });
+
   test("rejects an already-aborted acquisition and releases after operation failure", async () => {
     const gate = new ParticipantOperationGate();
     const abort = new AbortController();

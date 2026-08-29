@@ -45,7 +45,8 @@ function nativeFixture(): OpenCodeNativeAdapter {
       targetVisible: false,
       targetStatus: "unknown",
     }),
-    observeParticipantActivity: async () => "unknown",
+    observeParticipantActivities: async (_workspace, sessionIds) =>
+      sessionIds.map((sessionId) => ({ sessionId, activity: "unknown" as const })),
     interruptSession: async () => "unknown",
     createRootSession: async () => "unknown",
     reconcileRootSession: async () => "unknown",
@@ -58,6 +59,7 @@ function nativeFixture(): OpenCodeNativeAdapter {
 function lifecycle(order: string[]) {
   return {
     fencingToken: 1 as never,
+    effectSignal: new AbortController().signal,
     assertReady: () => undefined,
     stop: () => order.push("lifecycle-stop"),
     scheduler: { drain: async () => order.push("scheduler-drain") },
@@ -79,7 +81,11 @@ function injectedDependencies(
     createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
     checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
     createNative: nativeFixture,
-    createRuntime: () => ({ stop: () => order.push("runtime-stop") }) as never,
+    createRuntime: () =>
+      ({
+        effectSignal: new AbortController().signal,
+        stop: () => order.push("runtime-stop"),
+      }) as never,
     recoverStartup: async () => ({ ok: true, value: lifecycle(order) as never }),
   };
 }

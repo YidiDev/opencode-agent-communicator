@@ -203,29 +203,36 @@ test("revalidates one exact visible participant activity for stop reconciliation
     statuses: { ses_target: { type: "busy" } },
   });
   expect(
-    await busy.adapter.observeParticipantActivity(
+    await busy.adapter.observeParticipantActivities(
       workspaceKey,
-      targetSessionId,
+      [targetSessionId, sourceSessionId],
       new AbortController().signal,
     ),
-  ).toBe("busy");
+  ).toEqual([
+    { sessionId: targetSessionId, activity: "busy" },
+    { sessionId: sourceSessionId, activity: "not_visible" },
+  ]);
   const absent = fixture({ visibleRoots: [] });
   expect(
-    await absent.adapter.observeParticipantActivity(
+    await absent.adapter.observeParticipantActivities(
       workspaceKey,
-      targetSessionId,
+      [targetSessionId],
       new AbortController().signal,
     ),
-  ).toBe("not_visible");
+  ).toEqual([{ sessionId: targetSessionId, activity: "not_visible" }]);
   const abort = new AbortController();
   abort.abort("disposed");
   expect(
-    await absent.adapter.observeParticipantActivity(workspaceKey, targetSessionId, abort.signal),
-  ).toBe("unknown");
+    await absent.adapter.observeParticipantActivities(
+      workspaceKey,
+      [targetSessionId],
+      abort.signal,
+    ),
+  ).toEqual([{ sessionId: targetSessionId, activity: "unknown" }]);
   await expect(
-    busy.adapter.observeParticipantActivity(
+    busy.adapter.observeParticipantActivities(
       valid(validateWorkspaceKey("workspace:other")),
-      targetSessionId,
+      [targetSessionId],
       new AbortController().signal,
     ),
   ).rejects.toThrow("binding");

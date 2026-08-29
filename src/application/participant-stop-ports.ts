@@ -1,17 +1,25 @@
 import type { FencingToken } from "../domain/ownership";
 import type { SessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
-import type { ParticipantDeletionCandidatesResult } from "./participant-deletion-ports";
 import type { SessionStopPersistencePort, StopPendingRequestsResult } from "./session-stop-ports";
 
 export type ParticipantStopActivity = "busy" | "retry" | "idle" | "not_visible" | "unknown";
 
+export interface ParticipantStopActivityObservation {
+  readonly sessionId: SessionId;
+  readonly activity: ParticipantStopActivity;
+}
+
+export type ParticipantStopCandidatesResult =
+  | { readonly ok: true; readonly sessionIds: readonly SessionId[] }
+  | { readonly ok: false; readonly code: "ownership_lost" | "storage_unavailable" };
+
 export interface NativeParticipantStopActivityPort {
-  observeParticipantActivity(
+  observeParticipantActivities(
     workspaceKey: WorkspaceKey,
-    participantSessionId: SessionId,
+    participantSessionIds: readonly SessionId[],
     abort: AbortSignal,
-  ): Promise<ParticipantStopActivity>;
+  ): Promise<readonly ParticipantStopActivityObservation[]>;
 }
 
 export interface ParticipantStopPersistencePort extends SessionStopPersistencePort {
@@ -20,8 +28,8 @@ export interface ParticipantStopPersistencePort extends SessionStopPersistencePo
     readonly workspaceKey: WorkspaceKey;
     readonly stoppedSessionId: SessionId;
   }): Promise<StopPendingRequestsResult>;
-  listParticipantDeletionCandidates(input: {
+  listParticipantStopCandidates(input: {
     readonly fencingToken: FencingToken;
     readonly workspaceKey: WorkspaceKey;
-  }): Promise<ParticipantDeletionCandidatesResult>;
+  }): Promise<ParticipantStopCandidatesResult>;
 }

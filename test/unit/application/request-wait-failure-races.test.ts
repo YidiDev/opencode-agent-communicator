@@ -399,6 +399,65 @@ test("authoritative reads emit only correlated committed terminal notifications"
   expect(events).toHaveLength(1);
 });
 
+test.each(["shutdown", "ownership_lost"] as const)(
+  "a final durable read preserves a committed outcome after runtime %s",
+  async (reason) => {
+    const request = (await requestFixture(token)).request;
+    let reads = 0;
+    const resolvedAtMs = request.createdAtMs + 1;
+    const terminal =
+      reason === "shutdown"
+        ? {
+            outcome: "available_result",
+            metadata: {
+              ...metadata(request),
+              resolutionState: "reached",
+              deliveryState: "admitted",
+              resultState: "available",
+              submittedAtMs: resolvedAtMs,
+              admittedAtMs: resolvedAtMs,
+              resolvedAtMs,
+              updatedAtMs: resolvedAtMs,
+              resultAvailableAtMs: resolvedAtMs,
+              resultExpiresAtMs: resolvedAtMs + 10,
+            },
+            result: { kind: "wait", evidence: "committed" },
+            terminalized: [],
+          }
+        : {
+            outcome: "metadata",
+            view: "source_unsuccessful_terminal",
+            metadata: {
+              ...metadata(request),
+              resolutionState: "cancelled",
+              resolvedAtMs,
+              updatedAtMs: resolvedAtMs,
+            },
+            terminalized: [],
+          };
+    const harness = setup(request, async () => {
+      reads += 1;
+      return reads === 1 ? new Promise(() => undefined) : terminal;
+    });
+    const blocked = blockUntilRequestTerminal(
+      harness.ports,
+      harness.context,
+      request,
+      harness.registration,
+      payload,
+      new AbortController(),
+    );
+    while (reads === 0) await Promise.resolve();
+    harness.runtime.stop(reason);
+    expect(await blocked).toMatchObject(
+      reason === "shutdown"
+        ? { ok: true, value: { state: "reached", evidence: "committed" } }
+        : { ok: false, error: { code: "request_cancelled" } },
+    );
+    expect(reads).toBe(2);
+  },
+);
+
 test("invocation-first deadline starts bounded cancellation and wakes local reconciliation", async () => {
   const request = (await requestFixture(token)).request;
   let fire = (): void => undefined;

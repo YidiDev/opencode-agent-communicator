@@ -9,6 +9,7 @@ import type {
   SessionBlockingRequestPorts,
 } from "./blocking-session-request-boundaries";
 import { observeNativePromiseRejection } from "./native-promise-observation";
+import type { CommittedRequestTerminalEvent } from "./request-notification-port";
 import type { RequestRuntimeRegistration } from "./request-runtime";
 import { snapshotDataRecord } from "./strict-port-boundaries";
 
@@ -150,6 +151,29 @@ async function readForegroundAuthoritative(
   }
 }
 
+async function readFinalAuthoritative(
+  ports: SessionBlockingRequestPorts,
+  context: SessionBlockingRequestContext,
+  request: PendingRequestMetadata,
+  approvedPayload: PendingRequestPayload,
+): Promise<DomainResult<"pending" | BlockingSessionRequestSuccess>> {
+  const controller = new AbortController();
+  let timer: { cancel(): void } | undefined;
+  try {
+    timer = ports.deadlineTimer.arm(cleanupTimeoutMs, () =>
+      controller.abort("request_final_reconciliation_deadline"),
+    );
+    const settlement = await runUntilAborted(controller.signal, () =>
+      readAuthoritative(ports, context, request, approvedPayload, controller.signal),
+    );
+    return settlement.kind === "settled" ? settlement.value : cleanupStorageFailure(request.id);
+  } catch {
+    return cleanupStorageFailure(request.id);
+  } finally {
+    timer?.cancel();
+  }
+}
+
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: durable wait, cancellation, deadline, lifecycle, and reattachment races are intentionally linear and auditable.
 export async function blockUntilRequestTerminal(
   ports: SessionBlockingRequestPorts,
@@ -159,12 +183,24 @@ export async function blockUntilRequestTerminal(
   approvedPayload: PendingRequestPayload,
   admissionController: AbortController,
 ): Promise<DomainResult<BlockingSessionRequestSuccess>> {
+  const notified = new Set<string>();
+  const workflowPorts: SessionBlockingRequestPorts = {
+    ...ports,
+    notifications: {
+      notifyTerminal(event: CommittedRequestTerminalEvent): undefined {
+        const key = `${event.requestId}:${event.resolutionState}:${event.resolvedAtMs}`;
+        if (notified.has(key)) return undefined;
+        notified.add(key);
+        return ports.notifications.notifyTerminal(event);
+      },
+    },
+  };
   let registration = provisional;
   let queryController = new AbortController();
   let cancelTask: Promise<DomainResult<BlockingSessionRequestSuccess>> | undefined;
   const onAbort = (): void => {
     queryController.abort("explicit_request_cancellation");
-    cancelTask ??= cancelAfterAbort(ports, context, request, approvedPayload);
+    cancelTask ??= cancelAfterAbort(workflowPorts, context, request, approvedPayload);
     observeNativePromiseRejection(cancelTask);
   };
   context.abort.addEventListener("abort", onAbort, { once: true });
@@ -203,7 +239,7 @@ export async function blockUntilRequestTerminal(
       if (cancelTask) return await cancelTask;
       queryController = new AbortController();
       const durableTask = readForegroundAuthoritative(
-        ports,
+        workflowPorts,
         context,
         request,
         approvedPayload,
@@ -228,8 +264,16 @@ export async function blockUntilRequestTerminal(
         if (durable.value !== "pending") return { ok: true, value: durable.value };
         first = { type: "runtime", outcome: await registration.outcome };
       }
-      if (first.outcome.outcome === "shutdown") throw new RequestRuntimeShutdownFault();
-      if (first.outcome.outcome === "ownership_lost") {
+      if (first.outcome.outcome === "shutdown" || first.outcome.outcome === "ownership_lost") {
+        const final = await readFinalAuthoritative(
+          workflowPorts,
+          context,
+          request,
+          approvedPayload,
+        );
+        if (final.ok && final.value !== "pending") return { ok: true, value: final.value };
+        if (!final.ok && final.error.code !== "storage_unavailable") return final;
+        if (first.outcome.outcome === "shutdown") throw new RequestRuntimeShutdownFault();
         return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
       }
       // Runtime events are wake hints only. The fenced participant projection decides the winner.
@@ -243,7 +287,7 @@ export async function blockUntilRequestTerminal(
         });
       } catch {
         const afterCapacityRace = await readForegroundAuthoritative(
-          ports,
+          workflowPorts,
           context,
           request,
           approvedPayload,

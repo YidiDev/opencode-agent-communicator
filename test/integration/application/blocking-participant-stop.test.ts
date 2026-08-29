@@ -135,12 +135,16 @@ test.each(["ask", "wait"] as const)(
     await steered.promise;
     const lifecycle = new ParticipantStopLifecycle({
       requests: setup.store,
-      activity: { observeParticipantActivity: async () => "idle" },
+      activity: {
+        observeParticipantActivities: async (_workspace, sessionIds) =>
+          sessionIds.map((sessionId) => ({ sessionId, activity: "idle" as const })),
+      },
       operations: setup.ports.participantOperations,
       notifications: setup.runtime,
       lifecycle: {
         fencingToken: setup.token,
         status: "ready",
+        effectSignal: setup.runtime.effectSignal,
         stop: () => undefined,
       } as never,
       workspaceKey: requestTestWorkspace(),
@@ -159,3 +163,108 @@ test.each(["ask", "wait"] as const)(
     setup.store.close();
   },
 );
+
+test("request creation that acquires the gate first is terminalized by the queued idle hint", async () => {
+  const creationObserved = deferred<void>();
+  const releaseCreation = deferred<void>();
+  const steered = deferred<void>();
+  const setup = await blockingRequestFixture(async () => {
+    steered.resolve();
+    return { kind: "admitted", admittedSeq: 1, observedAtMs: 25_000 };
+  });
+  setup.ports.activity.observeRequestParticipants = async () => {
+    creationObserved.resolve();
+    await releaseCreation.promise;
+    return { sourceVisible: true, targetVisible: true, targetStatus: "busy" as const };
+  };
+  const lifecycle = new ParticipantStopLifecycle({
+    requests: setup.store,
+    activity: {
+      observeParticipantActivities: async (_workspace, sessionIds) =>
+        sessionIds.map((sessionId) => ({ sessionId, activity: "idle" as const })),
+    },
+    operations: setup.ports.participantOperations,
+    notifications: setup.runtime,
+    lifecycle: {
+      fencingToken: setup.token,
+      status: "ready",
+      effectSignal: setup.runtime.effectSignal,
+      stop: () => undefined,
+    } as never,
+    workspaceKey: requestTestWorkspace(),
+    timers: { set: () => 1, clear: () => undefined },
+  });
+  const blocked = waitSession(setup.ports, setup.context, {
+    session_id: setup.target,
+    milestone: "complete",
+    timeout_seconds: 30,
+  });
+  await creationObserved.promise;
+  const idle = lifecycle.handle({
+    type: "session.idle",
+    properties: { sessionID: setup.target },
+  });
+  releaseCreation.resolve();
+  await steered.promise;
+  await idle;
+  expect(await blocked).toMatchObject({ ok: false, error: { code: "target_stopped" } });
+  await lifecycle.dispose();
+  setup.store.close();
+});
+
+test("idle reconciliation that acquires the gate first completes before request creation", async () => {
+  const idleObserved = deferred<void>();
+  const releaseIdle = deferred<void>();
+  const authorized = deferred<void>();
+  const steered = deferred<void>();
+  const setup = await blockingRequestFixture(async () => {
+    steered.resolve();
+    return { kind: "admitted", admittedSeq: 1, observedAtMs: 25_000 };
+  });
+  setup.ports.authorization.authorizeRequest = async () => {
+    authorized.resolve();
+    return { kind: "allow" as const };
+  };
+  const lifecycle = new ParticipantStopLifecycle({
+    requests: setup.store,
+    activity: {
+      observeParticipantActivities: async (_workspace, sessionIds) => {
+        idleObserved.resolve();
+        await releaseIdle.promise;
+        return sessionIds.map((sessionId) => ({ sessionId, activity: "idle" as const }));
+      },
+    },
+    operations: setup.ports.participantOperations,
+    notifications: setup.runtime,
+    lifecycle: {
+      fencingToken: setup.token,
+      status: "ready",
+      effectSignal: setup.runtime.effectSignal,
+      stop: () => undefined,
+    } as never,
+    workspaceKey: requestTestWorkspace(),
+    timers: { set: () => 1, clear: () => undefined },
+  });
+  const firstIdle = lifecycle.handle({
+    type: "session.idle",
+    properties: { sessionID: setup.target },
+  });
+  await idleObserved.promise;
+  const blocked = waitSession(setup.ports, setup.context, {
+    session_id: setup.target,
+    milestone: "complete",
+    timeout_seconds: 30,
+  });
+  await authorized.promise;
+  await Promise.resolve();
+  releaseIdle.resolve();
+  await firstIdle;
+  await steered.promise;
+  await lifecycle.handle({
+    type: "session.idle",
+    properties: { sessionID: setup.target },
+  });
+  expect(await blocked).toMatchObject({ ok: false, error: { code: "target_stopped" } });
+  await lifecycle.dispose();
+  setup.store.close();
+});

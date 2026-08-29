@@ -55,6 +55,7 @@ export class LinuxBunSqliteStore
     RequestResultRetentionPersistencePort,
     RequestParticipantQueryPort,
     SessionStopPersistencePort,
+    ParticipantStopPersistencePort,
     ParticipantDeletionPersistencePort,
     DeliveryRetentionPersistencePort,
     AdvisoryLockPersistencePort
@@ -239,6 +240,15 @@ export class LinuxBunSqliteStore
   ): ReturnType<ParticipantStopPersistencePort["stopPendingBlockingRequests"]> {
     this.assertOpen();
     return this.access.mutate(() => this.requestStopRepository.stopPendingBlockingRequests(input));
+  }
+
+  async listParticipantStopCandidates(
+    input: Parameters<ParticipantStopPersistencePort["listParticipantStopCandidates"]>[0],
+  ): ReturnType<ParticipantStopPersistencePort["listParticipantStopCandidates"]> {
+    this.assertOpen();
+    return this.access.inspect(() =>
+      this.requestStopRepository.listParticipantStopCandidates(input),
+    );
   }
 
   async deleteParticipantRequests(

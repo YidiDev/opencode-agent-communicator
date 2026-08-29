@@ -1,4 +1,4 @@
-import { participantDeletionCandidatesHardCeiling } from "../domain/safety-ceilings";
+import { participantStopCandidatesHardCeiling } from "../domain/safety-ceilings";
 import { type SessionId, validateSessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
 import { runUntilAborted } from "./abortable-operation";
@@ -25,6 +25,7 @@ import type { CommittedRequestNotificationPort } from "./request-notification-po
 import { snapshotDataRecord, snapshotDenseArray } from "./strict-port-boundaries";
 
 export const participantStopMaximumConcurrentEvents = 64;
+export const participantStopActivityBatchSize = 64;
 export const participantStopAntiEntropyIntervalMs = 30_000;
 
 export interface ParticipantStopTimerPort {
@@ -40,6 +41,68 @@ const nativeTimers: ParticipantStopTimerPort = {
   },
   clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
+
+function snapshotIdleSessionIds(raw: unknown, expectedIds: readonly SessionId[]): SessionId[] {
+  const observations = snapshotDenseArray(raw, expectedIds.length);
+  if (!observations || observations.length !== expectedIds.length) {
+    throw new ParticipantStopTerminalizationFault("port_contract_violation");
+  }
+  const expected = new Set(expectedIds);
+  const seen = new Set<SessionId>();
+  const idle: SessionId[] = [];
+  for (const value of observations) {
+    const observation = snapshotDataRecord(value, 2);
+    const id = observation && validateSessionId(observation.sessionId);
+    if (
+      !observation ||
+      Object.keys(observation).length !== 2 ||
+      !id?.ok ||
+      !expected.has(id.value) ||
+      seen.has(id.value) ||
+      !["busy", "retry", "idle", "not_visible", "unknown"].includes(observation.activity as string)
+    ) {
+      throw new ParticipantStopTerminalizationFault("port_contract_violation");
+    }
+    seen.add(id.value);
+    if (observation.activity === "idle") idle.push(id.value);
+  }
+  return idle;
+}
+
+function snapshotParticipantCandidates(raw: unknown):
+  | { readonly ok: true; readonly sessionIds: readonly SessionId[] }
+  | {
+      readonly ok: false;
+      readonly code: "ownership_lost" | "storage_failure" | "port_contract_violation";
+    } {
+  const result = snapshotDataRecord(raw, 2);
+  if (
+    result?.ok === false &&
+    Object.keys(result).length === 2 &&
+    (result.code === "ownership_lost" || result.code === "storage_unavailable")
+  ) {
+    return {
+      ok: false,
+      code: result.code === "ownership_lost" ? "ownership_lost" : "storage_failure",
+    };
+  }
+  const values =
+    result?.ok === true
+      ? snapshotDenseArray(result.sessionIds, participantStopCandidatesHardCeiling)
+      : undefined;
+  if (!result || Object.keys(result).length !== 2 || !values) {
+    return { ok: false, code: "port_contract_violation" };
+  }
+  const seen = new Set<SessionId>();
+  for (const value of values) {
+    const id = validateSessionId(value);
+    if (!id.ok || seen.has(id.value)) {
+      return { ok: false, code: "port_contract_violation" };
+    }
+    seen.add(id.value);
+  }
+  return { ok: true, sessionIds: [...seen] };
+}
 
 export interface ParticipantStopLifecycleOptions {
   readonly requests: ParticipantStopPersistencePort;
@@ -61,9 +124,13 @@ export class ParticipantStopLifecycle {
   private timerArmed = false;
   private periodic: Promise<void> | undefined;
   private disposing = false;
+  private handling = 0;
+  private readonly onLifecycleStop = (): void => this.abortEffects("communicator_stopped");
 
   constructor(private readonly options: ParticipantStopLifecycleOptions) {
     this.timers = options.timers ?? nativeTimers;
+    options.lifecycle.effectSignal.addEventListener("abort", this.onLifecycleStop, { once: true });
+    if (options.lifecycle.effectSignal.aborted) this.onLifecycleStop();
     this.armPeriodic();
   }
 
@@ -86,69 +153,75 @@ export class ParticipantStopLifecycle {
   async dispose(): Promise<void> {
     if (!this.disposing) {
       this.disposing = true;
-      this.effects.abort("participant_stop_disposed");
-      if (this.timerArmed) {
-        this.timerArmed = false;
-        this.timers.clear(this.timerHandle);
-      }
+      this.options.lifecycle.effectSignal.removeEventListener("abort", this.onLifecycleStop);
+      this.abortEffects("participant_stop_disposed");
     }
     await Promise.allSettled([...this.active]);
   }
 
   private async runHint(sessionId: SessionId): Promise<void> {
-    const existing = this.inFlight.get(sessionId);
-    if (existing) {
-      await existing;
-      return;
-    }
-    if (this.active.size >= participantStopMaximumConcurrentEvents) {
+    if (this.handling >= participantStopMaximumConcurrentEvents) {
       this.fail("port_contract_violation");
       throw new Error("Participant stop event concurrency exceeded its hard bound.");
     }
-    const operation = this.applyIfIdle(sessionId);
-    this.inFlight.set(sessionId, operation);
-    this.active.add(operation);
+    this.handling += 1;
     try {
-      await operation;
+      const existing = this.inFlight.get(sessionId);
+      if (existing) {
+        await existing;
+        return;
+      }
+      const operation = this.applyIfIdle(sessionId);
+      this.inFlight.set(sessionId, operation);
+      this.active.add(operation);
+      try {
+        await operation;
+      } finally {
+        this.active.delete(operation);
+        this.inFlight.delete(sessionId);
+      }
     } finally {
-      this.active.delete(operation);
-      this.inFlight.delete(sessionId);
+      this.handling -= 1;
     }
   }
 
   private async applyIfIdle(sessionId: SessionId): Promise<boolean> {
+    return (await this.applyBatchIfIdle([sessionId])) > 0;
+  }
+
+  private async applyBatchIfIdle(sessionIds: readonly SessionId[]): Promise<number> {
     try {
-      return await this.options.operations.run([sessionId], this.effects.signal, async () => {
+      return await this.options.operations.run(sessionIds, this.effects.signal, async () => {
         const settlement = await runUntilAborted(this.effects.signal, () =>
-          this.options.activity.observeParticipantActivity(
+          this.options.activity.observeParticipantActivities(
             this.options.workspaceKey,
-            sessionId,
+            sessionIds,
             this.effects.signal,
           ),
         );
-        if (settlement.kind !== "settled") return false;
-        const observed = settlement.value;
-        if (observed !== "idle") {
-          if (["busy", "retry", "not_visible", "unknown"].includes(observed)) return false;
-          throw new ParticipantStopTerminalizationFault("port_contract_violation");
+        if (settlement.kind !== "settled") return 0;
+        const idle = snapshotIdleSessionIds(settlement.value, sessionIds);
+        let terminalized = 0;
+        for (const sessionId of idle) {
+          if (this.effects.signal.aborted || this.options.lifecycle.status !== "ready") return 0;
+          await terminalizeStoppedParticipant({
+            scope: "blocking",
+            requests: this.options.requests,
+            notifications: this.options.notifications,
+            fencingToken: this.options.lifecycle.fencingToken,
+            workspaceKey: this.options.workspaceKey,
+            stoppedSessionId: sessionId,
+          });
+          terminalized += 1;
         }
-        if (this.effects.signal.aborted) return false;
-        await terminalizeStoppedParticipant({
-          scope: "blocking",
-          requests: this.options.requests,
-          notifications: this.options.notifications,
-          fencingToken: this.options.lifecycle.fencingToken,
-          workspaceKey: this.options.workspaceKey,
-          stoppedSessionId: sessionId,
-        });
-        return true;
+        return terminalized;
       });
     } catch (cause: unknown) {
       if (
         cause instanceof ParticipantOperationAbortedFault ||
         cause instanceof ParticipantOperationGateClosedFault
       )
-        return false;
+        return 0;
       const code =
         cause instanceof ParticipantStopTerminalizationFault ? cause.code : "storage_failure";
       this.fail(code);
@@ -178,33 +251,24 @@ export class ParticipantStopLifecycle {
   private async runPeriodic(): Promise<void> {
     if (this.disposing || this.options.lifecycle.status !== "ready") return;
     try {
-      const raw: unknown = await this.options.requests.listParticipantDeletionCandidates({
+      const raw: unknown = await this.options.requests.listParticipantStopCandidates({
         fencingToken: this.options.lifecycle.fencingToken,
         workspaceKey: this.options.workspaceKey,
       });
-      const result = snapshotDataRecord(raw, 2);
-      const values =
-        result?.ok === true
-          ? snapshotDenseArray(result.sessionIds, participantDeletionCandidatesHardCeiling)
-          : undefined;
-      if (!result || Object.keys(result).length !== 2 || !values) {
-        const code =
-          result?.ok === false && result.code === "ownership_lost"
-            ? "ownership_lost"
-            : "port_contract_violation";
-        this.fail(code);
+      const candidates = snapshotParticipantCandidates(raw);
+      if (!candidates.ok) {
+        this.fail(candidates.code);
         return;
       }
-      const seen = new Set<SessionId>();
-      for (const value of values) {
+      for (
+        let offset = 0;
+        offset < candidates.sessionIds.length;
+        offset += participantStopActivityBatchSize
+      ) {
         if (this.effects.signal.aborted) return;
-        const id = validateSessionId(value);
-        if (!id.ok || seen.has(id.value)) {
-          this.fail("port_contract_violation");
-          return;
-        }
-        seen.add(id.value);
-        await this.applyIfIdle(id.value);
+        await this.applyBatchIfIdle(
+          candidates.sessionIds.slice(offset, offset + participantStopActivityBatchSize),
+        );
       }
     } catch {
       if (!this.effects.signal.aborted) {
@@ -215,13 +279,17 @@ export class ParticipantStopLifecycle {
 
   private fail(code: ConstructorParameters<typeof RequestDeadlineSchedulerFault>[0]): void {
     const fault = new RequestDeadlineSchedulerFault(code);
-    this.effects.abort(`participant_stop_${code}`);
+    this.abortEffects(`participant_stop_${code}`);
+    this.options.lifecycle.stop(code === "ownership_lost" ? "ownership_lost" : "shutdown", fault);
+  }
+
+  private abortEffects(reason: string): void {
+    this.effects.abort(reason);
     if (this.timerArmed) {
       this.timerArmed = false;
       try {
         this.timers.clear(this.timerHandle);
       } catch {}
     }
-    this.options.lifecycle.stop(code === "ownership_lost" ? "ownership_lost" : "shutdown", fault);
   }
 }

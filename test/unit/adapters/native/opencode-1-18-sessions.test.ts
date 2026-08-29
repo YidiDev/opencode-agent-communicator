@@ -18,7 +18,19 @@ describe("OpenCode 1.18.23 merged activity truth table", () => {
     ["legacy busy and V2 absent", { type: "busy" }, undefined, "busy"],
     [
       "legacy retry and V2 absent",
-      { type: "retry", attempt: 0, message: "later", next: 0 },
+      {
+        type: "retry",
+        attempt: 0,
+        message: "later",
+        action: {
+          reason: "quota",
+          provider: "provider",
+          title: "Retry later",
+          message: "Rate limited",
+          label: "Details",
+        },
+        next: 0,
+      },
       undefined,
       "retry",
     ],
@@ -49,6 +61,13 @@ describe("OpenCode 1.18.23 merged activity truth table", () => {
     { type: "retry", attempt: 1, message: 2, next: 1 },
     { type: "retry", attempt: 1, message: "later", next: -1 },
     { type: "retry", attempt: 1, message: "later", next: Number.POSITIVE_INFINITY },
+    {
+      type: "retry",
+      attempt: 1,
+      message: "later",
+      action: { reason: "quota" },
+      next: 1,
+    },
   ])("rejects malformed legacy retry %#", (legacy) => {
     expect(mergedActivityStatus({ [sessionId]: legacy }, {}, sessionId)).toBe("unknown");
   });
