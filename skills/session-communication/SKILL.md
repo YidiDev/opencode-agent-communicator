@@ -105,7 +105,8 @@ Use the older active-only blocking workflow only when the caller must remain blo
 Ask/wait never wake an idle target. Do not use `session_ask` or `session_wait` for that purpose.
 They require a target observed as active and use steer admission. They do not poll, retry, fall back to queue admission, or create a
 reminder if the target becomes idle. If activity cannot be established, fail closed rather than
-guessing.
+guessing. If either participant is later authoritatively observed idle, the blocked call returns the
+durable `target_stopped` or `source_stopped` outcome rather than waiting for its deadline.
 
 ## Interpret delivery state conservatively
 

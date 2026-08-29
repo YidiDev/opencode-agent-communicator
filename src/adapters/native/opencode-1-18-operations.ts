@@ -2,6 +2,7 @@ import type {
   CurrentWorkspaceMembershipPort,
   NativeQueueAdmissionPort,
 } from "../../application/delivery-ports";
+import type { NativeParticipantStopActivityPort } from "../../application/participant-stop-ports";
 import type {
   NativeSteerAdmissionPort,
   RequestParticipantActivityPort,
@@ -38,7 +39,8 @@ export function createObservationOperations(
 ): HostHealthPort &
   VisibleRootSessionPort &
   CurrentWorkspaceMembershipPort &
-  RequestParticipantActivityPort {
+  RequestParticipantActivityPort &
+  NativeParticipantStopActivityPort {
   return {
     async readHealth(): Promise<unknown> {
       return envelopeData(await context.health(), "Host health");
@@ -130,6 +132,48 @@ export function createObservationOperations(
         targetVisible: visible.has(targetSessionId),
         targetStatus: mergedActivityStatus(statuses, active, targetSessionId),
       });
+    },
+    async observeParticipantActivities(workspaceKey, participantSessionIds, abort) {
+      assertWorkspaceBinding(workspaceKey, context.configuredWorkspace);
+      if (
+        !Array.isArray(participantSessionIds) ||
+        participantSessionIds.length < 1 ||
+        participantSessionIds.length > 64 ||
+        participantSessionIds.some((id) => !validateSessionId(id).ok)
+      ) {
+        throw new NativeAdapterFault("Participant activity identities are malformed.");
+      }
+      if (abort.aborted) {
+        return participantSessionIds.map((sessionId) => ({ sessionId, activity: "unknown" }));
+      }
+      const [rootsResult, statusResult, activeResult] = await Promise.all([
+        context.listVisibleRoots({ signal: abort }),
+        context.readStatus({ signal: abort }),
+        context.active({ signal: abort }),
+      ]);
+      if (abort.aborted) {
+        return participantSessionIds.map((sessionId) => ({ sessionId, activity: "unknown" }));
+      }
+      const roots = parseSessionArray(
+        envelopeData(rootsResult, "Legacy current root listing"),
+        "Current root listing",
+      );
+      const visible = new Set(roots.map((root) => root.id));
+      const statuses = parseActivityMap(
+        envelopeData(statusResult, "Legacy status"),
+        "Legacy status",
+      );
+      const active = parseActiveMap(activeResult);
+      return Object.freeze(
+        participantSessionIds.map((sessionId) =>
+          Object.freeze({
+            sessionId,
+            activity: visible.has(sessionId)
+              ? mergedActivityStatus(statuses, active, sessionId)
+              : ("not_visible" as const),
+          }),
+        ),
+      );
     },
   };
 }

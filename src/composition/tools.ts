@@ -7,6 +7,7 @@ import type {
 import type { RequestDeadlineTimerPort } from "../application/blocking-session-request-boundaries";
 import type { CommunicatorStartupRecoveryLifecycle } from "../application/communicator-startup-lifecycle";
 import type { ClockPort } from "../application/delivery-ports";
+import type { ParticipantOperationPort } from "../application/participant-operation-gate";
 import type { RequestRuntime } from "../application/request-runtime";
 import { sessionExportPolicyPort } from "../application/session-export-policy";
 import type { SessionExportAdapterPort } from "../application/session-export-ports";
@@ -117,6 +118,7 @@ export function constructToolContracts(input: {
   readonly store: LinuxBunSqliteStore;
   readonly runtime: RequestRuntime;
   readonly lifecycle: CommunicatorStartupRecoveryLifecycle;
+  readonly participantOperations: ParticipantOperationPort;
   readonly exporter: SessionExportAdapterPort;
   /** Controlled composition seams used by deterministic deadline regression tests. */
   readonly clock?: ClockPort;
@@ -152,6 +154,7 @@ export function constructToolContracts(input: {
     nativeQueue: native,
     ownership: store,
     runtime,
+    participantOperations: input.participantOperations,
     scheduler: lifecycle.scheduler,
     deadlineTimer: blockingTimers,
     workflowFault: {
@@ -256,6 +259,7 @@ export function constructToolContracts(input: {
         nativeInterrupt: native,
         ownership: store,
         notifications: runtime,
+        participantOperations: input.participantOperations,
         digest: productionSha256,
       },
       workspaceKey,

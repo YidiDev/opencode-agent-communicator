@@ -535,9 +535,9 @@ The target must be observed `busy` or `retry`. If idle, no request is persisted
 and `target_idle` tells the caller to queue a wake message and inspect status.
 If status is unknown, the operation fails closed.
 
-After the active check, the coordinator persists the durable request and
-absolute deadline before V2 steer admission. A target may race to idle between
-the check and admission. The exact native result is reported or recorded; the
+The coordinator serializes the final active check and durable creation against
+participant stop processing for both source and target. It then performs V2
+steer admission. The exact native result is reported or recorded; the
 coordinator never polls, retries, or converts the request into a queued wake.
 
 On confirmed admission failure, the request transitions terminal and content
@@ -687,16 +687,26 @@ bypass it. Approval binds source, target, and the exact reason digest.
 If the approved target is already idle, the result is `already_idle`; no native
 interrupt occurs. Applicable communicator requests are still terminated.
 
-Stopping a session transitions pending requests by role:
+An approved `session_stop` transitions every pending request by role:
 
 - Requests targeting the stopped session become `target_stopped`.
 - Requests sourced by the stopped session become `source_stopped`.
 
 Each transition is atomic, logically erases payload/result content, and rejects
-late actions with the stored reason. Here `source_stopped`/`target_stopped` mean
-the approved communicator stop was applied to coordination state; they do not
-assert that a native interrupt occurred. This is why an already-idle stop still
-terminates requests with those reasons.
+late actions with the stored reason. A fresh authoritative idle observation applies the same
+role-specific outcomes only to blocking steer requests created by `session_ask` or `session_wait`;
+queued `session_request_send` and initial `session_request_start` work remains durable. These states
+do not assert that a native interrupt occurred. This is why an already-idle approved stop still
+terminates every pending request with those reasons.
+
+Pinned `session.idle` and idle `session.status` events are wake hints only. The
+coordinator revalidates the exact visible root and current idle state through
+the configured workspace adapter before a fenced transition. Duplicate hints
+are coalesced, missed hints are covered by a bounded pending-participant
+anti-entropy pass, and busy, retry, unknown, invisible, malformed, or foreign
+observations never authorize terminalization. Request creation, explicit stop,
+and idle handling share a canonical participant-key gate so no request can be
+inserted between stop terminalization and the final activity decision.
 
 For an active target, ownership and visibility are rechecked immediately before
 native interruption. The stop result reports communicator-state application and
@@ -891,11 +901,12 @@ single successful compare-and-set transition wins.
 
 ### 9.5 Target Later Becomes Idle
 
-A request validly created while the target was active remains pending if the
-target later becomes idle. The communicator creates no reminder or wake. The
-target can retrieve it from its inbox after later resumption. It remains pending
-until response, signal, deadline, explicit source cancellation, stop, or
-participant deletion.
+A durable request created through `session_request_send` or `session_request_start` remains pending
+if the target later becomes idle. The communicator creates no reminder or wake. The target can
+retrieve it from its inbox after later resumption. It remains pending until response, signal,
+deadline, explicit source cancellation, approved stop, or participant deletion. Blocking
+`session_ask` and `session_wait` requests instead transition to the participant's role-specific
+stopped outcome after an authoritative idle observation.
 
 ### 9.6 Participant Deletion
 

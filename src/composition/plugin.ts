@@ -14,6 +14,8 @@ import type {
 } from "../application/advisory-lock-use-cases";
 import { checkHostCompatibility } from "../application/check-host-compatibility";
 import { ParticipantDeletionLifecycle } from "../application/participant-deletion-lifecycle";
+import { ParticipantOperationGate } from "../application/participant-operation-gate";
+import { ParticipantStopLifecycle } from "../application/participant-stop-lifecycle";
 import {
   type CommunicatorStartupRecoveryLifecycle,
   recoverCommunicatorStartup,
@@ -159,6 +161,8 @@ export function createCompositionFactory(
     let runtime: RequestRuntime | undefined;
     let lifecycle: CommunicatorStartupRecoveryLifecycle | undefined;
     let deletion: ParticipantDeletionLifecycle | undefined;
+    let participantStop: ParticipantStopLifecycle | undefined;
+    let participantOperations: ParticipantOperationGate | undefined;
     let exporterDrain: (() => Promise<void>) | undefined;
     let exporterDispose: (() => void) | undefined;
     let advisoryLockDispose: (() => void) | undefined;
@@ -167,6 +171,8 @@ export function createCompositionFactory(
     const dispose = createCompositionDisposer({
       lifecycle: () => lifecycle,
       deletion: () => deletion,
+      participantStop: () => participantStop,
+      participantOperations: () => participantOperations,
       runtime: () => runtime,
       invocations,
       exporterDrain: () => exporterDrain,
@@ -241,6 +247,7 @@ export function createCompositionFactory(
       );
       if (!recovered.ok) throw new Error(recovered.error.message);
       lifecycle = recovered.value;
+      participantOperations = new ParticipantOperationGate();
       deletion = new ParticipantDeletionLifecycle({
         requests: store,
         presence: native,
@@ -249,6 +256,14 @@ export function createCompositionFactory(
         workspaceKey,
         directory: workspace.directory,
         projectId: workspace.projectId,
+      });
+      participantStop = new ParticipantStopLifecycle({
+        requests: store,
+        activity: native,
+        operations: participantOperations,
+        notifications: runtime,
+        lifecycle,
+        workspaceKey,
       });
       let exporter: ReturnType<CompositionDependencies["createExporter"]>;
       try {
@@ -273,6 +288,7 @@ export function createCompositionFactory(
         store,
         runtime,
         lifecycle,
+        participantOperations,
         exporter: exporter.adapter,
         advisoryLockWake: advisoryLockHooks.wake,
         advisoryLockNotifications: advisoryLockHooks.notifications,
@@ -285,7 +301,10 @@ export function createCompositionFactory(
           enforceMandatoryStopConfiguration(config);
           registerBundledSkills(config);
         },
-        event: async ({ event }) => deletion?.handle(event),
+        event: async ({ event }) => {
+          await participantStop?.handle(event);
+          await deletion?.handle(event);
+        },
         dispose,
       };
     } catch (cause: unknown) {

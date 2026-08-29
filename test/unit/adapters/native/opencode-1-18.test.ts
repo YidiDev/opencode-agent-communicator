@@ -197,6 +197,47 @@ test("interrupts through the exact 1.18.23 legacy abort surface and preserves am
   expect(timedOut.calls.some((item) => item.surface === "legacy.abort")).toBe(false);
 });
 
+test("revalidates one exact visible participant activity for stop reconciliation", async () => {
+  const busy = fixture({
+    visibleRoots: [nativeSession("ses_target", "target", 2)],
+    statuses: { ses_target: { type: "busy" } },
+  });
+  expect(
+    await busy.adapter.observeParticipantActivities(
+      workspaceKey,
+      [targetSessionId, sourceSessionId],
+      new AbortController().signal,
+    ),
+  ).toEqual([
+    { sessionId: targetSessionId, activity: "busy" },
+    { sessionId: sourceSessionId, activity: "not_visible" },
+  ]);
+  const absent = fixture({ visibleRoots: [] });
+  expect(
+    await absent.adapter.observeParticipantActivities(
+      workspaceKey,
+      [targetSessionId],
+      new AbortController().signal,
+    ),
+  ).toEqual([{ sessionId: targetSessionId, activity: "not_visible" }]);
+  const abort = new AbortController();
+  abort.abort("disposed");
+  expect(
+    await absent.adapter.observeParticipantActivities(
+      workspaceKey,
+      [targetSessionId],
+      abort.signal,
+    ),
+  ).toEqual([{ sessionId: targetSessionId, activity: "unknown" }]);
+  await expect(
+    busy.adapter.observeParticipantActivities(
+      valid(validateWorkspaceKey("workspace:other")),
+      [targetSessionId],
+      new AbortController().signal,
+    ),
+  ).rejects.toThrow("binding");
+});
+
 describe("OpenCode 1.18.23 native adapter", () => {
   test("observes exact request participants and merged target activity without listing V2 metadata", async () => {
     const fake = fixture({

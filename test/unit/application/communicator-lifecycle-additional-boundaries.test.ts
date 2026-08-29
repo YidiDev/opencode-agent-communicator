@@ -154,6 +154,17 @@ describe("communicator lifecycle state machine", () => {
     expect(lifecycle.schedulerFault).toBe(fault);
   });
 
+  test("exposes the runtime effect signal for lifecycle-owned work", () => {
+    const effects = new AbortController();
+    const lifecycle = new CommunicatorStartupRecoveryLifecycle(
+      token,
+      { stop() {} } as never,
+      summary,
+      { effectSignal: effects.signal, stop() {} } as never,
+    );
+    expect(lifecycle.effectSignal).toBe(effects.signal);
+  });
+
   test("stops the ready lifecycle when an ordinary workflow reports ownership loss", () => {
     const stops: string[] = [];
     const lifecycle = new CommunicatorStartupRecoveryLifecycle(

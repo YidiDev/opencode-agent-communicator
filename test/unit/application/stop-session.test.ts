@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 
+import { ParticipantOperationGate } from "../../../src/application/participant-operation-gate";
 import { type SessionStopPorts, stopSession } from "../../../src/application/stop-session";
 import { validateFencingToken } from "../../../src/domain/ownership";
 import type { ActivityStatus } from "../../../src/domain/sessions";
@@ -67,6 +68,7 @@ function fixture(statuses: ActivityStatus[]) {
       },
     },
     notifications: { notifyTerminal: () => undefined },
+    participantOperations: new ParticipantOperationGate(),
     digest: {
       async sha256(bytes) {
         return new Uint8Array(createHash("sha256").update(bytes).digest());

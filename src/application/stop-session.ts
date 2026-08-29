@@ -8,13 +8,16 @@ import {
   stopCommunicatorForOwnershipLoss,
 } from "./communicator-readiness-port";
 import {
-  createTerminalNotificationEvent,
-  notifyTerminalSafely,
-} from "./request-terminal-notification";
+  ParticipantOperationAbortedFault,
+  ParticipantOperationGateClosedFault,
+} from "./participant-operation-gate";
+import {
+  ParticipantStopTerminalizationFault,
+  terminalizeStoppedParticipant,
+} from "./participant-stop-terminalization";
 import {
   applyNativeStop,
   communicatorStopState,
-  inspectStoppedRequests,
   observeStopParticipants,
   StopDeadlineFault,
   stopExternal,
@@ -109,40 +112,59 @@ async function stopSessionWithinDeadline(
   if (approval !== "approved") {
     return domainFailure("approval_rejected", "Session stop approval was rejected.", false);
   }
-  let fencingToken: import("../domain/ownership").FencingToken;
-  let rawStopped: unknown;
+  return applyApprovedStop(ports, context, target.value);
+}
+
+async function applyApprovedStop(
+  ports: SessionStopPorts,
+  context: SessionStopContext,
+  targetSessionId: import("../domain/sessions").SessionId,
+): Promise<DomainResult<SessionStopResult>> {
   try {
-    fencingToken = communicatorLifecycleFencingToken(ports.readiness);
-    // Approval is only a candidate capability. Revalidate visibility, ownership and time at
-    // the last possible point before the first durable effect.
-    const current = await observeStopParticipants(ports, context, target.value);
-    const currentVisibility = current.ok ? stopVisibilityFailure(current.value) : current;
-    if (!current.ok) return current;
-    if (currentVisibility) return currentVisibility;
-    if (!(await stopExternal(context, () => ports.ownership.isCurrent(fencingToken)))) {
-      stopCommunicatorForOwnershipLoss(ports.readiness);
-      return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
-    }
-    rawStopped = await stopExternal(context, () =>
-      ports.requests.stopPendingRequests({
+    return await ports.participantOperations.run([targetSessionId], context.abort, async () => {
+      const fencingToken = communicatorLifecycleFencingToken(ports.readiness);
+      // Approval is only a candidate capability. Revalidate visibility, ownership and time at
+      // the last possible point before the first durable effect.
+      const current = await observeStopParticipants(ports, context, targetSessionId);
+      const currentVisibility = current.ok ? stopVisibilityFailure(current.value) : current;
+      if (!current.ok) return current;
+      if (currentVisibility) return currentVisibility;
+      if (!(await stopExternal(context, () => ports.ownership.isCurrent(fencingToken)))) {
+        stopCommunicatorForOwnershipLoss(ports.readiness);
+        return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+      }
+      const stopped = await stopExternal(context, () =>
+        terminalizeStoppedParticipant({
+          scope: "all",
+          requests: ports.requests,
+          notifications: ports.notifications,
+          fencingToken,
+          workspaceKey: context.workspaceKey,
+          stoppedSessionId: targetSessionId,
+        }),
+      );
+      return applyNativeStop(
+        ports,
+        context,
+        targetSessionId,
         fencingToken,
-        workspaceKey: context.workspaceKey,
-        stoppedSessionId: target.value,
-      }),
-    );
+        communicatorStopState(stopped),
+      );
+    });
   } catch (cause: unknown) {
+    if (cause instanceof ParticipantOperationAbortedFault) throw new StopDeadlineFault();
+    if (cause instanceof ParticipantOperationGateClosedFault) {
+      return domainFailure("storage_unavailable", "Request storage is unavailable.", true);
+    }
+    if (cause instanceof ParticipantStopTerminalizationFault) {
+      if (cause.code === "ownership_lost") stopCommunicatorForOwnershipLoss(ports.readiness);
+      return cause.code === "ownership_lost"
+        ? domainFailure("ownership_lost", "Coordinator ownership was lost.", false)
+        : domainFailure("storage_unavailable", "Request storage is unavailable.", true);
+    }
     if (cause instanceof OwnershipLostFault) stopCommunicatorForOwnershipLoss(ports.readiness);
     return cause instanceof OwnershipLostFault
       ? domainFailure("ownership_lost", "Coordinator ownership was lost.", false)
       : domainFailure("storage_unavailable", "Request storage is unavailable.", true);
   }
-  const stopped = inspectStoppedRequests(rawStopped, context.workspaceKey, target.value);
-  if (!stopped.ok) return stopped;
-  const state = communicatorStopState(stopped.value);
-  for (const request of stopped.value) {
-    if (request.resolutionState === "pending")
-      throw new TypeError("Uncommitted stop notification.");
-    notifyTerminalSafely(ports.notifications, createTerminalNotificationEvent(request));
-  }
-  return applyNativeStop(ports, context, target.value, fencingToken, state);
 }

@@ -82,7 +82,7 @@ test("a durable request deadline aborts held admission before native steer", asy
     request: { deliveryState: "delivery_unknown" },
   });
   abort.abort("test_cleanup");
-  expect(await blocked).toMatchObject({ ok: false, error: { code: "storage_unavailable" } });
+  expect(await blocked).toMatchObject({ ok: false, error: { code: "request_cancelled" } });
   setup.store.close();
 });
 

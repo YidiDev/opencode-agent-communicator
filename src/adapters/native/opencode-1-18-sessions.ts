@@ -1,3 +1,4 @@
+import { parseOpenCode118ParticipantStatus } from "../../application/participant-stop-evidence";
 import type { ActivityStatus, SessionId } from "../../domain/sessions";
 import { validateSessionId } from "../../domain/sessions";
 
@@ -125,21 +126,7 @@ export function parseActivityMap(value: unknown, label: string): Record<string, 
 }
 
 function activityStatus(value: unknown): ActivityStatus {
-  const entry = snapshotDictionary(value, 4);
-  if (!entry) return "unknown";
-  if (entry.type === "busy" || entry.type === "idle") return entry.type;
-  if (
-    entry.type === "retry" &&
-    Number.isSafeInteger(entry.attempt) &&
-    (entry.attempt as number) >= 0 &&
-    typeof entry.message === "string" &&
-    typeof entry.next === "number" &&
-    Number.isFinite(entry.next) &&
-    entry.next >= 0
-  ) {
-    return "retry";
-  }
-  return "unknown";
+  return parseOpenCode118ParticipantStatus(value) ?? "unknown";
 }
 
 export function mergedActivityStatus(
