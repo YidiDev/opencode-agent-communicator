@@ -35,6 +35,7 @@ import {
   productionMonotonicNowMs,
   productionRuntimeIdentity,
   productionSchedulerTimers,
+  productionSha256,
   productionStartupTimers,
 } from "./primitives";
 import { bridgeTool } from "./tool-bridge";
@@ -263,7 +264,9 @@ export function createCompositionFactory(
           resultRetention: store,
           requestRetention: store,
           starts: store.starts,
+          requestStarts: store,
           nativeStart: native,
+          digest: productionSha256,
           startLimits: configuredStartPolicy(options).limits,
         },
         {

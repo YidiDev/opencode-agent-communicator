@@ -54,6 +54,17 @@ export class RequestRepository {
     return this.preparation.createPrepared(input);
   }
 
+  createPreparedInTransaction(input: PrepareRequestInput): RequestStoreResult {
+    return this.preparation.createPreparedInTransaction(input);
+  }
+
+  getRequestMetadata(input: RequestTransitionInput): RequestMetadata | undefined {
+    this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
+    if (input.workspaceKey !== this.context.workspaceKey || !validateRequestId(input.requestId).ok)
+      return undefined;
+    return selectRequest(this.context, input.workspaceKey, input.requestId);
+  }
+
   private selectPayloadRow(workspace: string, id: string): PayloadRow | undefined {
     return (
       this.context.database

@@ -29,6 +29,8 @@ describe("release package policy", () => {
       "session_request_get",
       "session_request_ack",
       "session_request_cancel",
+      "session_request_send",
+      "session_request_start",
       "session_stop",
       "session_start",
       "session_export",

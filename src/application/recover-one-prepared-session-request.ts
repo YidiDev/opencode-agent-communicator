@@ -103,7 +103,10 @@ export async function recoverOnePreparedSessionRequest(
   if (
     !activity.sourceVisible ||
     !activity.targetVisible ||
-    (activity.targetStatus !== "busy" && activity.targetStatus !== "retry")
+    ((request.deliveryMode ?? "steer") === "steer" &&
+      activity.targetStatus !== "busy" &&
+      activity.targetStatus !== "retry") ||
+    request.deliveryMode === "initial"
   ) {
     return { ok: true, value: "skipped" };
   }

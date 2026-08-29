@@ -107,6 +107,7 @@ async function createInternal(
     sourceSessionId: validated.value.sourceSessionId,
     targetSessionId: validated.value.targetSessionId,
     nativeMessageId,
+    deliveryMode: "steer",
     kind: operation,
     resolutionState: "pending",
     deliveryState: "prepared",
@@ -146,6 +147,7 @@ async function createInternal(
   const prepareInput = {
     fencingToken: context.fencingToken,
     creationOperationId,
+    deliveryMode: "steer",
     request: prepared,
     payloadJson: payload.serialized,
     envelopeJson: envelopeSettlement.value,

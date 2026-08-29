@@ -34,6 +34,29 @@ test("validates optional participant timestamps independently of property order"
   });
 });
 
+test("preserves and correlates durable request delivery provenance", () => {
+  expect(inspectParticipantRequestMetadata({ ...base, deliveryMode: "queue" })).toMatchObject({
+    deliveryMode: "queue",
+  });
+  const linkedStartOperationId = `op_${"b".repeat(32)}`;
+  expect(
+    inspectParticipantRequestMetadata({
+      ...base,
+      deliveryMode: "initial",
+      linkedStartOperationId,
+    }),
+  ).toMatchObject({ deliveryMode: "initial", linkedStartOperationId });
+  expect(inspectParticipantRequestMetadata({ ...base, deliveryMode: "initial" })).toBeUndefined();
+  expect(inspectParticipantRequestMetadata({ ...base, linkedStartOperationId })).toBeUndefined();
+  expect(
+    inspectParticipantRequestMetadata({
+      ...base,
+      deliveryMode: "initial",
+      linkedStartOperationId: "bad",
+    }),
+  ).toBeUndefined();
+});
+
 test("enforces available and acknowledged result lifecycle correlations", () => {
   expect(
     inspectParticipantRequestMetadata({

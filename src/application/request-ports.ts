@@ -1,10 +1,16 @@
 import type { NativeMessageId, RequestId, StartOperationId } from "../domain/generated-ids";
 import type { FencingToken } from "../domain/ownership";
-import type { PendingRequestMetadata, RequestMetadata } from "../domain/request-types";
+import type {
+  PendingRequestMetadata,
+  RequestDeliveryMode,
+  RequestMetadata,
+} from "../domain/request-types";
+import type { StartOperation } from "../domain/session-start";
 import type { ActivityStatus, SessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
 import type {
   ClockPort,
+  NativeQueueAdmissionPort,
   OperationControl,
   OwnershipPort,
   StartupRecoveryBarrier,
@@ -69,6 +75,16 @@ export interface SessionRequestRecoveryPorts {
     RequestDeadlineSchedulePort;
   readonly activity: RequestParticipantActivityPort;
   readonly nativeSteer: NativeSteerAdmissionPort;
+  readonly nativeQueue?: NativeQueueAdmissionPort;
+  readonly requestStarts?: {
+    readonly readSessionRequestStartByOperation?: (input: {
+      readonly fencingToken: FencingToken;
+      readonly workspaceKey: WorkspaceKey;
+      readonly operationId: StartOperationId;
+    }) => Promise<
+      { readonly operation: StartOperation; readonly request: RequestMetadata } | undefined
+    >;
+  };
   readonly ownership: OwnershipPort;
   readonly notifications: CommittedRequestNotificationPort;
   readonly clock: ClockPort;
@@ -92,6 +108,8 @@ export interface PreparedSessionRequestRecoverySummary {
 export interface PrepareRequestInput {
   readonly fencingToken: FencingToken;
   readonly creationOperationId: StartOperationId;
+  readonly deliveryMode?: RequestDeliveryMode;
+  readonly linkedStartOperationId?: StartOperationId;
   readonly request: PendingRequestMetadata & { readonly deliveryState: "prepared" };
   readonly payloadJson: string;
   readonly envelopeJson: string;
@@ -162,6 +180,7 @@ export interface RequestDeadlinePersistencePort extends RequestDeadlineScheduleP
 }
 
 export interface RequestAdmissionPersistencePort {
+  getRequestMetadata?(input: RequestTransitionInput): Promise<RequestMetadata | undefined>;
   /**
    * In one serialized transaction: fences ordinary work; validates metadata, canonical payload,
    * verified envelope, exact payload-derived deadline and byte identity; handles exact pending

@@ -27,6 +27,7 @@ import {
   type ProviderHarness,
   type ProviderRequestGate,
 } from "./harness/provider";
+import { runImmediateRequestJourneys } from "./packed-immediate-request-journeys";
 
 setDefaultTimeout(liveDeadlineMs * 8);
 
@@ -73,6 +74,8 @@ const toolIds = [
   "session_request_get",
   "session_request_ack",
   "session_request_cancel",
+  "session_request_send",
+  "session_request_start",
   "session_stop",
   "session_start",
   "session_export",
@@ -280,7 +283,10 @@ async function launchPackedFixture(): Promise<PackedFixture> {
     isolation = await createIsolatedOpenCodeState({
       providerBaseUrl: provider.baseUrl,
       pluginPath: entryPath,
-      pluginOptions: { stateDirectory: join(staging, "production-state") },
+      pluginOptions: {
+        stateDirectory: join(staging, "production-state"),
+        policies: { start: "allow" },
+      },
     });
     const cliPath = await resolveExactProjectCli(repository);
     await assertPinnedCli(cliPath, isolation);
@@ -674,6 +680,17 @@ test(`runs the exact packed production plugin through OpenCode ${exactOpenCodeVe
     await runStartStopJourney(fixture, invoker, target.id);
     await runAskJourney(fixture, invoker);
     await runWaitJourney(fixture, invoker);
+    await runImmediateRequestJourneys(
+      {
+        async createSession(title, label) {
+          return successful(await fixture.client.session.create({ title }), label).id;
+        },
+        async messages(sessionID, label) {
+          return successful(await fixture.client.session.messages({ sessionID }), label);
+        },
+      },
+      invoker,
+    );
     expect(successful(await fixture.client.instance.dispose(), "production plugin disposal")).toBe(
       true,
     );

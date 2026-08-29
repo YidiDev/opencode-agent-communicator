@@ -129,6 +129,15 @@ Schema v8 adds the private nullable `creation_operation_id` column and a partial
 workspace/operation index. Repository-created requests always carry a validated `op_…` value;
 legacy null rows remain readable but cannot be adopted by new creation reconciliation.
 
+Schema v14 adds the start operation's `idempotency_arguments_sha256` and each request's immutable
+`delivery_mode` (`steer`, `queue`, or `initial`) plus optional `linked_start_operation_id`. A partial
+unique workspace/link index and insert/update triggers require every `initial` request, and only an
+`initial` request, to carry a linked start operation. Existing rows migrate as `steer`; existing start
+operations copy their former argument digest into the new complete-public-argument digest. The
+composite start path then inserts or resumes the start operation and its linked prepared request in
+one fenced `BEGIN IMMEDIATE` transaction. Recovery follows the persisted mode and link rather than
+inferring which native effect to use from transient process state.
+
 An administrator owner label is diagnostic only. Every store construction creates
 a fresh random process-generation identity. Repeated acquisition by one live
 generation returns its existing token, while every valid new-generation takeover

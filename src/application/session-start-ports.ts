@@ -11,6 +11,7 @@ import type {
 import type { SessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
 import type { OperationControl } from "./delivery-ports";
+import type { PrepareRequestInput, RequestStoreFailureCode } from "./request-ports";
 
 export interface StartLimits {
   readonly managedSessionsPerWorkspace: number;
@@ -43,9 +44,63 @@ export interface PrepareStartOperationInput {
   readonly sessionId: SessionId;
   readonly nativeMessageId: NativeMessageId;
   readonly argumentsSha256: Sha256Digest;
+  /** Optional source-scoped idempotency digest when private effect arguments contain generated IDs. */
+  readonly idempotencyArgumentsSha256?: Sha256Digest;
   readonly arguments: ValidatedStartArguments;
   readonly limits: StartLimits;
   readonly nowMs: number;
+}
+
+export interface PrepareSessionRequestStartInput {
+  readonly start: PrepareStartOperationInput;
+  readonly request: PrepareRequestInput;
+}
+
+export type SessionRequestStartStoreResult =
+  | {
+      readonly ok: true;
+      readonly operation: StartOperation;
+      readonly request: import("../domain/request-types").RequestMetadata;
+      readonly idempotencyArgumentsSha256: Sha256Digest;
+    }
+  | {
+      readonly ok: false;
+      readonly code: StartStoreFailureCode | RequestStoreFailureCode;
+    };
+
+export type SessionRequestStartLookupResult =
+  | { readonly ok: true; readonly found: false }
+  | {
+      readonly ok: true;
+      readonly found: true;
+      readonly operation: StartOperation;
+      readonly request: import("../domain/request-types").RequestMetadata;
+    }
+  | { readonly ok: false; readonly code: "idempotency_conflict" | "state_conflict" };
+
+/** Persists a managed start and its initial durable request in one fenced transaction. */
+export interface SessionRequestStartPersistencePort {
+  readonly readSessionRequestStartByOperation?: (input: {
+    readonly fencingToken: FencingToken;
+    readonly workspaceKey: WorkspaceKey;
+    readonly operationId: StartOperationId;
+  }) => Promise<
+    | {
+        readonly operation: StartOperation;
+        readonly request: import("../domain/request-types").RequestMetadata;
+      }
+    | undefined
+  >;
+  readSessionRequestStart(input: {
+    readonly fencingToken: FencingToken;
+    readonly workspaceKey: WorkspaceKey;
+    readonly sourceSessionId: SessionId;
+    readonly idempotencyKey: string;
+    readonly idempotencyArgumentsSha256: Sha256Digest;
+  }): Promise<SessionRequestStartLookupResult>;
+  createOrResumeSessionRequestStart(
+    input: PrepareSessionRequestStartInput,
+  ): Promise<SessionRequestStartStoreResult>;
 }
 
 export type StartStep = "creation" | "title" | "admission";

@@ -8,6 +8,8 @@ export interface RequestRow {
   readonly sourceSessionId: unknown;
   readonly targetSessionId: unknown;
   readonly nativeMessageId: unknown;
+  readonly deliveryMode?: unknown;
+  readonly linkedStartOperationId?: unknown;
   readonly kind: unknown;
   readonly resolutionState: unknown;
   readonly deliveryState: unknown;
@@ -37,6 +39,7 @@ export interface RequestRow {
 export const requestMetadataColumns = `
 id, workspace_key AS workspaceKey, source_session_id AS sourceSessionId,
 target_session_id AS targetSessionId, native_message_id AS nativeMessageId, kind,
+delivery_mode AS deliveryMode, linked_start_operation_id AS linkedStartOperationId,
 resolution_state AS resolutionState, delivery_state AS deliveryState, result_state AS resultState,
 payload_byte_length AS payloadByteLength, payload_sha256 AS payloadSha256,
 created_at_ms AS createdAtMs, updated_at_ms AS updatedAtMs, deadline_at_ms AS deadlineAtMs,
@@ -76,6 +79,7 @@ export function hydrateRequest(row: RequestRow): RequestMetadata {
     sourceSessionId: row.sourceSessionId,
     targetSessionId: row.targetSessionId,
     nativeMessageId: row.nativeMessageId,
+    deliveryMode: row.deliveryMode ?? "steer",
     kind: row.kind,
     resolutionState: row.resolutionState,
     deliveryState: row.deliveryState,
@@ -85,6 +89,8 @@ export function hydrateRequest(row: RequestRow): RequestMetadata {
     updatedAtMs: row.updatedAtMs,
     deadlineAtMs: row.deadlineAtMs,
   };
+  if (row.linkedStartOperationId !== null && row.linkedStartOperationId !== undefined)
+    candidate.linkedStartOperationId = row.linkedStartOperationId;
   for (const [property, rowProperty] of optionalMappings) {
     if (row[rowProperty] !== null) candidate[property] = row[rowProperty];
   }

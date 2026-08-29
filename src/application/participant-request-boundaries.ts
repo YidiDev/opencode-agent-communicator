@@ -1,4 +1,4 @@
-import { validateRequestId } from "../domain/generated-ids";
+import { validateRequestId, validateStartOperationId } from "../domain/generated-ids";
 import { validateSessionId } from "../domain/sessions";
 import type { ParticipantRequestMetadata } from "./request-ports";
 import { snapshotDataRecord } from "./strict-port-boundaries";
@@ -11,6 +11,8 @@ const allowedKeys = [
   "targetSessionId",
   "resolutionState",
   "deliveryState",
+  "deliveryMode",
+  "linkedStartOperationId",
   "resultState",
   "createdAtMs",
   "updatedAtMs",
@@ -27,7 +29,31 @@ const allowedKeys = [
   "acknowledgedAtMs",
 ] as const;
 
-const requiredKeys = allowedKeys.slice(0, 11);
+const requiredKeys = [
+  "requestId",
+  "participantRole",
+  "kind",
+  "sourceSessionId",
+  "targetSessionId",
+  "resolutionState",
+  "deliveryState",
+  "resultState",
+  "createdAtMs",
+  "updatedAtMs",
+  "deadlineAtMs",
+] as const;
+const optionalTimeKeys = [
+  "resolvedAtMs",
+  "submittedAtMs",
+  "deliveryUnknownAtMs",
+  "admittedAtMs",
+  "promotedAtMs",
+  "deliveryFailedAtMs",
+  "resultAvailableAtMs",
+  "resultExpiresAtMs",
+  "resultExpiredAtMs",
+  "acknowledgedAtMs",
+] as const;
 const resolutions = [
   "pending",
   "answered",
@@ -73,6 +99,14 @@ export function inspectParticipantRequestMetadata(
     data.sourceSessionId === data.targetSessionId ||
     !resolutions.includes(data.resolutionState as string) ||
     !deliveries.includes(data.deliveryState as string) ||
+    (data.deliveryMode !== undefined &&
+      data.deliveryMode !== "steer" &&
+      data.deliveryMode !== "queue" &&
+      data.deliveryMode !== "initial") ||
+    (data.linkedStartOperationId !== undefined &&
+      !validateStartOperationId(data.linkedStartOperationId).ok) ||
+    ((data.deliveryMode ?? "steer") === "initial") !==
+      Object.hasOwn(data, "linkedStartOperationId") ||
     !results.includes(data.resultState as string) ||
     !safeTime(data.createdAtMs) ||
     !safeTime(data.updatedAtMs) ||
@@ -81,7 +115,7 @@ export function inspectParticipantRequestMetadata(
     data.deadlineAtMs <= data.createdAtMs
   )
     return undefined;
-  for (const key of allowedKeys.slice(11)) {
+  for (const key of optionalTimeKeys) {
     if (Object.hasOwn(data, key) && !safeTime(data[key])) return undefined;
   }
 

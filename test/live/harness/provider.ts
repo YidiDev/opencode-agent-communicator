@@ -182,6 +182,47 @@ function productionToolResponse(serialized: string): Response | undefined {
       `session_request_${request[1]}`,
       JSON.stringify({ request_id: request[2] }),
     );
+  const requestSendAsk = serialized.match(
+    /production-session-request-send-ask:(ses_[A-Za-z0-9]+)/,
+  )?.[1];
+  if (requestSendAsk) {
+    return toolResponse(
+      "session_request_send",
+      JSON.stringify({
+        session_id: requestSendAsk,
+        content: "production-process-ask-request",
+        request: {
+          kind: "ask",
+          questions: [{ prompt: "Ship packed acceptance?", options: ["yes", "no"] }],
+          timeout_seconds: 30,
+        },
+      }),
+    );
+  }
+  const requestSendCancel = serialized.match(
+    /production-session-request-send-cancel:(ses_[A-Za-z0-9]+)/,
+  )?.[1];
+  if (requestSendCancel) {
+    return toolResponse(
+      "session_request_send",
+      JSON.stringify({
+        session_id: requestSendCancel,
+        content: "production-process-wait-request production-cancel",
+        request: { kind: "wait", milestone: "production-cancel", timeout_seconds: 30 },
+      }),
+    );
+  }
+  if (serialized.includes("production-session-request-start-wait")) {
+    return toolResponse(
+      "session_request_start",
+      JSON.stringify({
+        idempotency_key: "packed-live-request-start",
+        initial_message: "production-request-start-target-ready",
+        title: "Packed durable request target",
+        request: { kind: "wait", milestone: "production-request-start", timeout_seconds: 30 },
+      }),
+    );
+  }
   if (serialized.includes("production-session-start")) {
     return toolResponse(
       "session_start",

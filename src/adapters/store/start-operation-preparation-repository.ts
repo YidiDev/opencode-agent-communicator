@@ -32,54 +32,65 @@ export class StartOperationPreparationRepository {
       return { ok: false, code: "state_conflict" };
     try {
       return this.context.database
-        .transaction(() => {
-          this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
-          const existing = this.context.database
-            .query<
-              StartOperationRow & { readonly managedSessionLimit: number },
-              [string, string, string]
-            >(
-              `SELECT ${startOperationColumns}, managed_session_limit AS managedSessionLimit
-               FROM start_operations
-             WHERE workspace_key = ? AND source_session_id = ? AND idempotency_key = ?`,
-            )
-            .get(input.workspaceKey, input.sourceSessionId, input.arguments.idempotencyKey);
-          if (existing) {
-            const operation = hydrateStartOperation(existing);
-            if (operation.argumentsSha256 !== input.argumentsSha256) {
-              return { ok: false as const, code: "idempotency_conflict" as const };
-            }
-            const reservation = this.context.database
-              .query<{ found: number }, [string]>(
-                "SELECT 1 AS found FROM managed_sessions WHERE operation_id = ?",
-              )
-              .get(operation.id);
-            if (!reservation && operation.creationState === "prepared") {
-              this.maintenance.collectExpiredRateEvents(input);
-              const quota = this.checkAdmissionLimits(input, false, existing.managedSessionLimit);
-              if (quota) return { ok: false as const, code: quota };
-              this.insertReservation(input, operation.id, operation.sessionId);
-              this.insertRateEvent(input);
-            }
-            return { ok: true as const, operation };
-          }
-          this.maintenance.collectExpiredRateEvents(input);
-          this.maintenance.collectExpiredTerminalOperations(input);
-          const quota = this.checkAdmissionLimits(input);
-          if (quota) return { ok: false as const, code: quota };
-          this.context.database.run(
-            "INSERT OR IGNORE INTO workspaces(workspace_key, created_at_ms) VALUES (?, ?)",
-            [input.workspaceKey, input.nowMs],
-          );
-          this.insert(input);
-          const operation = this.records.select(input.operationId);
-          if (!operation) throw new Error("Start operation insertion was not observable.");
-          return { ok: true as const, operation };
-        })
+        .transaction(() => this.createOrResumeInTransaction(input))
         .immediate();
     } catch (cause: unknown) {
       return failure(cause);
     }
+  }
+
+  createOrResumeInTransaction(input: PrepareStartOperationInput): StartStoreResult {
+    if (input.workspaceKey !== this.context.workspaceKey)
+      return { ok: false, code: "state_conflict" };
+    this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
+    const existing = this.context.database
+      .query<
+        StartOperationRow & {
+          readonly managedSessionLimit: number;
+          readonly idempotencyArgumentsSha256: string;
+        },
+        [string, string, string]
+      >(
+        `SELECT ${startOperationColumns}, managed_session_limit AS managedSessionLimit
+               , COALESCE(idempotency_arguments_sha256, arguments_sha256) AS idempotencyArgumentsSha256
+               FROM start_operations
+             WHERE workspace_key = ? AND source_session_id = ? AND idempotency_key = ?`,
+      )
+      .get(input.workspaceKey, input.sourceSessionId, input.arguments.idempotencyKey);
+    if (existing) {
+      const operation = hydrateStartOperation(existing);
+      if (
+        existing.idempotencyArgumentsSha256 !==
+        (input.idempotencyArgumentsSha256 ?? input.argumentsSha256)
+      ) {
+        return { ok: false as const, code: "idempotency_conflict" as const };
+      }
+      const reservation = this.context.database
+        .query<{ found: number }, [string]>(
+          "SELECT 1 AS found FROM managed_sessions WHERE operation_id = ?",
+        )
+        .get(operation.id);
+      if (!reservation && operation.creationState === "prepared") {
+        this.maintenance.collectExpiredRateEvents(input);
+        const quota = this.checkAdmissionLimits(input, false, existing.managedSessionLimit);
+        if (quota) return { ok: false as const, code: quota };
+        this.insertReservation(input, operation.id, operation.sessionId);
+        this.insertRateEvent(input);
+      }
+      return { ok: true, operation };
+    }
+    this.maintenance.collectExpiredRateEvents(input);
+    this.maintenance.collectExpiredTerminalOperations(input);
+    const quota = this.checkAdmissionLimits(input);
+    if (quota) return { ok: false as const, code: quota };
+    this.context.database.run(
+      "INSERT OR IGNORE INTO workspaces(workspace_key, created_at_ms) VALUES (?, ?)",
+      [input.workspaceKey, input.nowMs],
+    );
+    this.insert(input);
+    const operation = this.records.select(input.operationId);
+    if (!operation) throw new Error("Start operation insertion was not observable.");
+    return { ok: true, operation };
   }
 
   private checkAdmissionLimits(
@@ -158,16 +169,17 @@ export class StartOperationPreparationRepository {
   private insert(input: PrepareStartOperationInput): void {
     this.context.database.run(
       `INSERT INTO start_operations(id, workspace_key, source_session_id, idempotency_key,
-         arguments_sha256, session_id, native_message_id, requested_agent, requested_model,
+         arguments_sha256, idempotency_arguments_sha256, session_id, native_message_id, requested_agent, requested_model,
          title_requested, unresolved_provenance_limit, creation_state, title_state, admission_state,
          created_at_ms, updated_at_ms, managed_session_limit)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', 'not_started', 'not_started', ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', 'not_started', 'not_started', ?, ?, ?)`,
       [
         input.operationId,
         input.workspaceKey,
         input.sourceSessionId,
         input.arguments.idempotencyKey,
         input.argumentsSha256,
+        input.idempotencyArgumentsSha256 ?? input.argumentsSha256,
         input.sessionId,
         input.nativeMessageId,
         input.arguments.agent ?? null,

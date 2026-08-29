@@ -36,6 +36,17 @@ export class RequestPreparationRepository {
   ) {}
 
   createPrepared(input: PrepareRequestInput): RequestStoreResult {
+    const atLimit = requestPageLimitReached(this.context);
+    try {
+      return this.context.database
+        .transaction(() => this.createPreparedInTransaction(input))
+        .immediate();
+    } catch (cause: unknown) {
+      return requestFailure(cause, atLimit);
+    }
+  }
+
+  createPreparedInTransaction(input: PrepareRequestInput): RequestStoreResult {
     if (!validateStartOperationId(input.creationOperationId).ok)
       return { ok: false, code: "state_conflict" };
     if (input.request.sourceSessionId === input.request.targetSessionId)
@@ -43,31 +54,22 @@ export class RequestPreparationRepository {
     const content = validatePreparedContent(input.request, input.payloadJson, input.envelopeJson);
     if (input.request.workspaceKey !== this.context.workspaceKey || !content)
       return { ok: false, code: "state_conflict" };
-    const atLimit = requestPageLimitReached(this.context);
-    try {
-      return this.context.database
-        .transaction(() => {
-          this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
-          const rateNowMs = requestStoreNowMs(this.context);
-          const replay = this.replayResult(input, content);
-          if (replay) return replay;
-          if (this.hasNativeCollision(input) || this.hasCreationOperationCollision(input))
-            return { ok: false as const, code: "state_conflict" as const };
-          const rejected = this.admissionRejection(input, content, rateNowMs);
-          if (rejected) return { ok: false as const, code: rejected };
-          this.context.database.run(
-            "INSERT OR IGNORE INTO workspaces(workspace_key, created_at_ms) VALUES (?, ?)",
-            [input.request.workspaceKey, input.request.createdAtMs],
-          );
-          this.insertPrepared(input, content.retainedContentBytes, rateNowMs);
-          const request = selectRequest(this.context, input.request.workspaceKey, input.request.id);
-          if (!request) throw new StoreIntegrityError("A prepared request was not persisted.");
-          return { ok: true as const, request };
-        })
-        .immediate();
-    } catch (cause: unknown) {
-      return requestFailure(cause, atLimit);
-    }
+    this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
+    const rateNowMs = requestStoreNowMs(this.context);
+    const replay = this.replayResult(input, content);
+    if (replay) return replay;
+    if (this.hasNativeCollision(input) || this.hasCreationOperationCollision(input))
+      return { ok: false as const, code: "state_conflict" as const };
+    const rejected = this.admissionRejection(input, content, rateNowMs);
+    if (rejected) return { ok: false as const, code: rejected };
+    this.context.database.run(
+      "INSERT OR IGNORE INTO workspaces(workspace_key, created_at_ms) VALUES (?, ?)",
+      [input.request.workspaceKey, input.request.createdAtMs],
+    );
+    this.insertPrepared(input, content.retainedContentBytes, rateNowMs);
+    const request = selectRequest(this.context, input.request.workspaceKey, input.request.id);
+    if (!request) throw new StoreIntegrityError("A prepared request was not persisted.");
+    return { ok: true, request };
   }
 
   reconcilePreparedCreation(input: PrepareRequestInput): RequestCreationReconciliation {
@@ -90,6 +92,8 @@ export class RequestPreparationRepository {
         const existing = hydrateRequest(row);
         if (
           row.creationOperationId !== input.creationOperationId ||
+          (existing.deliveryMode ?? "steer") !== (input.deliveryMode ?? "steer") ||
+          existing.linkedStartOperationId !== input.linkedStartOperationId ||
           !hasRequestIdentity(snapshotRequestIdentity(input.request), existing)
         )
           return { outcome: "conflict" as const };
@@ -112,6 +116,8 @@ export class RequestPreparationRepository {
     if (!replay) return undefined;
     const existing = hydrateRequest(replay);
     return replay.creationOperationId === input.creationOperationId &&
+      (existing.deliveryMode ?? "steer") === (input.deliveryMode ?? "steer") &&
+      existing.linkedStartOperationId === input.linkedStartOperationId &&
       replay.retainedContentBytes === content.retainedContentBytes &&
       exactPreparedReplay(existing, input, replay)
       ? { ok: true, request: existing }
@@ -179,10 +185,11 @@ export class RequestPreparationRepository {
     const request = input.request;
     this.context.database.run(
       `INSERT INTO requests(id, workspace_key, source_session_id, target_session_id,
-       native_message_id, creation_operation_id, kind, resolution_state, delivery_state, result_state,
+       native_message_id, creation_operation_id, delivery_mode, linked_start_operation_id,
+       kind, resolution_state, delivery_state, result_state,
        payload_byte_length, retained_content_byte_length, payload_sha256,
        created_at_ms, updated_at_ms, deadline_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'prepared', 'none', ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'prepared', 'none', ?, ?, ?, ?, ?, ?)`,
       [
         request.id,
         request.workspaceKey,
@@ -190,6 +197,8 @@ export class RequestPreparationRepository {
         request.targetSessionId,
         request.nativeMessageId,
         input.creationOperationId,
+        input.deliveryMode ?? "steer",
+        input.linkedStartOperationId ?? null,
         request.kind,
         request.payloadByteLength,
         retainedBytes,

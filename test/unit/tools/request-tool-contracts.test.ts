@@ -16,6 +16,7 @@ import {
   sessionRequestGetFailureCodes,
   sessionRequestListArgumentsSchema,
   sessionRequestListFailureCodes,
+  sessionRequestSendArgumentsSchema,
   sessionRespondArgumentsSchema,
   sessionRespondFailureCodes,
   sessionSignalArgumentsSchema,
@@ -35,6 +36,13 @@ const context = { sessionID: "ses_source", abort: new AbortController().signal }
 
 describe("request tool argument contracts", () => {
   test("accepts canonical strict request arguments", () => {
+    expect(
+      sessionRequestSendArgumentsSchema.safeParse({
+        session_id: "ses_target",
+        content: "Review the patch.",
+        request: { kind: "wait", milestone: "reviewed", timeout_seconds: 30 },
+      }).success,
+    ).toBe(true);
     expect(
       sessionAskArgumentsSchema.safeParse({
         session_id: "ses_target",
@@ -141,6 +149,7 @@ describe("request tool failure contracts", () => {
   test("declares exact blocking and query failure surfaces", () => {
     expect(Object.keys(requestToolFailureCodes)).toEqual([
       "session_ask",
+      "session_request_send",
       "session_respond",
       "session_wait",
       "session_signal",

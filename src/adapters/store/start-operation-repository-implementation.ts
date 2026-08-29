@@ -41,6 +41,12 @@ export class StartOperationRepository implements StartOperationPersistencePort {
     return this.preparation.createOrResume(input);
   }
 
+  createOrResumeInTransaction(
+    input: Parameters<StartOperationPersistencePort["createOrResume"]>[0],
+  ): StartStoreResult {
+    return this.preparation.createOrResumeInTransaction(input);
+  }
+
   async isManagedSession(input: Parameters<StartOperationPersistencePort["isManagedSession"]>[0]) {
     this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
     if (input.workspaceKey !== this.context.workspaceKey) return false;

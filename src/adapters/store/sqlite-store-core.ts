@@ -67,12 +67,13 @@ export class SqliteStoreCore {
   protected readonly requestResultRetentionRepository: RequestResultRetentionRepository;
   protected readonly requestStopRepository: RequestStopRepository;
   protected readonly maintenanceRepository: StoreMaintenanceRepository;
+  protected readonly startRepository: StartOperationRepository;
   protected readonly access: SqliteStoreOperationAccess;
   private readonly database: Database;
   private readonly privateState: PreparedPrivateState;
   private readonly maximumDatabaseBytes: number;
   private readonly databaseLifecycle: SqliteDatabaseLifecycle;
-  private readonly context: StoreContext;
+  protected readonly context: StoreContext;
   private isClosed = false;
 
   constructor(options: LinuxBunSqliteStoreOptions) {
@@ -214,9 +215,9 @@ export class SqliteStoreCore {
       this.ownershipRepository,
     );
     this.requestStopRepository = new RequestStopRepository(this.context, this.ownershipRepository);
-    this.starts = createStartOperationStoreFacade(
-      new StartOperationRepository(this.context, this.ownershipRepository),
-      (operation) => this.access.mutate(operation),
+    this.startRepository = new StartOperationRepository(this.context, this.ownershipRepository);
+    this.starts = createStartOperationStoreFacade(this.startRepository, (operation) =>
+      this.access.mutate(operation),
     );
     this.requestParticipantQueryRepository = new RequestParticipantQueryRepository(
       this.context,

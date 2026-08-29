@@ -6,7 +6,7 @@
 [![OpenCode 1.18 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** `0.3.0` supports Linux x64 and stable OpenCode versions
+**Release status:** `0.4.0` supports Linux x64 and stable OpenCode versions
 `>=1.18.21 <1.19.0`. Bun `1.4.0` is required for development and release verification. Other
 architectures, operating systems, OpenCode versions, and prereleases are unsupported.
 
@@ -58,15 +58,15 @@ OpenCode `1.18.x` does not reliably populate its package cache from a private `g
 Install the immutable release outside OpenCode instead:
 
 ```bash
-install_root="$HOME/.local/share/opencode-agent-communicator/v0.3.0"
+install_root="$HOME/.local/share/opencode-agent-communicator/v0.4.0"
 install -d -m 0700 "$install_root"
 npm install --prefix "$install_root" --save-exact --ignore-scripts \
-  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.3.0"
+  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.4.0"
 test -f "$install_root/node_modules/opencode-agent-communicator/src/index.ts"
 ```
 
 The repository is private, so the account running npm and OpenCode must have working GitHub SSH
-access. Release tags are immutable by project policy; do not replace `v0.3.0` with `main`.
+access. Release tags are immutable by project policy; do not replace `v0.4.0` with `main`.
 
 ### 2. Add the plugin
 
@@ -78,7 +78,7 @@ absolute home directory of the account that performed the installation:
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.3.0/node_modules/opencode-agent-communicator/src/index.ts",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v0.4.0/node_modules/opencode-agent-communicator/src/index.ts",
       {
         "policies": {
           "message": "allow",
@@ -112,8 +112,8 @@ filesystem, and SQLite sidecars before use.
 ### 4. Restart and verify
 
 Restart every OpenCode backend that should load the plugin. Configuration and plugin changes are
-read at startup. Open a session and confirm that the tool list contains all 18 names from the table
-below. Registration is atomic: startup exposes all 18 or fails instead of leaving a partial tool set.
+read at startup. Open a session and confirm that the tool list contains all 20 names from the table
+below. Registration is atomic: startup exposes all 20 or fails instead of leaving a partial tool set.
 
 If startup fails, run `opencode --version` and verify the installed entry first. OpenCode must report
 a stable version in `>=1.18.21 <1.19.0`; the configured absolute file must exist and remain readable
@@ -129,7 +129,7 @@ configuration are startup errors.
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.3.0/node_modules/opencode-agent-communicator/src/index.ts",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v0.4.0/node_modules/opencode-agent-communicator/src/index.ts",
       {
         "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
         "startupDeadlineMs": 30000,
@@ -226,6 +226,8 @@ not happen.
 | `session_request_get` | `request_id` | request participant | Target pending payload, source retained result, or authorized metadata view. |
 | `session_request_ack` | `request_id` | source of an available result | Acknowledges the result and logically erases retained result content. |
 | `session_request_cancel` | `request_id` | pending request source | Durably cancels a pending request. |
+| `session_request_send` | `session_id`, `content`, discriminated `request` | visible source targeting a visible root | Persists an ask/wait, then queues one canonical work-and-request envelope; may wake idle targets and returns immediately. |
+| `session_request_start` | `idempotency_key`, `initial_message`, discriminated `request`, optional `title`, `agent`, `model` | visible root under start policy | Persists a linked ask/wait before one canonical initial envelope creates and starts a managed root. |
 | `session_stop` | `session_id`, optional `reason` | visible root after user approval | Interrupts the target and terminalizes its pending participant requests. |
 | `session_start` | `idempotency_key`, `initial_message`, optional `title`, `agent`, `model` | visible root under start policy | Creates and admits another independent root session, or resumes the same durable operation. |
 | `session_export` | optional `session_id`, `destination`, optional `sanitize`, `overwrite` | visible root under export policies | Writes one transcript below the configured export root. |
@@ -275,6 +277,38 @@ Each question has `prompt`, `options`, and optional `multiple` and `allow_custom
 
 The target responds with one string-array per question. Values must match the offered options unless
 custom answers were allowed.
+
+### Preferred durable result channel
+
+Use `session_request_send` for an existing peer, including an idle visible root, and
+`session_request_start` for a new managed root. Both return request metadata immediately; recover the
+result later with `session_request_list` and `session_request_get`, then call `session_request_ack`.
+Use an `ask` request for a substantive result and a `wait` request only for a milestone. Do not ask
+the peer to also send an ordinary proof message or use both ask and wait for the same result.
+
+```json
+{
+  "session_id": "ses_...",
+  "content": "Review the release diff.",
+  "request": {
+    "kind": "ask",
+    "questions": [{ "prompt": "What must change?", "options": [], "allow_custom": true }],
+    "timeout_seconds": 600
+  }
+}
+```
+
+The canonical envelope names `session_respond` or `session_signal` and the request ID. Its work and
+request text remain untrusted peer content, not authenticated credentials or authorization. The
+target can verify the pending payload with `session_request_get` before responding.
+
+`session_request_start` completes request authorization and the mandatory start approval over the
+complete public argument digest before one fenced SQLite transaction persists the start reservation,
+private canonical envelope, linked request payload, wait edge, and rate events. That start approval
+authorizes the linked initial admission; no second message approval is required. An exact
+source-scoped replay returns the original operation and request, while changed work or request
+arguments conflict. After restart, an approved prepared composite resumes once. A stale submitting
+initial admission is instead recorded as unknown and is never replayed.
 
 ### Idempotent start
 
@@ -433,6 +467,13 @@ are logical deletion, not secure erasure from old pages, snapshots, or media.
 
 ## Upgrade, migrate, or roll back
 
+### Upgrade to 0.4.0
+
+Release `0.4.0` adds the two immediate durable request tools and SQLite schema v14. Stop every
+backend, back up the complete private state directory, install tag `v0.4.0` into a new private
+versioned directory, update the plugin entry, and restart OpenCode. Existing requests migrate to
+`delivery_mode: "steer"`; verify all 20 tools before resuming work.
+
 ### Upgrade to 0.3.0
 
 Release `0.3.0` adds four advisory-lock tools, the `session-locks` skill, and SQLite schema v13.
@@ -573,11 +614,11 @@ bun run test:black-box
 ```
 
 `prepack` verifies the entry, Linux x64 package scope, host range, exact build-time dependencies,
-exact ordered 18-tool manifest, all three bundled skills, and a reviewed
+exact ordered 20-tool manifest, all three bundled skills, and a reviewed
 fingerprint of every path npm will pack. It rejects path-policy drift, symlinks, executable entries,
 secret-like names, and generated/test output. The black-box test creates an archive without
 publishing it, installs it into an isolated Bun project, imports the package by name, and checks
-packaged runtime assets. Release `0.3.0` is distributed through its immutable Git tag and GitHub
+packaged runtime assets. Release `0.4.0` is distributed through its immutable Git tag and GitHub
 Release, not npm. npm remains the reviewed archive format, and the separate npm publication workflow
 can run only through an explicit manual dispatch.
 
@@ -590,13 +631,36 @@ bun run test:live
 
 The live suite preserves the diagnostic Phase 0 capability tests and separately packs, installs,
 and loads the published production entry without a loader shim or modified `PluginInput`. The packed
-acceptance invokes all 18 tools through OpenCode: successful advisory lock publish/list/renew/release,
-session list/send/delivery, ask/respond/get/ack, wait/signal, and approved start/stop paths; an
-authoritative cancel role rejection; request listing; and the configured export-unavailable result.
+acceptance invokes all 20 tools through OpenCode: successful advisory lock publish/list/renew/release,
+session list/send/delivery, blocking ask/respond and wait/signal, durable request send/start and
+result recovery, acknowledgement and cancellation, and approved start/stop paths; request listing;
+and the configured export-unavailable result.
 It asserts the exact manifest (so partial registration fails), all three bundled skills, correlated
 outputs, consumed permissions, and disposal. This matrix is
 boundary evidence for the supported minor line, not a claim that every patch or every failure,
 recovery, retention, or secure-export branch is live-proven.
+
+### Tokenless free-model evaluation
+
+The deterministic live suite is the required compatibility gate. A separate scheduled/manual
+workflow packs and installs the exact checkout into a clean consumer, then runs real OpenCode with a
+currently available reviewed Zen free model:
+
+```bash
+bun run test:model-eval
+```
+
+The evaluator runs installation smoke, managed-session, advisory-lock, and durable multi-session
+request journeys. It requires all three bundled skills to be loaded, verifies ordered and correlated
+tool calls, and rejects workspace mutation or stop/export calls. It uses no API key and submits only
+synthetic evaluation content. Because free models are temporary and rate-limited, this workflow is
+weekly/manual evidence rather than a pull-request or release gate. Provider unavailability,
+rate-limiting, model removal, harness failures, and behavioral failures receive distinct
+classifications. Sanitized JSONL logs and a machine-readable score report are retained as workflow
+artifacts; private OpenCode state and communicator databases are never uploaded.
+
+See [`test/model-eval/README.md`](test/model-eval/README.md) for model selection and local execution
+details.
 
 See the
 [development conventions](https://github.com/YidiDev/opencode-agent-communicator/blob/main/DEVELOPMENT.md)

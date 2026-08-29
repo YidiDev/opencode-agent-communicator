@@ -1,3 +1,4 @@
+import type { Sha256DigestPort } from "../domain/message-payload";
 import type { WorkspaceKey } from "../domain/workspaces";
 import type { AdvisoryLockPersistencePort } from "./advisory-lock-ports";
 import type {
@@ -26,6 +27,7 @@ import type {
 import type { RequestRuntime } from "./request-runtime";
 import type {
   NativeSessionStartPort,
+  SessionRequestStartPersistencePort,
   StartLimits,
   StartOperationPersistencePort,
 } from "./session-start-ports";
@@ -50,7 +52,9 @@ export interface CommunicatorStartupRecoveryPorts {
   readonly resultRetention: RequestResultRetentionPersistencePort;
   readonly requestRetention: RequestRetentionPersistencePort;
   readonly starts: StartOperationPersistencePort;
+  readonly requestStarts?: SessionRequestStartPersistencePort;
   readonly nativeStart: NativeSessionStartPort;
+  readonly digest?: Sha256DigestPort;
   readonly startLimits?: StartLimits;
 }
 
