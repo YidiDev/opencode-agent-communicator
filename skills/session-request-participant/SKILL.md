@@ -72,7 +72,9 @@ Follow this sequence when you need input from another session:
 Public-message admission does not prove activation or execution. Ask/wait never wake an idle target, poll
 for activity, retry a raced admission, or fall back to a queue. If an operation is ambiguous, use
 delivery or durable inbox/outbox recovery instead of resending it. Invocation loss leaves a durable
-request pending; an explicit abort cancels communicator state but cannot retract admitted input.
+request pending; an explicit abort cancels communicator state but cannot retract admitted input. A
+later authoritative idle observation returns `target_stopped` or `source_stopped` to a still-blocked
+caller.
 
 ## Use destructive and disclosure tools conservatively
 

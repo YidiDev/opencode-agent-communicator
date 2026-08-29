@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 
+import { ParticipantOperationGate } from "../../../../src/application/participant-operation-gate";
 import { RequestRuntime } from "../../../../src/application/request-runtime";
 import { stopSession } from "../../../../src/application/stop-session";
 import {
@@ -65,6 +66,7 @@ describe("fenced session stop request terminalization", () => {
         },
         ownership: store,
         notifications: runtime,
+        participantOperations: new ParticipantOperationGate(),
         digest: {
           async sha256(bytes) {
             return new Uint8Array(createHash("sha256").update(bytes).digest());

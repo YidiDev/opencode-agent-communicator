@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { ParticipantOperationGate } from "../../../src/application/participant-operation-gate";
 import type { CommunicatorOptions } from "../../../src/composition/config";
 import { communicatorToolIds, constructToolContracts } from "../../../src/composition/tools";
 import { blockingRequestDeadlineMarginMs } from "../../../src/domain/request-constants";
@@ -52,9 +53,9 @@ describe("atomic communicator tool construction", () => {
       store: { starts: {} } as never,
       runtime: {} as never,
       lifecycle: lifecycle as never,
+      participantOperations: new ParticipantOperationGate(),
       exporter: { writeExport: async () => ({ ok: false, code: "export_unavailable" }) },
     });
-
     expect(Object.keys(contracts)).toEqual([...communicatorToolIds]);
     expect(Object.keys(contracts)).toHaveLength(20);
     expect(Object.isFrozen(contracts)).toBe(true);
@@ -144,6 +145,7 @@ describe("atomic communicator tool construction", () => {
       store: requests,
       runtime: setup.runtime,
       lifecycle: lifecycle as never,
+      participantOperations: setup.ports.participantOperations,
       exporter: { writeExport: async () => ({ ok: false, code: "export_unavailable" }) },
     });
     const execution = contracts.session_ask.execute(
@@ -154,7 +156,6 @@ describe("atomic communicator tool construction", () => {
       },
       { sessionID: setup.source, abort: abort.signal },
     );
-
     const result = await execution;
     expect(events).toEqual(["create", "claim", "reconcile", "complete", "reconcile"]);
     abort.abort("test_complete");
@@ -186,6 +187,7 @@ describe("atomic communicator tool construction", () => {
         stop: () => undefined,
         scheduler: {},
       } as never,
+      participantOperations: setup.ports.participantOperations,
       exporter: { writeExport: async () => ({ ok: false, code: "export_unavailable" }) },
       clock: { nowMs: () => nowMs },
       blockingTimers: {

@@ -25,6 +25,7 @@ function incompatibleNative(): OpenCodeNativeAdapter {
       targetVisible: false,
       targetStatus: "unknown",
     }),
+    observeParticipantActivity: async () => "unknown",
     interruptSession: async () => "unknown",
     createRootSession: async () => "unknown",
     reconcileRootSession: async () => "unknown",

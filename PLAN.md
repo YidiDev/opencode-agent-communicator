@@ -535,9 +535,9 @@ The target must be observed `busy` or `retry`. If idle, no request is persisted
 and `target_idle` tells the caller to queue a wake message and inspect status.
 If status is unknown, the operation fails closed.
 
-After the active check, the coordinator persists the durable request and
-absolute deadline before V2 steer admission. A target may race to idle between
-the check and admission. The exact native result is reported or recorded; the
+The coordinator serializes the final active check and durable creation against
+participant stop processing for both source and target. It then performs V2
+steer admission. The exact native result is reported or recorded; the
 coordinator never polls, retries, or converts the request into a queued wake.
 
 On confirmed admission failure, the request transitions terminal and content
@@ -694,9 +694,19 @@ Stopping a session transitions pending requests by role:
 
 Each transition is atomic, logically erases payload/result content, and rejects
 late actions with the stored reason. Here `source_stopped`/`target_stopped` mean
-the approved communicator stop was applied to coordination state; they do not
-assert that a native interrupt occurred. This is why an already-idle stop still
+the participant ceased active execution, either through an approved
+communicator stop or a fresh authoritative idle observation. They do not assert
+that a native interrupt occurred. This is why an already-idle stop still
 terminates requests with those reasons.
+
+Pinned `session.idle` and idle `session.status` events are wake hints only. The
+coordinator revalidates the exact visible root and current idle state through
+the configured workspace adapter before a fenced transition. Duplicate hints
+are coalesced, missed hints are covered by a bounded pending-participant
+anti-entropy pass, and busy, retry, unknown, invisible, malformed, or foreign
+observations never authorize terminalization. Request creation, explicit stop,
+and idle handling share a canonical participant-key gate so no request can be
+inserted between stop terminalization and the final activity decision.
 
 For an active target, ownership and visibility are rechecked immediately before
 native interruption. The stop result reports communicator-state application and

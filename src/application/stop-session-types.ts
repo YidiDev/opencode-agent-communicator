@@ -3,6 +3,7 @@ import type { SessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
 import type { CommunicatorReadinessPort } from "./communicator-readiness-port";
 import type { OwnershipPort } from "./delivery-ports";
+import type { ParticipantOperationPort } from "./participant-operation-gate";
 import type { CommittedRequestNotificationPort } from "./request-notification-port";
 import type { RequestParticipantActivityPort } from "./request-ports";
 import type {
@@ -31,6 +32,7 @@ export interface SessionStopPorts {
   readonly nativeInterrupt: NativeSessionInterruptPort;
   readonly ownership: OwnershipPort;
   readonly notifications: CommittedRequestNotificationPort;
+  readonly participantOperations: ParticipantOperationPort;
   readonly digest: Sha256DigestPort;
 }
 

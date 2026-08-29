@@ -1,3 +1,4 @@
+import { ParticipantOperationGate } from "../../src/application/participant-operation-gate";
 import type { NativeSteerAdmissionPort } from "../../src/application/request-ports";
 import { RequestRuntime } from "../../src/application/request-runtime";
 import { createGeneratedIdFactory } from "../../src/domain/generated-ids";
@@ -20,6 +21,7 @@ export async function blockingRequestFixture(native: NativeSteerAdmissionPort["s
   const store = openRequestStore();
   const token = await store.acquire();
   const runtime = new RequestRuntime();
+  const participantOperations = new ParticipantOperationGate();
   const source = requestSession("ses_source");
   const target = requestSession("ses_target");
   let byte = 1;
@@ -68,6 +70,7 @@ export async function blockingRequestFixture(native: NativeSteerAdmissionPort["s
       ownership: store,
       notifications: runtime,
       runtime,
+      participantOperations,
       scheduler: { wake: () => undefined },
       deadlineTimer: {
         arm: (delayMs: number, wake: () => void) => {

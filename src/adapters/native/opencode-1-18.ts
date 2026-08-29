@@ -4,6 +4,7 @@ import type {
   NativeQueueAdmissionPort,
 } from "../../application/delivery-ports";
 import type { NativeParticipantPresencePort } from "../../application/participant-deletion-ports";
+import type { NativeParticipantStopActivityPort } from "../../application/participant-stop-ports";
 import type {
   NativeSteerAdmissionPort,
   RequestParticipantActivityPort,
@@ -123,7 +124,8 @@ export type OpenCodeNativeAdapter = HostHealthPort &
   CurrentWorkspaceMembershipPort &
   NativeSessionInterruptPort &
   NativeSessionStartPort &
-  NativeParticipantPresencePort;
+  NativeParticipantPresencePort &
+  NativeParticipantStopActivityPort;
 
 function legacySurface(client: unknown): LegacyClientSurface {
   const legacyClient = requireRecord(client, "Injected legacy client is unavailable.");

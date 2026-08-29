@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 
+import { ParticipantOperationGate } from "../../../src/application/participant-operation-gate";
 import { type SessionStopPorts, stopSession } from "../../../src/application/stop-session";
 import { OwnershipLostFault, validateFencingToken } from "../../../src/domain/ownership";
 import { validateSessionId } from "../../../src/domain/sessions";
@@ -29,6 +30,7 @@ function fixture(): SessionStopPorts {
     nativeInterrupt: { interruptSession: async () => "interrupted" },
     ownership: { acquire: async () => token, isCurrent: async () => true },
     notifications: { notifyTerminal() {} },
+    participantOperations: new ParticipantOperationGate(),
     digest: {
       async sha256(bytes) {
         return new Uint8Array(createHash("sha256").update(bytes).digest());

@@ -120,7 +120,13 @@ async function readForegroundAuthoritative(
   request: PendingRequestMetadata,
   approvedPayload: PendingRequestPayload,
   localWake: AbortSignal,
-): Promise<DomainResult<"pending" | BlockingSessionRequestSuccess>> {
+): Promise<
+  | {
+      readonly kind: "settled";
+      readonly value: DomainResult<"pending" | BlockingSessionRequestSuccess>;
+    }
+  | { readonly kind: "aborted" }
+> {
   const controller = new AbortController();
   const interrupt = (signal: AbortSignal): void => controller.abort(signal.reason);
   const callerInterrupt = (): void => interrupt(context.abort);
@@ -130,7 +136,14 @@ async function readForegroundAuthoritative(
     localWake.addEventListener("abort", localInterrupt, { once: true });
     if (context.abort.aborted) callerInterrupt();
     if (localWake.aborted) localInterrupt();
-    return await readAuthoritative(ports, context, request, approvedPayload, controller.signal);
+    const settlement = await runUntilAborted(controller.signal, () =>
+      readAuthoritative(ports, context, request, approvedPayload, controller.signal),
+    );
+    return settlement.kind === "settled"
+      ? { kind: "settled", value: settlement.value }
+      : settlement.kind === "aborted"
+        ? { kind: "aborted" }
+        : { kind: "settled", value: _storageFailure() };
   } finally {
     context.abort.removeEventListener("abort", callerInterrupt);
     localWake.removeEventListener("abort", localInterrupt);
@@ -189,37 +202,37 @@ export async function blockUntilRequestTerminal(
     while (true) {
       if (cancelTask) return await cancelTask;
       queryController = new AbortController();
-      const durable = await readForegroundAuthoritative(
+      const durableTask = readForegroundAuthoritative(
         ports,
         context,
         request,
         approvedPayload,
         queryController.signal,
       );
-      if (!durable.ok) {
-        if (cancelTask) return await cancelTask;
-        if (durable.error.code !== "storage_unavailable") return durable;
-        return durable;
-      } else if (durable.value !== "pending") {
-        return { ok: true, value: durable.value };
-      }
-      const activeCancellation = cancelTask as
-        | Promise<DomainResult<BlockingSessionRequestSuccess>>
-        | undefined;
-      const winner = activeCancellation
-        ? await Promise.race([
-            registration.outcome.then((outcome) => ({ type: "runtime" as const, outcome })),
-            activeCancellation.then((result) => ({ type: "cancel" as const, result })),
-          ])
-        : { type: "runtime" as const, outcome: await registration.outcome };
-      if (winner.type === "cancel") return winner.result;
-      if (winner.type === "runtime") {
-        if (winner.outcome.outcome === "shutdown") throw new RequestRuntimeShutdownFault();
-        if (winner.outcome.outcome === "ownership_lost") {
-          return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+      let first = await Promise.race([
+        durableTask.then((durable) => ({ type: "durable" as const, durable })),
+        registration.outcome.then((outcome) => ({ type: "runtime" as const, outcome })),
+      ]);
+      if (first.type === "runtime") {
+        queryController.abort("runtime_reconciliation_wake");
+      } else {
+        if (first.durable.kind === "aborted") {
+          if (cancelTask) return await cancelTask;
+          return _storageFailure();
         }
-        // Runtime events are wake hints only. The fenced participant projection decides the winner.
+        const durable = first.durable.value;
+        if (!durable.ok) {
+          if (cancelTask) return await cancelTask;
+          return durable;
+        }
+        if (durable.value !== "pending") return { ok: true, value: durable.value };
+        first = { type: "runtime", outcome: await registration.outcome };
       }
+      if (first.outcome.outcome === "shutdown") throw new RequestRuntimeShutdownFault();
+      if (first.outcome.outcome === "ownership_lost") {
+        return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+      }
+      // Runtime events are wake hints only. The fenced participant projection decides the winner.
       registration.detach();
       try {
         registration = ports.runtime.attach({
@@ -236,19 +249,21 @@ export async function blockUntilRequestTerminal(
           approvedPayload,
           new AbortController().signal,
         );
-        if (!afterCapacityRace.ok || afterCapacityRace.value === "pending") {
-          return afterCapacityRace.ok
-            ? domainFailure(
+        if (
+          afterCapacityRace.kind !== "settled" ||
+          !afterCapacityRace.value.ok ||
+          afterCapacityRace.value.value === "pending"
+        ) {
+          return afterCapacityRace.kind === "settled" && !afterCapacityRace.value.ok
+            ? afterCapacityRace.value
+            : domainFailure(
                 "storage_unavailable",
                 "Request waiter capacity is unavailable.",
                 true,
-                {
-                  request_id: request.id,
-                },
-              )
-            : afterCapacityRace;
+                { request_id: request.id },
+              );
         }
-        return { ok: true, value: afterCapacityRace.value };
+        return { ok: true, value: afterCapacityRace.value.value };
       }
     }
   } finally {

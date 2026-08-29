@@ -2,6 +2,7 @@ import type {
   CurrentWorkspaceMembershipPort,
   NativeQueueAdmissionPort,
 } from "../../application/delivery-ports";
+import type { NativeParticipantStopActivityPort } from "../../application/participant-stop-ports";
 import type {
   NativeSteerAdmissionPort,
   RequestParticipantActivityPort,
@@ -38,7 +39,8 @@ export function createObservationOperations(
 ): HostHealthPort &
   VisibleRootSessionPort &
   CurrentWorkspaceMembershipPort &
-  RequestParticipantActivityPort {
+  RequestParticipantActivityPort &
+  NativeParticipantStopActivityPort {
   return {
     async readHealth(): Promise<unknown> {
       return envelopeData(await context.health(), "Host health");
@@ -130,6 +132,27 @@ export function createObservationOperations(
         targetVisible: visible.has(targetSessionId),
         targetStatus: mergedActivityStatus(statuses, active, targetSessionId),
       });
+    },
+    async observeParticipantActivity(workspaceKey, participantSessionId, abort) {
+      assertWorkspaceBinding(workspaceKey, context.configuredWorkspace);
+      if (!validateSessionId(participantSessionId).ok || abort.aborted) return "unknown";
+      const [rootsResult, statusResult, activeResult] = await Promise.all([
+        context.listVisibleRoots({ signal: abort }),
+        context.readStatus({ signal: abort }),
+        context.active({ signal: abort }),
+      ]);
+      if (abort.aborted) return "unknown";
+      const roots = parseSessionArray(
+        envelopeData(rootsResult, "Legacy current root listing"),
+        "Current root listing",
+      );
+      if (!roots.some((root) => root.id === participantSessionId)) return "not_visible";
+      const statuses = parseActivityMap(
+        envelopeData(statusResult, "Legacy status"),
+        "Legacy status",
+      );
+      const active = parseActiveMap(activeResult);
+      return mergedActivityStatus(statuses, active, participantSessionId);
     },
   };
 }

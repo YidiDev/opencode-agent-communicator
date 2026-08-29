@@ -253,16 +253,64 @@ test("reattachment capacity race performs one final authoritative read", async (
   expect(reads).toBe(2);
 });
 
+test("a committed stop wake interrupts a never-settling authoritative read", async () => {
+  const request = (await requestFixture(token)).request;
+  let reads = 0;
+  const terminal = {
+    outcome: "metadata",
+    view: "source_unsuccessful_terminal",
+    metadata: {
+      ...metadata(request),
+      resolutionState: "target_stopped",
+      resolvedAtMs: request.createdAtMs + 1,
+      updatedAtMs: request.createdAtMs + 1,
+    },
+    terminalized: [],
+  };
+  const harness = setup(request, async () => {
+    reads += 1;
+    return reads === 1 ? new Promise(() => undefined) : terminal;
+  });
+  const blocked = blockUntilRequestTerminal(
+    harness.ports,
+    harness.context,
+    request,
+    harness.registration,
+    payload,
+    new AbortController(),
+  );
+  while (reads === 0) await Promise.resolve();
+  harness.runtime.notifyTerminal({
+    requestId: request.id,
+    kind: request.kind,
+    resolutionState: "target_stopped",
+    resolvedAtMs: request.createdAtMs + 1,
+  });
+  expect(await blocked).toMatchObject({
+    ok: false,
+    error: { code: "target_stopped" },
+  });
+  expect(reads).toBe(2);
+});
+
 test("an abort reports ownership loss when cancellation and reconciliation cannot settle", async () => {
   const request = (await requestFixture(token)).request;
   const abort = new AbortController();
+  let timersArmed = 0;
   abort.abort("caller");
-  const harness = setup(request, async () => null, {
+  const harness = setup(request, async () => new Promise(() => undefined), {
     requests: {
       cancelPending: async () => {
         throw new OwnershipLostFault("lost");
       },
-      getParticipantRequest: async () => null,
+      getParticipantRequest: async () => new Promise(() => undefined),
+    },
+    deadlineTimer: {
+      arm: (_delay: number, wake: () => void) => {
+        timersArmed += 1;
+        if (timersArmed === 3) queueMicrotask(wake);
+        return { cancel: () => undefined };
+      },
     },
   } as never);
   const blocked = blockUntilRequestTerminal(

@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 
+import {
+  ParticipantOperationAbortedFault,
+  ParticipantOperationGate,
+  ParticipantOperationGateClosedFault,
+} from "../../../src/application/participant-operation-gate";
 import { type SessionStopPorts, stopSession } from "../../../src/application/stop-session";
 import { validateFencingToken } from "../../../src/domain/ownership";
 import type { RequestMetadata } from "../../../src/domain/request-types";
@@ -33,6 +38,7 @@ function fixture(): SessionStopPorts {
     nativeInterrupt: { interruptSession: async () => "interrupted" },
     ownership: { acquire: async () => token, isCurrent: async () => true },
     notifications: { notifyTerminal() {} },
+    participantOperations: new ParticipantOperationGate(),
     digest: {
       async sha256(bytes) {
         return new Uint8Array(createHash("sha256").update(bytes).digest());
@@ -187,5 +193,25 @@ describe("session stop final-effect boundaries", () => {
       },
     });
     expect(notifications).toHaveLength(2);
+  });
+
+  test("maps participant gate abort, closure, and unexpected failure", async () => {
+    for (const [cause, code] of [
+      [new ParticipantOperationAbortedFault("aborted"), "deadline_expired"],
+      [new ParticipantOperationGateClosedFault("closed"), "storage_unavailable"],
+      [new Error("gate failed"), "storage_unavailable"],
+    ] as const) {
+      const ports = fixture();
+      expect(
+        await execute({
+          ...ports,
+          participantOperations: {
+            run: async () => {
+              throw cause;
+            },
+          },
+        }),
+      ).toMatchObject({ ok: false, error: { code } });
+    }
   });
 });

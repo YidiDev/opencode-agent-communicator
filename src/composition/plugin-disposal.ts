@@ -1,5 +1,7 @@
 import type { LinuxBunSqliteStore } from "../adapters/store/sqlite-store";
 import type { ParticipantDeletionLifecycle } from "../application/participant-deletion-lifecycle";
+import type { ParticipantOperationGate } from "../application/participant-operation-gate";
+import type { ParticipantStopLifecycle } from "../application/participant-stop-lifecycle";
 import type { CommunicatorStartupRecoveryLifecycle } from "../application/recover-communicator-startup";
 import type { RequestRuntime } from "../application/request-runtime";
 import type { ActiveInvocationRegistry } from "./active-invocations";
@@ -7,6 +9,8 @@ import type { ActiveInvocationRegistry } from "./active-invocations";
 export function createCompositionDisposer(input: {
   readonly lifecycle: () => CommunicatorStartupRecoveryLifecycle | undefined;
   readonly deletion: () => ParticipantDeletionLifecycle | undefined;
+  readonly participantStop: () => ParticipantStopLifecycle | undefined;
+  readonly participantOperations: () => ParticipantOperationGate | undefined;
   readonly runtime: () => RequestRuntime | undefined;
   readonly invocations: ActiveInvocationRegistry;
   readonly exporterDrain: () => (() => Promise<void>) | undefined;
@@ -27,10 +31,13 @@ export function createCompositionDisposer(input: {
         }
       };
       const lifecycle = input.lifecycle();
+      await capture(() => input.participantStop()?.dispose());
       await capture(() => input.deletion()?.dispose());
       await capture(() => lifecycle?.stop("shutdown") ?? input.runtime()?.stop("shutdown"));
       await capture(() => input.advisoryLockDispose()?.());
       await capture(() => input.invocations.shutdown());
+      await capture(() => input.participantOperations()?.close());
+      await capture(() => input.participantOperations()?.drain());
       const advisoryLockDrain = input.advisoryLockDrain();
       if (advisoryLockDrain) await capture(advisoryLockDrain);
       if (lifecycle) await capture(() => lifecycle.scheduler.drain());

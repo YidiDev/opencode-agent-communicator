@@ -438,7 +438,10 @@ symlinks, unsafe filesystems, mount transitions, and reserved staging names fail
 
 The SQLite store is the authority for communicator requests and retained results. A restart recovers
 bounded pending work under a workspace ownership lease. Blocking calls can be reattached through
-request list/get operations; in-memory notifications are only an optimization.
+request list/get operations; in-memory notifications are only an optimization. A blocked
+`session_ask` or `session_wait` returns `target_stopped` or `source_stopped` promptly when an
+approved stop or a fresh workspace-bound native observation establishes that its participant is
+idle.
 
 Native OpenCode and filesystem effects cannot always be classified after interruption. The plugin
 reports `admission_unknown` or `native_outcome_unknown`, preserves reconcilable state, and does not
@@ -450,6 +453,11 @@ Missed participant-deletion hooks are reconciled before request recovery at star
 lifecycle-owned bounded periodic pass. Reconciliation uses direct per-session OpenCode reads: only a
 correlated 404 proves deletion. It never infers deletion from list absence, so archived or otherwise
 temporarily invisible roots remain intact.
+
+Native idle hooks are also hints, not authority. The plugin revalidates the exact visible root and
+current activity before terminalizing pending participant requests, coalesces duplicate events, and
+uses a bounded periodic scan of pending participants to cover missed hooks. Busy, retry, unknown,
+invisible, malformed, and foreign observations fail closed.
 
 Acknowledgement, expiry, cancellation, and retention cleanup provide **logical deletion only**.
 Sensitive bytes may remain in SQLite pages, WAL/journal files, backups, snapshots, or storage media.
