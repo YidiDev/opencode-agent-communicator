@@ -13,6 +13,7 @@ import type { PendingRequestMetadata, RequestMetadata } from "../../domain/reque
 import { submittingRequestsPerWorkspaceHardCeiling } from "../../domain/safety-ceilings";
 import { validateWorkspaceKey } from "../../domain/workspaces";
 import type { OwnershipRepository } from "./ownership-repository";
+import { RequestExpiryRepository } from "./request-expiry-repository";
 import {
   validatePendingPrivateContent,
   validatePreparedContent,
@@ -20,7 +21,6 @@ import {
 import { RequestPreparationRepository } from "./request-preparation-repository";
 import {
   assertPendingWaitEdge,
-  eraseRequestPrivateContent,
   requestFailure,
   requestPageLimitReached,
   requestStoreNowMs,
@@ -41,12 +41,14 @@ export const requestSubmittingWorkspaceCountSql = `SELECT count(*) AS count
   WHERE workspace_key = ? AND delivery_state = 'submitting'`;
 
 export class RequestRepository {
+  private readonly expiry: RequestExpiryRepository;
   private readonly preparation: RequestPreparationRepository;
 
   constructor(
     private readonly context: StoreContext,
     private readonly ownership: OwnershipRepository,
   ) {
+    this.expiry = new RequestExpiryRepository(context);
     this.preparation = new RequestPreparationRepository(context, ownership);
   }
 
@@ -166,7 +168,7 @@ export class RequestRepository {
     }
     if (storeNowMs < before.updatedAtMs) return { ok: false, code: "state_conflict" };
     if (storeNowMs >= before.deadlineAtMs) {
-      this.expireOne(before, storeNowMs);
+      this.expiry.expireOne(before, storeNowMs);
       const expired = selectRequest(this.context, input.workspaceKey, input.requestId);
       if (!expired) throw new StoreIntegrityError("The expired request was absent.");
       return { ok: true, request: expired };
@@ -228,14 +230,7 @@ export class RequestRepository {
   }
 
   expireDueOwned(workspaceKey: string, storeNowMs: number, limit: number): RequestMetadata[] {
-    const rows = this.context.database
-      .query<RequestRow, [string, number, number]>(
-        `SELECT ${requestMetadataColumns} FROM requests INDEXED BY requests_deadline
-         WHERE workspace_key = ? AND resolution_state = 'pending' AND deadline_at_ms <= ?
-         ORDER BY deadline_at_ms, id LIMIT ?`,
-      )
-      .all(workspaceKey, storeNowMs, limit);
-    return this.expireRowsOwned(workspaceKey, storeNowMs, rows);
+    return this.expiry.expireDueOwned(workspaceKey, storeNowMs, limit);
   }
 
   expireDueForSourceOwned(
@@ -244,14 +239,7 @@ export class RequestRepository {
     storeNowMs: number,
     limit: number,
   ): RequestMetadata[] {
-    const rows = this.context.database
-      .query<RequestRow, [string, string, number, number]>(
-        `SELECT ${requestMetadataColumns} FROM requests INDEXED BY requests_due_source
-         WHERE workspace_key = ? AND source_session_id = ? AND resolution_state = 'pending'
-           AND deadline_at_ms <= ? ORDER BY deadline_at_ms, id LIMIT ?`,
-      )
-      .all(workspaceKey, sourceSessionId, storeNowMs, limit);
-    return this.expireRowsOwned(workspaceKey, storeNowMs, rows);
+    return this.expiry.expireDueForSourceOwned(workspaceKey, sourceSessionId, storeNowMs, limit);
   }
 
   expireDueForTargetOwned(
@@ -260,14 +248,7 @@ export class RequestRepository {
     storeNowMs: number,
     limit: number,
   ): RequestMetadata[] {
-    const rows = this.context.database
-      .query<RequestRow, [string, string, number, number]>(
-        `SELECT ${requestMetadataColumns} FROM requests INDEXED BY requests_due_target
-         WHERE workspace_key = ? AND target_session_id = ? AND resolution_state = 'pending'
-           AND deadline_at_ms <= ? ORDER BY deadline_at_ms, id LIMIT ?`,
-      )
-      .all(workspaceKey, targetSessionId, storeNowMs, limit);
-    return this.expireRowsOwned(workspaceKey, storeNowMs, rows);
+    return this.expiry.expireDueForTargetOwned(workspaceKey, targetSessionId, storeNowMs, limit);
   }
 
   private expireRowsOwned(
@@ -275,15 +256,7 @@ export class RequestRepository {
     storeNowMs: number,
     rows: readonly RequestRow[],
   ): RequestMetadata[] {
-    const requests: RequestMetadata[] = [];
-    for (const row of rows) {
-      const before = hydrateRequest(row);
-      this.expireOne(before, storeNowMs);
-      const request = selectRequest(this.context, workspaceKey, before.id);
-      if (!request) throw new StoreIntegrityError("An expired request was absent.");
-      requests.push(request);
-    }
-    return requests;
+    return this.expiry.expireRowsOwned(workspaceKey, storeNowMs, rows);
   }
 
   expireExactDueOwned(
@@ -291,22 +264,6 @@ export class RequestRepository {
     requestId: string,
     storeNowMs: number,
   ): RequestMetadata | undefined {
-    const request = selectRequest(this.context, workspaceKey, requestId);
-    if (request?.resolutionState !== "pending" || request.deadlineAtMs > storeNowMs)
-      return undefined;
-    this.expireOne(request, storeNowMs);
-    return selectRequest(this.context, workspaceKey, requestId);
-  }
-
-  private expireOne(before: RequestMetadata, nowMs: number): void {
-    eraseRequestPrivateContent(this.context, before.id);
-    const changed = this.context.database.run(
-      `UPDATE requests SET resolution_state = 'deadline_expired', resolved_at_ms = ?,
-         updated_at_ms = MAX(updated_at_ms, ?), payload_sha256 = NULL,
-         retained_content_byte_length = NULL
-       WHERE workspace_key = ? AND id = ? AND resolution_state = 'pending' AND deadline_at_ms <= ?`,
-      [nowMs, nowMs, before.workspaceKey, before.id, nowMs],
-    );
-    if (changed.changes !== 1) throw new StoreIntegrityError("The request expiry CAS failed.");
+    return this.expiry.expireExactDueOwned(workspaceKey, requestId, storeNowMs);
   }
 }

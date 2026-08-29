@@ -5,6 +5,10 @@ import {
   type RequestDeadlineSchedulerOptions,
   type RequestDeadlineTimerPort,
 } from "../../../src/application/request-deadline-scheduler";
+import {
+  calculateRequestDeadlineScheduleDelay,
+  defaultMonotonicNowMs,
+} from "../../../src/application/request-deadline-timing";
 import type { NextPendingRequestDeadline } from "../../../src/application/request-ports";
 import type { FencingToken } from "../../../src/domain/ownership";
 import { OwnershipLostFault } from "../../../src/domain/ownership";
@@ -31,6 +35,40 @@ class FakeTimers implements RequestDeadlineTimerPort {
     this.pending.delete(handle as number);
   }
 }
+
+test("default monotonic timing falls back when the performance clock is unavailable", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "performance");
+  try {
+    for (const performanceValue of [undefined, {}]) {
+      Object.defineProperty(globalThis, "performance", {
+        configurable: true,
+        value: performanceValue,
+      });
+      expect(defaultMonotonicNowMs()).toBeGreaterThanOrEqual(0);
+    }
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, "performance", descriptor);
+    else Reflect.deleteProperty(globalThis, "performance");
+  }
+});
+
+test("schedule timing rejects malformed lock elapsed time and invalid computed delays", () => {
+  const schedule = { storeObservedAtMs: 0, maximumSleepMs: 100 };
+  expect(
+    calculateRequestDeadlineScheduleDelay({
+      schedule,
+      elapsedMs: 0,
+      lockSchedule: { storeObservedAtMs: 0, maximumSleepMs: 100 },
+    }),
+  ).toBe("invalid");
+  expect(calculateRequestDeadlineScheduleDelay({ schedule, elapsedMs: 100 })).toBe("immediate");
+  expect(
+    calculateRequestDeadlineScheduleDelay({
+      schedule: { storeObservedAtMs: 0, maximumSleepMs: 1.5 },
+      elapsedMs: 0,
+    }),
+  ).toBe("invalid");
+});
 
 test("maintenance phases run in order before a deadline is read", async () => {
   const order: string[] = [];

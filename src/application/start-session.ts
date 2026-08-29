@@ -1,26 +1,8 @@
-import {
-  validateManagedSessionId,
-  validateNativeMessageId,
-  validateStartOperationId,
-} from "../domain/generated-ids";
-import { type FencingToken, OwnershipLostFault } from "../domain/ownership";
+import type { FencingToken } from "../domain/ownership";
 import { type DomainResult, domainFailure } from "../domain/results";
-import {
-  digestStartArguments,
-  isCoherentStartOperation,
-  type StartOperation,
-  type ValidatedStartArguments,
-  validateStartAgent,
-  validateStartIdempotencyKey,
-  validateStartInitialMessage,
-  validateStartModel,
-  validateStartTitle,
-} from "../domain/session-start";
-import type { SessionStartPolicy } from "../domain/session-start-policy";
-import { runUntilAborted } from "./abortable-operation";
+import type { StartOperation } from "../domain/session-start";
 import {
   assertCommunicatorReady,
-  communicatorLifecycleFencingToken,
   stopCommunicatorForOwnershipLoss,
 } from "./communicator-readiness-port";
 import type {
@@ -28,7 +10,6 @@ import type {
   SessionStartContext,
   SessionStartPorts,
 } from "./session-start-application";
-import type { StartStoreResult } from "./session-start-ports";
 import { approvePreparedStart } from "./start-session-approval";
 import {
   projectStartOutcome,
@@ -36,193 +17,31 @@ import {
   runStartAdmission,
   runStartCreation,
   runStartTitle,
-  StartEffectContractFault,
   startStoreFailure,
 } from "./start-session-effects";
-import { createLinkedEffectControl } from "./startup-effect-control";
+import {
+  acquireSessionStartToken,
+  prepareStart,
+  sessionStartCallerVisible,
+  sessionStartPolicyFailure,
+  sessionStartRecursionAllowed,
+  validateSessionStartArguments,
+  validSessionStartControl,
+} from "./start-session-preconditions";
 
 export type {
   SessionStartArguments,
   SessionStartContext,
   SessionStartPorts,
 } from "./session-start-application";
-
-export function validateSessionStartArguments(
-  args: SessionStartArguments,
-): DomainResult<ValidatedStartArguments> {
-  const key = validateStartIdempotencyKey(args.idempotency_key);
-  if (!key.ok) return domainFailure("invalid_arguments", key.message, false);
-  const message = validateStartInitialMessage(args.initial_message);
-  if (!message.ok) return domainFailure("invalid_arguments", message.message, false);
-  const title = validateStartTitle(args.title);
-  if (!title.ok) return domainFailure("invalid_arguments", title.message, false);
-  const agent = validateStartAgent(args.agent);
-  if (!agent.ok) return domainFailure("invalid_arguments", agent.message, false);
-  const model = validateStartModel(args.model);
-  if (!model.ok) return domainFailure("invalid_arguments", model.message, false);
-  return {
-    ok: true,
-    value: {
-      idempotencyKey: key.value,
-      initialMessage: message.value,
-      ...(title.value === undefined ? {} : { title: title.value }),
-      ...(agent.value === undefined ? {} : { agent: agent.value }),
-      ...(model.value === undefined ? {} : { model: model.value }),
-    },
-  };
-}
-
-export function sessionStartPolicyFailure(
-  policy: SessionStartPolicy,
-  input: ValidatedStartArguments,
-): DomainResult<never> | undefined {
-  if (input.agent !== undefined && !policy.allowedAgents.has(input.agent))
-    return domainFailure(
-      "permission_denied",
-      "The requested agent override is not allowed.",
-      false,
-    );
-  if (input.model !== undefined && !policy.allowedModels.has(input.model))
-    return domainFailure(
-      "permission_denied",
-      "The requested model override is not allowed.",
-      false,
-    );
-  return undefined;
-}
-
-export async function sessionStartCallerVisible(
-  ports: SessionStartPorts,
-  context: SessionStartContext,
-): Promise<DomainResult<true>> {
-  const current = await runUntilAborted(context.abort, () =>
-    ports.membership.readCurrentRoots(
-      context.workspaceKey,
-      context.sourceSessionId,
-      context.sourceSessionId,
-    ),
-  );
-  if (current.kind === "aborted")
-    return domainFailure(
-      "deadline_expired",
-      "The session-start invocation deadline elapsed.",
-      false,
-    );
-  if (current.kind === "rejected")
-    return domainFailure("native_unavailable", "Current caller visibility is unavailable.", true);
-  try {
-    return current.value.sourceVisible && current.value.targetVisible
-      ? { ok: true, value: true }
-      : domainFailure("caller_not_visible", "Caller is not a current visible root session.", false);
-  } catch {
-    return domainFailure("native_unavailable", "Current caller visibility is unavailable.", true);
-  }
-}
-
-export function validSessionStartControl(ports: SessionStartPorts, context: SessionStartContext) {
-  if (!Number.isSafeInteger(context.deadlineMs) || context.deadlineMs < 0) return undefined;
-  return createLinkedEffectControl({
-    signals: [context.abort],
-    deadlineMs: context.deadlineMs,
-    clock: ports.clock,
-  });
-}
-
-export async function acquireSessionStartToken(
-  ports: SessionStartPorts,
-): Promise<DomainResult<FencingToken>> {
-  try {
-    return { ok: true, value: communicatorLifecycleFencingToken(ports.readiness) };
-  } catch (cause: unknown) {
-    return startStoreFailure(
-      cause instanceof OwnershipLostFault ? "ownership_lost" : "storage_unavailable",
-    );
-  }
-}
-
-export async function sessionStartRecursionAllowed(
-  ports: SessionStartPorts,
-  context: SessionStartContext,
-  token: FencingToken,
-): Promise<DomainResult<true>> {
-  let managed: unknown;
-  try {
-    managed = await ports.starts.isManagedSession({
-      fencingToken: token,
-      workspaceKey: context.workspaceKey,
-      sessionId: context.sourceSessionId,
-    });
-  } catch (cause: unknown) {
-    return startStoreFailure(
-      cause instanceof OwnershipLostFault ? "ownership_lost" : "storage_unavailable",
-    );
-  }
-  if (typeof managed !== "boolean")
-    throw new StartEffectContractFault("The managed-session query returned a malformed result.");
-  return !ports.policy.allowManagedSessionRecursion && managed
-    ? domainFailure(
-        "permission_denied",
-        "Communicator-started sessions cannot start additional sessions under the current policy.",
-        false,
-      )
-    : { ok: true, value: true };
-}
-
-async function prepareStart(
-  ports: SessionStartPorts,
-  context: SessionStartContext,
-  token: FencingToken,
-  arguments_: ValidatedStartArguments,
-): Promise<
-  DomainResult<{
-    readonly operation: StartOperation;
-    readonly argumentsSha256: StartOperation["argumentsSha256"];
-  }>
-> {
-  const argumentsSha256 = await digestStartArguments(ports.digest, arguments_);
-  const generated = {
-    operationId: ports.ids.startOperationId(),
-    sessionId: ports.ids.managedSessionId(),
-    nativeMessageId: ports.ids.nativeMessageId(),
-  };
-  if (
-    !validateStartOperationId(generated.operationId).ok ||
-    !validateManagedSessionId(generated.sessionId).ok ||
-    !validateNativeMessageId(generated.nativeMessageId).ok
-  ) {
-    throw new StartEffectContractFault("The generated session-start identifiers are malformed.");
-  }
-  let prepared: StartStoreResult;
-  try {
-    prepared = await ports.starts.createOrResume({
-      fencingToken: token,
-      workspaceKey: context.workspaceKey,
-      sourceSessionId: context.sourceSessionId,
-      ...generated,
-      argumentsSha256,
-      arguments: arguments_,
-      limits: ports.policy.limits,
-      nowMs: ports.clock.nowMs(),
-    });
-  } catch (cause: unknown) {
-    return startStoreFailure(
-      cause instanceof OwnershipLostFault ? "ownership_lost" : "storage_unavailable",
-    );
-  }
-  if (!prepared.ok) return startStoreFailure(prepared.code);
-  if (
-    !isCoherentStartOperation(prepared.operation) ||
-    prepared.operation.workspaceKey !== context.workspaceKey ||
-    prepared.operation.sourceSessionId !== context.sourceSessionId ||
-    prepared.operation.idempotencyKey !== arguments_.idempotencyKey ||
-    prepared.operation.argumentsSha256 !== argumentsSha256
-  ) {
-    throw new StartEffectContractFault(
-      "The start persistence adapter returned an unrelated operation.",
-    );
-  }
-  return { ok: true, value: { operation: prepared.operation, argumentsSha256 } };
-}
+export {
+  acquireSessionStartToken,
+  sessionStartCallerVisible,
+  sessionStartPolicyFailure,
+  sessionStartRecursionAllowed,
+  validateSessionStartArguments,
+  validSessionStartControl,
+} from "./start-session-preconditions";
 
 export async function executeStartEffects(
   ports: SessionStartPorts,
