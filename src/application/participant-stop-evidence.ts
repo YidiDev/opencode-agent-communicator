@@ -54,8 +54,14 @@ export function parseOpenCode118ParticipantActivityEvent(
   value: unknown,
 ): OpenCode118ParticipantActivityEvidence | undefined {
   if (!isOpenCode118ParticipantActivityEvent(value)) return undefined;
-  const event = exactRecord(value, ["type", "properties"]);
-  if (!event || (event.type !== "session.idle" && event.type !== "session.status")) {
+  const event =
+    exactRecord(value, ["type", "properties"]) ?? exactRecord(value, ["id", "type", "properties"]);
+  if (
+    !event ||
+    (event.id !== undefined &&
+      (typeof event.id !== "string" || event.id.length === 0 || event.id.length > 256)) ||
+    (event.type !== "session.idle" && event.type !== "session.status")
+  ) {
     throw new TypeError("OpenCode participant activity evidence is malformed.");
   }
   const properties =

@@ -127,6 +127,10 @@ describe("OpenCode participant activity evidence", () => {
       sessionId: participant,
       activity: "idle",
     });
+    expect(parseOpenCode118ParticipantActivityEvent({ id: "evt_1", ...idleEvent() })).toEqual({
+      sessionId: participant,
+      activity: "idle",
+    });
     for (const activity of ["busy", "idle", "retry"] as const) {
       expect(parseOpenCode118ParticipantActivityEvent(statusEvent(activity))).toEqual({
         sessionId: participant,
@@ -141,6 +145,8 @@ describe("OpenCode participant activity evidence", () => {
   test("rejects hostile or malformed relevant events without invoking accessors", () => {
     for (const value of [
       { ...idleEvent(), extra: true },
+      { id: "", ...idleEvent() },
+      { id: 1, ...idleEvent() },
       { type: "session.idle", properties: { sessionID: "bad" } },
       { type: "session.status", properties: { sessionID: participant, status: { type: "other" } } },
       {
