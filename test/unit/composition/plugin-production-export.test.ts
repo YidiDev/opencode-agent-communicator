@@ -38,6 +38,15 @@ function nativeFixture(): OpenCodeNativeAdapter {
       targetVisible: false,
       sourceTitle: undefined,
     }),
+    readMessagePage: async () => ({
+      messages: [],
+      examinedMessageCount: 0,
+      projectedTextByteCount: 0,
+      examinedPartCount: 0,
+      previousCursor: null,
+      nextCursor: null,
+    }),
+    readMessage: async () => ({ kind: "not_found" }),
     queueMessage: async () => ({ kind: "unknown" }),
     steerRequest: async () => ({ kind: "unknown" }),
     observeRequestParticipants: async () => ({
@@ -213,7 +222,7 @@ describe("production composition resources", () => {
         pluginInput(),
         {},
       ]);
-      expect(Object.keys(hooks.tool ?? {})).toHaveLength(20);
+      expect(Object.keys(hooks.tool ?? {})).toHaveLength(21);
       expect(warning).toHaveBeenCalledWith(
         "Session export is unavailable because secure initialization failed.",
       );

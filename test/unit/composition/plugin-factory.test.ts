@@ -18,6 +18,15 @@ function incompatibleNative(): OpenCodeNativeAdapter {
       targetVisible: false,
       sourceTitle: undefined,
     }),
+    readMessagePage: async () => ({
+      messages: [],
+      examinedMessageCount: 0,
+      projectedTextByteCount: 0,
+      examinedPartCount: 0,
+      previousCursor: null,
+      nextCursor: null,
+    }),
+    readMessage: async () => ({ kind: "not_found" }),
     queueMessage: async () => ({ kind: "unknown" }),
     steerRequest: async () => ({ kind: "unknown" }),
     observeRequestParticipants: async () => ({
@@ -139,7 +148,7 @@ describe("composition factory ordering", () => {
     await Promise.resolve();
   });
 
-  test("registers the exact 20-tool set only after recovery and disposes through ordered cleanup", async () => {
+  test("registers the exact 21-tool set only after recovery and disposes through ordered cleanup", async () => {
     const order: string[] = [];
     const lifecycle = {
       fencingToken: 1 as never,
@@ -193,7 +202,7 @@ describe("composition factory ordering", () => {
     const hooks = await Reflect.apply(plugin, undefined, [{}, {}]);
     expect(order).toEqual(["recovery"]);
     expect(Object.keys(hooks.tool ?? {})).toEqual([...communicatorToolIds]);
-    expect(Object.keys(hooks.tool ?? {})).toHaveLength(20);
+    expect(Object.keys(hooks.tool ?? {})).toHaveLength(21);
     const config: { permission?: unknown; skills?: { paths: string[] } } = {};
     await hooks.config?.(config as never);
     expect(config.permission).toEqual({ session_stop: "ask" });

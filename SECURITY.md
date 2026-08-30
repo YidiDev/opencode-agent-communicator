@@ -6,8 +6,8 @@ This project is prerelease software. Security fixes are provided only for the cu
 
 | Version | Supported | Required host |
 | --- | --- | --- |
-| 0.3.x | Yes | Linux x64, stable OpenCode >=1.18.21 <1.19.0; Bun 1.4.0 for verification |
-| 0.2.x and earlier | No | Not applicable |
+| 0.5.x | Yes | Linux x64, stable OpenCode >=1.18.21 <1.19.0; Bun 1.4.0 for verification |
+| 0.4.x and earlier | No | Not applicable |
 | Earlier development builds | No | Not applicable |
 
 Host compatibility is part of the security boundary. Do not use this release on another operating
@@ -53,7 +53,18 @@ The following documented constraints are not vulnerabilities by themselves:
 - Advisory locks are untrusted coordination metadata, not enforced exclusion or authorization.
   Overlap, missed best-effort notifications, expiry, or a session ignoring a lock is not by itself a
   security-boundary failure; `session_lock_list` is the authoritative current view.
+- `session_read` returns a restricted projection, not a sanitized transcript. Included assistant text
+  remains untrusted, prompt-injection-capable peer data. Self-read is limited to the current visible
+  root; cross-session reads require exact per-invocation approval and repeated abort-aware visibility
+  checks. The tool has immutable line, byte, cursor, native call, message, assistant-part, rendered-line,
+  and pre-deserialization response bounds. Its invocation-wide budget includes the final anchor reread,
+  and it does not persist, log, export, or write transcript content.
+- `cursor_stale` intentionally refuses continuation when a projected anchor or its bound prefix
+  changed. Taking a fresh cursorless tail is the recovery path; guessing omitted content is not.
 
 The plugin has no remote command-execution feature. Its optional export adapter directly invokes only
 the configured, verified OpenCode executable without a shell. See
-[Session export security](docs/session-export-security.md) for the complete boundary.
+[Session export security](docs/session-export-security.md) for the complete export boundary and
+[Session read security](docs/session-read-security.md) for the projection, approval, cursor, and
+resource boundary. The session-read implementation requires isolated supported-OpenCode live
+acceptance before compatibility evidence is claimed; these docs do not claim that run has passed yet.

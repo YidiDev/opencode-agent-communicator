@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 
 export const expectedToolIds = Object.freeze([
   "session_list",
+  "session_read",
   "session_lock_list",
   "session_lock_publish",
   "session_lock_release",
@@ -30,8 +31,8 @@ export const expectedToolIds = Object.freeze([
 // This is SHA-256(npm-reported pack paths joined with LF), not a content digest. Any added, removed,
 // renamed, or reordered archive entry requires an explicit review and fingerprint update.
 export const expectedPackedPathPolicy = Object.freeze({
-  entryCount: 283,
-  sha256: "f67527c61cb666d72c61f317147ff496a62b3c54485bf8faabad1b23adec70e9",
+  entryCount: 299,
+  sha256: "d23c14ae8c01f4bd5e99f91b1424d3ff91f62b3a33c5d0d4ce0cdd05960422c3",
 });
 
 const forbiddenPathSegments = new Set([
@@ -148,6 +149,7 @@ export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
     "src/",
     "skills/",
     "docs/plugin-configuration.md",
+    "docs/session-read-security.md",
     "docs/session-export-security.md",
     "docs/linux-sqlite-store.md",
     "CHANGELOG.md",
@@ -160,7 +162,7 @@ export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
     "files allowlist changed",
   );
 
-  const toolsSource = await readFile(resolve(root, "src/composition/tools.ts"), "utf8");
+  const toolsSource = await readFile(resolve(root, "src/composition/tool-ids.ts"), "utf8");
   const toolManifest = toolsSource.match(
     /communicatorToolIds = Object\.freeze\(\[([\s\S]*?)\]\s+as const\)/,
   )?.[1];

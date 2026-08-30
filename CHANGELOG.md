@@ -6,6 +6,28 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- Added `session_read` immediately after `session_list` in the canonical 21-tool manifest. It returns
+  chronological, cursor-paginated restricted transcript projections with 100 default/500 maximum
+  rendered lines, 4,096-byte line wrapping, a 65,536-byte content cap, append-aware opaque protocol cursors,
+  and explicit `cursor_stale` recovery.
+- Added bounded native page and fixed-anchor reads with immutable 8-message pages, 96 transcript calls, 512 raw
+  examined messages including omitted variants, 8 MiB projection-safe assistant-text examination,
+  16,384 examined assistant parts, 32,768 rendered lines per invocation, 8,192 rendered lines per
+  message, 4 MiB pre-deserialization response caps, and 512-character native cursors. One shared
+  budget includes the initial anchor, every page, and the final anchor reread.
+
+### Security
+
+- Limited transcript projection to omitted user markers, assistant state/text, and tool name/status;
+  reasoning, user content, tool input/output, and other native metadata remain excluded. Assistant
+  text is documented as unsanitized, prompt-injection-capable peer data.
+- Allowed self-read only for the current visible root and required exact per-invocation approval for
+  cross-session reads, with abort-aware visibility checks before and after approval, before every
+  native read, and immediately before disclosure. Transcript content is not persisted, logged,
+  exported, or written.
+
 ## [0.5.0] - 2026-08-29
 
 ### Fixed

@@ -21,6 +21,12 @@ import { validateSessionId } from "../domain/sessions";
 import { immediateRequestSchema } from "./request-contracts";
 
 export {
+  type SessionReadToolArguments,
+  sessionReadArgumentsSchema,
+  sessionReadFailureCodes,
+} from "./session-read-contracts";
+
+export {
   type InternalToolContract,
   type StructuralApprovalInput,
   type StructuralToolContext,
