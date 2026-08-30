@@ -427,7 +427,11 @@ function launchWorker(mode: string, args: readonly string[], uid = victimUid): C
   });
 }
 
-async function waitChild(child: ChildProcess, timeoutMs = 30_000): Promise<ChildResult> {
+async function waitChild(
+  child: ChildProcess,
+  timeoutMs = 30_000,
+  label = "child",
+): Promise<ChildResult> {
   let stdout = "";
   let stderr = "";
   child.stdout?.on("data", (chunk) => {
@@ -439,7 +443,7 @@ async function waitChild(child: ChildProcess, timeoutMs = 30_000): Promise<Child
   return await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new Error(`child timeout; stdout=${stdout}; stderr=${stderr}`));
+      reject(new Error(`${label} timeout; stdout=${stdout}; stderr=${stderr}`));
     }, timeoutMs);
     child.once("error", reject);
     child.once("close", (code, signal) => {
@@ -449,8 +453,12 @@ async function waitChild(child: ChildProcess, timeoutMs = 30_000): Promise<Child
   });
 }
 
-async function requireSuccess(child: ChildProcess, label: string): Promise<ChildResult> {
-  const result = await waitChild(child);
+async function requireSuccess(
+  child: ChildProcess,
+  label: string,
+  observed = waitChild(child, 30_000, label),
+): Promise<ChildResult> {
+  const result = await observed;
   assert(result.code === 0, `${label} failed: ${result.stderr || result.stdout}`);
   if (result.stdout.trim()) console.log(result.stdout.trim());
   return result;
@@ -544,12 +552,14 @@ async function canonicalScenario(root: string): Promise<void> {
   chownSync(state, victimUid, victimUid);
   const moved = join(ancestor, "canonical-held-moved");
   const child = launchWorker("canonical", [ancestor, moved]);
+  // Observe immediately because this worker can close before the attacker process is reaped.
+  const childResult = waitChild(child, 30_000, "canonical identity fail-closed scenario");
   await waitFor(marker("canonical-ready"));
   await requireSuccess(
     launchWorker("canonical-attacker", [state, moved], attackerUid),
     "UID 10002 canonical swap",
   );
-  await requireSuccess(child, "canonical identity fail-closed scenario");
+  await requireSuccess(child, "canonical identity fail-closed scenario", childResult);
   assert(readdirSync(state).length === 0, "no state appears outside held directory");
   assert(lstatSync(state).uid === attackerUid, "replacement remains attacker-owned");
   chmodSync(root, 0o700);
