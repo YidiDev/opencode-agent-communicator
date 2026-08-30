@@ -28,6 +28,7 @@ import {
   enforceMandatoryApproval,
   enforceMandatoryStopConfiguration,
 } from "./mandatory-approval-hook";
+import { createCompositionDisposer } from "./plugin-disposal";
 import { createProductionExporter } from "./plugin-exporter";
 import {
   productionClock,
@@ -135,47 +136,6 @@ export function registerBundledSkills(config: object): void {
   Reflect.set(config, "skills", skills);
 }
 
-function createDisposer(input: {
-  readonly lifecycle: () => CommunicatorStartupRecoveryLifecycle | undefined;
-  readonly deletion: () => ParticipantDeletionLifecycle | undefined;
-  readonly runtime: () => RequestRuntime | undefined;
-  readonly invocations: ActiveInvocationRegistry;
-  readonly exporterDrain: () => (() => Promise<void>) | undefined;
-  readonly exporterDispose: () => (() => void) | undefined;
-  readonly advisoryLockDispose: () => (() => void) | undefined;
-  readonly advisoryLockDrain: () => (() => Promise<void>) | undefined;
-  readonly store: () => LinuxBunSqliteStore | undefined;
-}): () => Promise<void> {
-  let disposal: Promise<void> | undefined;
-  return () => {
-    disposal ??= (async () => {
-      let firstError: unknown;
-      const capture = async (operation: () => void | Promise<void>): Promise<void> => {
-        try {
-          await operation();
-        } catch (cause: unknown) {
-          firstError ??= cause;
-        }
-      };
-      const lifecycle = input.lifecycle();
-      await capture(() => input.deletion()?.dispose());
-      await capture(() => lifecycle?.stop("shutdown") ?? input.runtime()?.stop("shutdown"));
-      await capture(() => input.advisoryLockDispose()?.());
-      await capture(() => input.invocations.shutdown());
-      const advisoryLockDrain = input.advisoryLockDrain();
-      if (advisoryLockDrain) await capture(advisoryLockDrain);
-      if (lifecycle) await capture(() => lifecycle.scheduler.drain());
-      const exporterDrain = input.exporterDrain();
-      if (exporterDrain) await capture(exporterDrain);
-      const exporterDispose = input.exporterDispose();
-      if (exporterDispose) await capture(exporterDispose);
-      await capture(() => input.store()?.close());
-      if (firstError !== undefined) throw firstError;
-    })();
-    return disposal;
-  };
-}
-
 function bridgeContracts(
   contracts: ReturnType<typeof constructToolContracts>,
   invocations: ActiveInvocationRegistry,
@@ -204,7 +164,7 @@ export function createCompositionFactory(
     let advisoryLockDispose: (() => void) | undefined;
     let advisoryLockDrain: (() => Promise<void>) | undefined;
     const invocations = new ActiveInvocationRegistry();
-    const dispose = createDisposer({
+    const dispose = createCompositionDisposer({
       lifecycle: () => lifecycle,
       deletion: () => deletion,
       runtime: () => runtime,

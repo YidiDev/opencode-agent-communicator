@@ -8,6 +8,11 @@ import {
   type RequestDeadlineSchedulerStatus,
   type RequestDeadlineTimerPort,
 } from "./request-deadline-scheduler-contracts";
+import {
+  calculateRequestDeadlineScheduleDelay,
+  defaultMonotonicNowMs,
+  nativeDeadlineTimers,
+} from "./request-deadline-timing";
 
 export {
   requestDeadlineBatchLimit,
@@ -25,37 +30,11 @@ export {
   type RequestDeadlineSchedulerStatus,
   type RequestDeadlineTimerPort,
 } from "./request-deadline-scheduler-contracts";
+export { requestDeadlineMaximumTimerDelayMs } from "./request-deadline-timing";
 
-export const requestDeadlineMaximumTimerDelayMs = 2_147_483_647;
 export const requestDeadlineMaximumImmediateSchedulesPerPump = 32;
 
-const nativeDeadlineTimers: RequestDeadlineTimerPort = {
-  set: (delayMs, callback) => setTimeout(callback, delayMs),
-  clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-};
-
 type ScheduleDecision = "armed" | "immediate" | "failed";
-
-function defaultMonotonicNowMs(): number {
-  if (typeof performance !== "undefined" && typeof performance.now === "function") {
-    return performance.now();
-  }
-  return Number(process.hrtime.bigint()) / 1_000_000;
-}
-
-function remainingStoreDelay(
-  storeObservedAtMs: number,
-  maximumSleepMs: number,
-  nextAtMs: number | undefined,
-  elapsedMs: number,
-): number | "immediate" {
-  let delay = Math.min(maximumSleepMs, requestDeadlineMaximumTimerDelayMs);
-  if (nextAtMs !== undefined) {
-    if (nextAtMs <= storeObservedAtMs + elapsedMs) return "immediate";
-    delay = Math.min(delay, nextAtMs - storeObservedAtMs);
-  }
-  return delay - Math.ceil(elapsedMs);
-}
 
 export class RequestDeadlineScheduler {
   private readonly timers: RequestDeadlineTimerPort;
@@ -180,31 +159,9 @@ export class RequestDeadlineScheduler {
   }
 
   private arm(timed: RequestDeadlineTimedSchedule): ScheduleDecision {
-    const { schedule, elapsedMs } = timed;
-    let delay = remainingStoreDelay(
-      schedule.storeObservedAtMs,
-      schedule.maximumSleepMs,
-      schedule.nextDeadlineAtMs,
-      elapsedMs,
-    );
+    const delay = calculateRequestDeadlineScheduleDelay(timed);
     if (delay === "immediate") return "immediate";
-    if (timed.lockSchedule) {
-      const lockElapsedMs = timed.lockElapsedMs;
-      if (lockElapsedMs === undefined) {
-        this.fail("port_contract_violation");
-        return "failed";
-      }
-      const lockDelay = remainingStoreDelay(
-        timed.lockSchedule.storeObservedAtMs,
-        timed.lockSchedule.maximumSleepMs,
-        timed.lockSchedule.nextExpiryAtMs,
-        lockElapsedMs,
-      );
-      if (lockDelay === "immediate") return "immediate";
-      delay = Math.min(delay, lockDelay);
-    }
-    if (delay <= 0) return "immediate";
-    if (!Number.isSafeInteger(delay) || delay < 1) {
+    if (delay === "invalid") {
       this.fail("port_contract_violation");
       return "failed";
     }

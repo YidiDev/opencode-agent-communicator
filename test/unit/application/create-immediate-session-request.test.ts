@@ -212,6 +212,30 @@ function context(controller = new AbortController()) {
 
 const args = { session_id: targetSessionId, content: "Perform the work.", request: waitRequest };
 
+function visibleThenAbort(controller: AbortController) {
+  return {
+    sourceVisible: true,
+    get targetVisible() {
+      queueMicrotask(() =>
+        queueMicrotask(() => queueMicrotask(() => queueMicrotask(() => controller.abort()))),
+      );
+      return true;
+    },
+  };
+}
+
+function allowThenAbort(controller: AbortController): { readonly kind: "allow" } {
+  return new Proxy(
+    { kind: "allow" as const },
+    {
+      ownKeys(target) {
+        controller.abort();
+        return Reflect.ownKeys(target);
+      },
+    },
+  );
+}
+
 describe("createImmediateSessionRequest authorization and visibility", () => {
   test.each([
     ["message", "deny", "permission_denied"],
@@ -478,6 +502,46 @@ describe("createImmediateSessionRequest fail-closed boundaries", () => {
     ).toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
   });
 
+  test("maps unavailable membership during final visibility revalidation", async () => {
+    const current = fixture();
+    let calls = 0;
+    current.ports.membership.readCurrentRoots = async () => {
+      calls += 1;
+      if (calls > 1) throw new Error("membership unavailable");
+      return { sourceVisible: true, targetVisible: true, sourceTitle: undefined };
+    };
+
+    expect(await createImmediateSessionRequest(current.ports, context(), args)).toMatchObject({
+      ok: false,
+      error: { code: "native_unavailable" },
+    });
+    expect(current.prepared).toEqual([]);
+  });
+
+  test.each([
+    "initial visibility",
+    "message authorization",
+    "request authorization",
+    "final visibility",
+  ] as const)("rechecks cancellation after settled %s", async (boundary) => {
+    const current = fixture();
+    const controller = new AbortController();
+    if (boundary === "initial visibility") {
+      current.memberships = [visibleThenAbort(controller)];
+    } else if (boundary === "message authorization") {
+      current.ports.messageAuthorization.authorizeMessage = async () => allowThenAbort(controller);
+    } else if (boundary === "request authorization") {
+      current.ports.requestAuthorization.authorizeRequest = async () => allowThenAbort(controller);
+    } else {
+      current.memberships[1] = visibleThenAbort(controller);
+    }
+
+    expect(
+      await createImmediateSessionRequest(current.ports, context(controller), args),
+    ).toMatchObject({ ok: false, error: { code: "request_cancelled" } });
+    expect(current.prepared).toEqual([]);
+  });
+
   test("maps digest failure and an unsafe request deadline", async () => {
     const digestFailure = fixture();
     let digestCalls = 0;
@@ -550,7 +614,9 @@ describe("createImmediateSessionRequest fail-closed boundaries", () => {
       expect(current.prepared).toEqual([]);
     },
   );
+});
 
+describe("createImmediateSessionRequest storage and admission boundaries", () => {
   test("maps persistence, claim, and completion failures", async () => {
     const persistence = fixture();
     persistence.ports.requests.createPrepared = async () => {

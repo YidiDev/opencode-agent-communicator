@@ -7,7 +7,6 @@ import type {
 import {
   type AdvisoryLock,
   advisoryLockPolicy,
-  isCoherentAdvisoryLock,
   validateAdvisoryLockDescription,
   validateAdvisoryLockInstructions,
   validateAdvisoryLockTitle,
@@ -19,42 +18,17 @@ import { OwnershipLostFault } from "../../domain/ownership";
 import { activeAdvisoryLocksPerWorkspaceHardCeiling } from "../../domain/safety-ceilings";
 import { type SessionId, validateSessionId } from "../../domain/sessions";
 import type { WorkspaceKey } from "../../domain/workspaces";
+import {
+  hydrateAdvisoryLock,
+  listActiveAdvisoryLocks,
+  readAdvisoryLockExpirySchedule,
+  selectAdvisoryLock,
+  selectOwnedActiveAdvisoryLock,
+} from "./advisory-lock-queries";
 import { classifyDeliveryStorageError } from "./delivery-repository";
 import type { OwnershipRepository } from "./ownership-repository";
 import { requestPageLimitReached, requestStoreNowMs } from "./request-repository-shared";
 import { type StoreContext, StoreIntegrityError } from "./store-types";
-
-interface AdvisoryLockRow {
-  readonly lockId: unknown;
-  readonly holderSessionId: unknown;
-  readonly title: unknown;
-  readonly description: unknown;
-  readonly instructions: unknown;
-  readonly createdAtMs: unknown;
-  readonly renewedAtMs: unknown;
-  readonly expiresAtMs: unknown;
-}
-
-const columns = `lock_id AS lockId, holder_session_id AS holderSessionId, title,
-  description, instructions, created_at_ms AS createdAtMs, renewed_at_ms AS renewedAtMs,
-  expires_at_ms AS expiresAtMs`;
-
-function hydrate(row: AdvisoryLockRow): AdvisoryLock {
-  const lock = {
-    lockId: row.lockId,
-    holderSessionId: row.holderSessionId,
-    title: row.title,
-    description: row.description,
-    instructions: row.instructions,
-    createdAtMs: row.createdAtMs,
-    renewedAtMs: row.renewedAtMs,
-    expiresAtMs: row.expiresAtMs,
-  };
-  if (!isCoherentAdvisoryLock(lock)) {
-    throw new StoreIntegrityError("Stored advisory lock metadata is malformed.");
-  }
-  return Object.freeze(lock);
-}
 
 function failure(cause: unknown, atPageLimit: boolean): AdvisoryLockMutationResult {
   const classified = classifyDeliveryStorageError(cause, () => atPageLimit);
@@ -146,7 +120,7 @@ export class AdvisoryLockRepository {
         );
         return {
           ok: true as const,
-          lock: hydrate({
+          lock: hydrateAdvisoryLock({
             lockId: input.lockId,
             holderSessionId: input.holderSessionId,
             title: input.title,
@@ -172,38 +146,7 @@ export class AdvisoryLockRepository {
   }): AdvisoryLockListResult {
     const transaction = this.context.database.transaction(() => {
       this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
-      this.assertListInput(input.workspaceKey, input.limit, input.cursor);
-      const storeNowMs = requestStoreNowMs(this.context);
-      const rows = input.cursor
-        ? this.context.database
-            .query<AdvisoryLockRow, [string, number, number, string, number]>(
-              `SELECT ${columns} FROM advisory_locks INDEXED BY advisory_locks_list_v13
-               WHERE workspace_key = ? AND expires_at_ms > ?
-                 AND (created_at_ms, lock_id) < (?, ?)
-               ORDER BY created_at_ms DESC, lock_id DESC LIMIT ?`,
-            )
-            .all(
-              input.workspaceKey,
-              storeNowMs,
-              input.cursor.createdAtMs,
-              input.cursor.lockId,
-              input.limit,
-            )
-        : this.context.database
-            .query<AdvisoryLockRow, [string, number, number]>(
-              `SELECT ${columns} FROM advisory_locks INDEXED BY advisory_locks_list_v13
-               WHERE workspace_key = ? AND expires_at_ms > ?
-               ORDER BY created_at_ms DESC, lock_id DESC LIMIT ?`,
-            )
-            .all(input.workspaceKey, storeNowMs, input.limit);
-      const locks = rows.map(hydrate);
-      const last = locks.at(-1);
-      return Object.freeze({
-        locks: Object.freeze(locks),
-        ...(last && locks.length === input.limit
-          ? { nextCursor: Object.freeze({ createdAtMs: last.createdAtMs, lockId: last.lockId }) }
-          : {}),
-      });
+      return listActiveAdvisoryLocks(this.context, input);
     });
     return transaction.immediate();
   }
@@ -237,7 +180,9 @@ export class AdvisoryLockRepository {
           storeNowMs,
         ],
       );
-      return changed.changes === 1 ? this.select(input.workspaceKey, input.lockId) : undefined;
+      return changed.changes === 1
+        ? selectAdvisoryLock(this.context, input.workspaceKey, input.lockId)
+        : undefined;
     });
   }
 
@@ -249,13 +194,13 @@ export class AdvisoryLockRepository {
   }): AdvisoryLockMutationResult {
     if (!this.validMutationIdentity(input)) return { ok: false, code: "state_conflict" };
     return this.updateOwned(input, (storeNowMs) => {
-      const lock = this.context.database
-        .query<AdvisoryLockRow, [string, string, string, number]>(
-          `SELECT ${columns} FROM advisory_locks
-           WHERE workspace_key = ? AND lock_id = ? AND holder_session_id = ?
-             AND expires_at_ms > ?`,
-        )
-        .get(input.workspaceKey, input.lockId, input.holderSessionId, storeNowMs);
+      const lock = selectOwnedActiveAdvisoryLock(
+        this.context,
+        input.workspaceKey,
+        input.lockId,
+        input.holderSessionId,
+        storeNowMs,
+      );
       if (!lock) return undefined;
       const deleted = this.context.database.run(
         `DELETE FROM advisory_locks WHERE workspace_key = ? AND lock_id = ?
@@ -263,7 +208,7 @@ export class AdvisoryLockRepository {
         [input.workspaceKey, input.lockId, input.holderSessionId, storeNowMs],
       );
       if (deleted.changes !== 1) return undefined;
-      return hydrate(lock);
+      return lock;
     });
   }
 
@@ -302,25 +247,7 @@ export class AdvisoryLockRepository {
   }): AdvisoryLockExpirySchedule {
     const transaction = this.context.database.transaction(() => {
       this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
-      if (!this.validWorkspace(input.workspaceKey)) {
-        throw new StoreIntegrityError("The advisory lock schedule workspace is invalid.");
-      }
-      const storeObservedAtMs = requestStoreNowMs(this.context);
-      const row = this.context.database
-        .query<{ readonly expiresAtMs: unknown }, [string, number]>(
-          `SELECT expires_at_ms AS expiresAtMs FROM advisory_locks
-           WHERE workspace_key = ? AND expires_at_ms > ?
-           ORDER BY expires_at_ms, lock_id LIMIT 1`,
-        )
-        .get(input.workspaceKey, storeObservedAtMs);
-      if (row && (!Number.isSafeInteger(row.expiresAtMs) || (row.expiresAtMs as number) < 0)) {
-        throw new StoreIntegrityError("The advisory lock expiry schedule was malformed.");
-      }
-      return Object.freeze({
-        storeObservedAtMs,
-        maximumSleepMs: Math.floor(this.context.leaseDurationMs / 3),
-        ...(row ? { nextExpiryAtMs: row.expiresAtMs as number } : {}),
-      });
+      return readAdvisoryLockExpirySchedule(this.context, input.workspaceKey);
     });
     return transaction.immediate();
   }
@@ -344,15 +271,6 @@ export class AdvisoryLockRepository {
     }
   }
 
-  private select(workspaceKey: string, lockId: string): AdvisoryLock | undefined {
-    const row = this.context.database
-      .query<AdvisoryLockRow, [string, string]>(
-        `SELECT ${columns} FROM advisory_locks WHERE workspace_key = ? AND lock_id = ?`,
-      )
-      .get(workspaceKey, lockId);
-    return row ? hydrate(row) : undefined;
-  }
-
   private validWorkspace(workspaceKey: string): boolean {
     return workspaceKey === this.context.workspaceKey;
   }
@@ -367,24 +285,5 @@ export class AdvisoryLockRepository {
       validateAdvisoryLockId(input.lockId).ok &&
       validateSessionId(input.holderSessionId).ok
     );
-  }
-
-  private assertListInput(
-    workspaceKey: string,
-    limit: number,
-    cursor: AdvisoryLockCursor | undefined,
-  ): void {
-    if (
-      !this.validWorkspace(workspaceKey) ||
-      !Number.isSafeInteger(limit) ||
-      limit < 1 ||
-      limit > advisoryLockPolicy.maximumListLimit ||
-      (cursor !== undefined &&
-        (!Number.isSafeInteger(cursor.createdAtMs) ||
-          cursor.createdAtMs < 0 ||
-          !validateAdvisoryLockId(cursor.lockId).ok))
-    ) {
-      throw new StoreIntegrityError("The advisory lock list input is malformed.");
-    }
   }
 }

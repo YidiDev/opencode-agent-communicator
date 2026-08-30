@@ -6,49 +6,42 @@ import {
   validateAdvisoryLockTitle,
   validateAdvisoryLockTtlSeconds,
 } from "../domain/advisory-locks";
-import type { AdvisoryLockIdFactory } from "../domain/generated-ids";
 import { validateAdvisoryLockId } from "../domain/generated-ids";
 import { OwnershipLostFault } from "../domain/ownership";
 import { type DomainResult, domainFailure } from "../domain/results";
 import type { SessionId } from "../domain/sessions";
 import { validateSessionId } from "../domain/sessions";
-import type { WorkspaceKey } from "../domain/workspaces";
 import type {
-  AdvisoryLockCursor,
-  AdvisoryLockPersistencePort,
-  AdvisoryLockStoreFailureCode,
-} from "./advisory-lock-ports";
+  AdvisoryLockListValue,
+  AdvisoryLockMutationKind,
+  AdvisoryLockMutationValue,
+  AdvisoryLockNotificationSummary,
+  AdvisoryLockPostCommitNotificationPort,
+  AdvisoryLockUseCaseContext,
+  AdvisoryLockUseCasePorts,
+  AdvisoryLockWakePort,
+} from "./advisory-lock-contracts";
+import { decodeAdvisoryLockCursor, encodeAdvisoryLockCursor } from "./advisory-lock-cursor";
+import type { AdvisoryLockStoreFailureCode } from "./advisory-lock-ports";
 import {
   assertCommunicatorReady,
-  type CommunicatorReadinessPort,
   stopCommunicatorForOwnershipLoss,
 } from "./communicator-readiness-port";
-import type { CurrentWorkspaceMembershipPort } from "./delivery-ports";
+
+export type {
+  AdvisoryLockListValue,
+  AdvisoryLockMutationKind,
+  AdvisoryLockMutationValue,
+  AdvisoryLockNotificationSummary,
+  AdvisoryLockPostCommitNotificationPort,
+  AdvisoryLockUseCaseContext,
+  AdvisoryLockUseCasePorts,
+  AdvisoryLockWakePort,
+} from "./advisory-lock-contracts";
+export { decodeAdvisoryLockCursor, encodeAdvisoryLockCursor } from "./advisory-lock-cursor";
 
 export const advisoryLockListDefaultLimit = 50;
-const maximumCursorCharacters = 256;
 const maximumNotificationCount = 100;
-
-export interface AdvisoryLockNotificationSummary {
-  readonly eligible: number;
-  readonly admitted: number;
-  readonly unknown: number;
-}
-
-export type AdvisoryLockMutationKind = "published" | "renewed" | "released";
-
-export interface AdvisoryLockPostCommitNotificationPort {
-  notifyAdvisoryLockMutation(input: {
-    readonly workspaceKey: WorkspaceKey;
-    readonly holderSessionId: SessionId;
-    readonly kind: AdvisoryLockMutationKind;
-    readonly lock: AdvisoryLock;
-  }): Promise<AdvisoryLockNotificationSummary>;
-}
-
-export interface AdvisoryLockWakePort {
-  wakeAdvisoryLockExpiry(): void;
-}
 
 export const noOpAdvisoryLockWakePort: AdvisoryLockWakePort = Object.freeze({
   wakeAdvisoryLockExpiry: () => undefined,
@@ -60,31 +53,6 @@ export const noOpAdvisoryLockNotificationPort: AdvisoryLockPostCommitNotificatio
   Object.freeze({
     notifyAdvisoryLockMutation: async () => zeroNotificationSummary,
   });
-
-export interface AdvisoryLockUseCasePorts {
-  readonly readiness: CommunicatorReadinessPort;
-  readonly membership: CurrentWorkspaceMembershipPort;
-  readonly locks: AdvisoryLockPersistencePort;
-  readonly wake?: AdvisoryLockWakePort;
-  readonly notifications?: AdvisoryLockPostCommitNotificationPort;
-  readonly ids?: AdvisoryLockIdFactory;
-}
-
-export interface AdvisoryLockUseCaseContext {
-  readonly workspaceKey: WorkspaceKey;
-  readonly fencingToken: import("../domain/ownership").FencingToken;
-  readonly callerSessionId: unknown;
-}
-
-export interface AdvisoryLockMutationValue {
-  readonly lock: AdvisoryLock;
-  readonly notification: AdvisoryLockNotificationSummary;
-}
-
-export interface AdvisoryLockListValue {
-  readonly locks: readonly AdvisoryLock[];
-  readonly nextCursor?: string;
-}
 
 function hasNonemptyUtf8(value: string): boolean {
   return new TextEncoder().encode(value).length > 0;
@@ -174,51 +142,6 @@ async function afterCommit(
     return coherentSummary(summary) ? Object.freeze({ ...summary }) : zeroNotificationSummary;
   } catch {
     return zeroNotificationSummary;
-  }
-}
-
-export function encodeAdvisoryLockCursor(cursor: AdvisoryLockCursor): string {
-  if (
-    !Number.isSafeInteger(cursor.createdAtMs) ||
-    cursor.createdAtMs < 0 ||
-    !validateAdvisoryLockId(cursor.lockId).ok
-  ) {
-    throw new TypeError("Advisory lock cursor is malformed.");
-  }
-  return Buffer.from(
-    JSON.stringify({ v: 1, c: cursor.createdAtMs, l: cursor.lockId }),
-    "utf8",
-  ).toString("base64url");
-}
-
-export function decodeAdvisoryLockCursor(value: unknown): AdvisoryLockCursor | undefined {
-  if (
-    typeof value !== "string" ||
-    value.length < 1 ||
-    value.length > maximumCursorCharacters ||
-    !/^[A-Za-z0-9_-]+$/.test(value)
-  ) {
-    return undefined;
-  }
-  try {
-    const decoded = Buffer.from(value, "base64url").toString("utf8");
-    const parsed: unknown = JSON.parse(decoded);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
-    const record = parsed as Record<string, unknown>;
-    if (
-      Object.keys(record).sort().join(",") !== "c,l,v" ||
-      record.v !== 1 ||
-      !Number.isSafeInteger(record.c) ||
-      (record.c as number) < 0
-    ) {
-      return undefined;
-    }
-    const lockId = validateAdvisoryLockId(record.l);
-    if (!lockId.ok) return undefined;
-    const cursor = { createdAtMs: record.c as number, lockId: lockId.value };
-    return encodeAdvisoryLockCursor(cursor) === value ? Object.freeze(cursor) : undefined;
-  } catch {
-    return undefined;
   }
 }
 
