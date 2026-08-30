@@ -13,7 +13,7 @@ if (!parsedWorkspace.ok) throw new Error("Invalid workspace fixture.");
 afterEach(cleanupRequestStoreRoots);
 
 describe("atomic communicator tool construction", () => {
-  test("constructs all 20 contracts with strict policy overrides and bounded start limits", async () => {
+  test("constructs all 21 contracts with strict policy overrides and bounded start limits", async () => {
     const options = {
       stateDirectory: "/var/lib/communicator",
       startupDeadlineMs: 30_000,
@@ -57,7 +57,7 @@ describe("atomic communicator tool construction", () => {
       exporter: { writeExport: async () => ({ ok: false, code: "export_unavailable" }) },
     });
     expect(Object.keys(contracts)).toEqual([...communicatorToolIds]);
-    expect(Object.keys(contracts)).toHaveLength(20);
+    expect(Object.keys(contracts)).toHaveLength(21);
     expect(Object.isFrozen(contracts)).toBe(true);
     await expect(
       contracts.session_send.execute({} as never, {

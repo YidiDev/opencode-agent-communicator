@@ -30,6 +30,7 @@
     "src/",
     "skills/",
     "docs/plugin-configuration.md",
+    "docs/session-read-security.md",
     "docs/session-export-security.md",
     "docs/linux-sqlite-store.md",
     "CHANGELOG.md",

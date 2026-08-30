@@ -263,7 +263,56 @@ describe("OpenCode 1.18.23 native adapter", () => {
     expect(fake.calls.filter((call) => call.surface === "legacy.status")).toHaveLength(1);
     expect(fake.calls.filter((call) => call.surface === "v2.active")).toHaveLength(1);
   });
+});
 
+describe("OpenCode 1.18.23 session read presence", () => {
+  test("observes abort-aware session read presence as one exact native snapshot", async () => {
+    const fake = fixture({
+      visibleRoots: [
+        nativeSession("ses_source", "source", 1),
+        nativeSession("ses_target", "target", 2),
+      ],
+      statuses: { ses_target: { type: "retry", attempt: 1, message: "later", next: 10 } },
+      active: { ses_target: { type: "running" } },
+    });
+    const observe = fake.adapter.observeSessionReadPresence;
+    if (!observe) throw new Error("session read presence operation is missing");
+    const signal = new AbortController().signal;
+    expect(await observe(workspaceKey, sourceSessionId, targetSessionId, signal)).toEqual({
+      sourceVisible: true,
+      targetVisible: true,
+      targetStatus: "retry",
+      observedAtMs: 7000,
+    });
+    expect(fake.calls.filter((call) => call.surface === "legacy.roots")).toHaveLength(1);
+    expect(fake.calls.filter((call) => call.surface === "legacy.status")).toHaveLength(1);
+    expect(fake.calls.filter((call) => call.surface === "v2.active")).toHaveLength(1);
+    const statusIndex = fake.calls.findIndex((call) => call.surface === "legacy.status");
+    const activeIndex = fake.calls.findIndex((call) => call.surface === "v2.active");
+    const rootsIndex = fake.calls.findIndex((call) => call.surface === "legacy.roots");
+    expect(rootsIndex).toBeGreaterThan(statusIndex);
+    expect(rootsIndex).toBeGreaterThan(activeIndex);
+
+    const aborted = new AbortController();
+    aborted.abort();
+    await expect(
+      observe(workspaceKey, sourceSessionId, targetSessionId, aborted.signal),
+    ).rejects.toThrow("aborted");
+    await expect(
+      observe(
+        valid(validateWorkspaceKey("workspace:other")),
+        sourceSessionId,
+        targetSessionId,
+        signal,
+      ),
+    ).rejects.toThrow("binding");
+    await expect(observe(workspaceKey, "bad" as never, targetSessionId, signal)).rejects.toThrow(
+      "identity",
+    );
+  });
+});
+
+describe("OpenCode 1.18.23 native adapter observations", () => {
   test("rejects inherited and getter-backed request activity maps", async () => {
     const inherited = Object.create({ ses_target: { type: "busy" } });
     const getter = Object.defineProperty({}, "ses_target", {

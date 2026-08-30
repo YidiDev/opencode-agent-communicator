@@ -1,6 +1,7 @@
 import type {
   CurrentWorkspaceMembershipPort,
   NativeQueueAdmissionPort,
+  SessionReadPresencePort,
 } from "../../application/delivery-ports";
 import type { NativeParticipantStopActivityPort } from "../../application/participant-stop-ports";
 import type {
@@ -39,6 +40,7 @@ export function createObservationOperations(
 ): HostHealthPort &
   VisibleRootSessionPort &
   CurrentWorkspaceMembershipPort &
+  SessionReadPresencePort &
   RequestParticipantActivityPort &
   NativeParticipantStopActivityPort {
   return {
@@ -102,6 +104,46 @@ export function createObservationOperations(
         targetVisible: byId.has(targetSessionId),
         sourceTitle: byId.get(sourceSessionId)?.title,
       };
+    },
+    async observeSessionReadPresence(workspaceKey, sourceSessionId, targetSessionId, abort) {
+      assertWorkspaceBinding(workspaceKey, context.configuredWorkspace);
+      if (!validateSessionId(sourceSessionId).ok || !validateSessionId(targetSessionId).ok) {
+        throw new NativeAdapterFault("Session read participant identity is malformed.");
+      }
+      if (!(abort instanceof AbortSignal) || abort.aborted) {
+        throw new NativeAdapterFault("Session read presence observation was aborted.");
+      }
+      const [statusResult, activeResult] = await Promise.all([
+        context.readStatus({ signal: abort }),
+        context.active({ signal: abort }),
+      ]);
+      if (abort.aborted) {
+        throw new NativeAdapterFault("Session read presence observation was aborted.");
+      }
+      const rootsResult = await context.listVisibleRoots({ signal: abort });
+      if (abort.aborted) {
+        throw new NativeAdapterFault("Session read presence observation was aborted.");
+      }
+      const roots = parseSessionArray(
+        envelopeData(rootsResult, "Legacy current root listing"),
+        "Current root listing",
+      );
+      const statuses = parseActivityMap(
+        envelopeData(statusResult, "Legacy status"),
+        "Legacy status",
+      );
+      const active = parseActiveMap(activeResult);
+      const observedAtMs = context.now();
+      if (!Number.isSafeInteger(observedAtMs) || observedAtMs < 0) {
+        throw new NativeAdapterFault("Observation clock is invalid.");
+      }
+      const visible = new Set(roots.map((root) => root.id));
+      return Object.freeze({
+        sourceVisible: visible.has(sourceSessionId),
+        targetVisible: visible.has(targetSessionId),
+        targetStatus: mergedActivityStatus(statuses, active, targetSessionId),
+        observedAtMs,
+      });
     },
     async observeRequestParticipants(workspaceKey, sourceSessionId, targetSessionId, abort) {
       assertWorkspaceBinding(workspaceKey, context.configuredWorkspace);

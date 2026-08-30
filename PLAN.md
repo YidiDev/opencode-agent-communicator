@@ -24,15 +24,16 @@ The original `0.1.0` prerelease exposed this fourteen-tool surface:
 - `session_start`
 - `session_export`
 
-The current `0.3.0` release adds these tools immediately after `session_list` in canonical manifest
-order, bringing the public surface to exactly eighteen tools:
+Release `0.3.0` added these tools immediately after `session_list` in canonical manifest order:
 
 - `session_lock_list`
 - `session_lock_publish`
 - `session_lock_release`
 - `session_lock_renew`
 
-It also ships exactly three skills: `session-communication`, `session-request-participant`, and `session-locks`.
+Release `0.4.0` added `session_request_send` and `session_request_start`. The current implementation
+adds `session_read` immediately after `session_list`, bringing the public surface to exactly 21 tools.
+It ships exactly three skills: `session-communication`, `session-request-participant`, and `session-locks`.
 The v0.3 lock surface is workspace-scoped, visible-root-only, holder-owned for renew/release, fenced
 by coordinator ownership, bounded to 1024 active records, and time-bounded to 1-3600 seconds. List
 state is authoritative and omits expired records. Markdown is untrusted advisory data; locks and
@@ -218,8 +219,9 @@ constant-shape `not_found_or_unauthorized` response to limit ID enumeration.
 Status is a point-in-time observation. It does not mean a human is watching the
 session, and it may race before native admission.
 
-Idle status does not block read-only operations: listing, delivery/request
-inspection, and export remain available subject to their normal authorization.
+Idle status does not block read-only operations: listing, bounded transcript projection,
+delivery/request inspection, and export remain available subject to their normal authorization.
+For `session_read`, idle produces `is_live: false`; unknown status fails closed.
 
 ### 5.4 Roles
 
@@ -342,6 +344,7 @@ delivery_failed
 native_outcome_unknown
 ownership_lost
 storage_unavailable
+cursor_stale
 export_unavailable
 unsafe_path
 destination_exists
@@ -359,6 +362,7 @@ generated schemas. At minimum they cover:
 | Tool | Tool-specific expected codes in addition to shared validation, visibility, authorization, quota, ownership, and storage codes |
 | --- | --- |
 | `session_list` | no additional codes |
+| `session_read` | `approval_rejected`, `deadline_expired`, `native_unavailable`, `cursor_stale` |
 | `session_send` | `admission_failed`, `admission_unknown` |
 | `session_delivery_get` | `not_found_or_unauthorized` |
 | `session_ask`, `session_wait` | `target_idle`, `target_status_unknown`, `deadlock_detected`, `delivery_failed`, `deadline_expired`, `request_cancelled`, `result_expired`, `target_stopped`, `source_stopped`, `target_deleted`, `source_deleted` |
@@ -388,6 +392,8 @@ to hard secure defaults:
 | Operation | Default | Non-bypassable rule |
 | --- | --- | --- |
 | list/inspect own role records | allow | Workspace and role checks |
+| read own current visible root transcript projection | allow | Bounded restricted projection only |
+| read another current visible root transcript projection | ask | Exact source, target, projection, direction, line limit, byte cap, cursor digest, and deadline binding |
 | send message | allow | Quotas and source/target checks |
 | ask/wait/respond/signal | allow | Quotas, role, and active-target rules |
 | request ack/cancel | allow | Source role only |
@@ -430,7 +436,79 @@ The result includes enough current state for this explicit workflow:
 
 Listing never claims a human is viewing a session.
 
-### 8.2 `session_send`
+### 8.2 `session_read`
+
+```ts
+type SessionReadArgs = {
+  session_id: string
+  cursor?: string
+  direction?: "before" | "after"
+  limit?: number
+}
+```
+
+With no cursor, `session_read` returns the transcript tail. A supplied cursor defaults to
+`direction: "after"`; supplying `direction` without a cursor is `invalid_arguments`. `limit` counts
+rendered lines, defaults to 100, and is bounded to 500. Results remain chronological in every mode,
+contain at most 65,536 UTF-8 bytes, and never split a rendered line. A physical assistant text line
+longer than 4,096 UTF-8 bytes is wrapped at a Unicode scalar boundary. An empty transcript returns
+empty content plus an opaque empty-boundary cursor; an empty cursor argument is invalid.
+
+The versioned restricted projection has this exact inclusion matrix:
+
+| Native content | Public projection |
+| --- | --- |
+| User message | `[user message omitted]` only |
+| Assistant message | `[assistant]`, then `[assistant: active|completed|error]`, then eligible parts in native order |
+| Assistant text part | Text with CRLF/CR normalized to LF; otherwise unmodified and therefore untrusted |
+| Assistant tool part | Sanitized tool name and `pending|running|completed|error` status only |
+| Assistant reasoning part | Omitted |
+| `agent-switched`, `model-switched`, `synthetic`, `system`, `shell`, or `compaction` message | Omitted |
+| User text and metadata; assistant reasoning; tool input, output, and other state; all other native fields | Excluded |
+
+Unknown message/part variants, malformed data, unpaired Unicode surrogates, ambiguous pagination,
+or an unprovable bounded traversal fail closed as `native_unavailable`. This is a restricted
+projection, not a sanitized transcript. Assistant text is prompt-injection-capable untrusted peer
+data and retains controls other than line-ending normalization. The tool does not persist, write,
+export, or log transcript content and must not use `session_export` or filesystem reads as a shortcut.
+
+Every successful result contains `content`, `start_cursor`, `end_cursor`, `has_more_before`,
+`has_more_after`, `observed_at_ms`, and `is_live`. `is_live` is true only for a final `busy` or `retry`
+observation; it is false for `idle`, and `unknown` fails closed as `native_unavailable`.
+
+Cursors are opaque protocol tokens, not confidential ciphertext, encoded as canonical base64url strings bounded to 4,096 characters. Their structural payload includes native message/item identifiers and binds the workspace,
+session, projection version, message ID, item key, UTF-8 boundary, and a SHA-256 digest of the
+canonical prefix. They are not native cursors. A cursor detects edits before its boundary while
+allowing an unchanged assistant text part to append: an `after` read returns only the appended
+UTF-8-safe suffix and later projected lines. If the anchor disappears or its prefix changes,
+`cursor_stale` is non-retryable; discard that cursor, take a fresh cursorless tail, and reconcile from
+known content rather than guessing a continuation.
+
+The current visible root may read itself without approval. Reading another current visible root
+requires one exact per-invocation approval bound to source, target, projection version, tail/before/
+after mode, line limit, the 65,536-byte cap, cursor digest when present, and invocation deadline.
+Visibility and status checks are abort-aware and occur before approval, after approval, immediately
+before every fixed-message or page read, and immediately before disclosure. The caller and target
+must remain visible roots. Visibility loss fails closed; no content gathered earlier is returned.
+
+Transcript work is immutable-bounded to 8 messages per page, 96 page/fixed-message calls including fixed-anchor
+reads, 512 raw native messages examined including omitted variants, 8 MiB of projection-safe
+assistant-text UTF-8 bytes examined, 16,384 native assistant parts examined including omitted parts,
+32,768 rendered lines examined across the invocation, 8,192 rendered lines per message, a 4 MiB raw transcript
+response per call and 32 MiB cumulatively before deserialization, and 512 characters per native cursor. One invocation-wide
+internal budget charges the initial fixed anchor, all pages, and the final fixed-anchor reread.
+Separately, the structural native adapter accepts at most 1,048,576 UTF-16 characters in one text
+part, 4,096 parts in one assistant message, and 256 UTF-16 characters in one raw tool name. These are
+exact per-value/per-message adapter ceilings, not invocation budget counters.
+Bounds exhaustion never triggers an unbounded proof attempt or a guessed result.
+It returns `native_unavailable`. Fixed-anchor reads before and after traversal validate cursor
+stability across append races.
+
+`session_read` is an observation and disclosure tool only. It does not prove execution, completion,
+peer compliance, or advisory-lock compliance. Durable ask/wait requests remain the preferred
+coordination and result channel.
+
+### 8.3 `session_send`
 
 ```ts
 type SessionSendArgs = {
@@ -452,7 +530,7 @@ a duplicate normal-message payload.
 `session_send` is the only communicator operation that may initiate work in an
 existing idle session.
 
-### 8.3 `session_delivery_get`
+### 8.4 `session_delivery_get`
 
 ```ts
 type SessionDeliveryGetArgs = {
@@ -514,7 +592,7 @@ retained only while `prepared`; it is logically erased after the worker commits
 `submitting`, leaving the fixed native message ID and payload digest for
 correlation.
 
-### 8.4 `session_ask`
+### 8.5 `session_ask`
 
 ```ts
 type AskQuestion = {
@@ -558,7 +636,7 @@ are rejected unless custom text is allowed.
 Provisional bounds are 32 KiB total request payload, 10 questions, 20 options
 per question, bounded string sizes, and `1..3600` seconds.
 
-### 8.5 `session_respond`
+### 8.6 `session_respond`
 
 ```ts
 type SessionRespondArgs = {
@@ -574,7 +652,7 @@ the pending request payload, and commits before any in-memory waiter resolves.
 Late or duplicate responses return the mapped stored terminal outcome defined in
 Section 9.1 without changing state.
 
-### 8.6 `session_wait`
+### 8.7 `session_wait`
 
 ```ts
 type SessionWaitArgs = {
@@ -588,7 +666,7 @@ type SessionWaitArgs = {
 race, ambiguity, blocking, restart, deadline, and explicit-abort rules as
 `session_ask`. It never wakes an idle target.
 
-### 8.7 `session_signal`
+### 8.8 `session_signal`
 
 ```ts
 type SessionSignalArgs = {
@@ -602,7 +680,7 @@ Only the target may signal a pending wait. A compare-and-set transaction records
 milestone payload, and commits before resolving a waiter. Late or duplicate
 signals return the mapped stored terminal outcome defined in Section 9.1.
 
-### 8.8 `session_request_list`
+### 8.9 `session_request_list`
 
 ```ts
 type SessionRequestListArgs = {
@@ -627,7 +705,7 @@ means an answered/reached result exceeded its retrieval window. Questions,
 milestone text, answers, and evidence are never returned by list. Pagination
 and a hard maximum limit are mandatory.
 
-### 8.9 `session_request_get`
+### 8.10 `session_request_get`
 
 ```ts
 type SessionRequestGetArgs = {
@@ -644,7 +722,7 @@ hours after terminal resolution, whichever comes first. After that window,
 metadata remains but source retrieval returns `result_expired` and no content.
 Unauthorized roles receive constant-shape `not_found_or_unauthorized`.
 
-### 8.10 `session_request_ack`
+### 8.11 `session_request_ack`
 
 ```ts
 type SessionRequestAckArgs = {
@@ -658,7 +736,7 @@ answer/evidence content and records `acknowledged_at`; payload-free metadata is
 retained. An acknowledgement after automatic result expiry is also idempotent,
 marks the metadata acknowledged, and does not restore content.
 
-### 8.11 `session_request_cancel`
+### 8.12 `session_request_cancel`
 
 ```ts
 type SessionRequestCancelArgs = {
@@ -672,7 +750,7 @@ content, clears local waiter/timer state after commit, and causes all late
 responses or signals to return the mapped stored terminal outcome. It cannot retract
 the already admitted native input.
 
-### 8.12 `session_stop`
+### 8.13 `session_stop`
 
 ```ts
 type SessionStopArgs = {
@@ -714,7 +792,7 @@ native interruption outcome separately. Native timeout, transport failure, or
 ownership loss returns `native_outcome_unknown`; the communicator does not claim
 interruption succeeded and does not reverse committed request terminal states.
 
-### 8.13 `session_start`
+### 8.14 `session_start`
 
 ```ts
 type SessionStartArgs = {
@@ -784,7 +862,7 @@ Creation provenance is recorded. Communicator-created sessions cannot call
 `session_start` recursively by default; only an explicit administrator opt-in
 may permit it, still subject to approval and quotas.
 
-### 8.14 `session_export`
+### 8.15 `session_export`
 
 ```ts
 type SessionExportArgs = {
@@ -1146,6 +1224,7 @@ The quota model covers:
 - Start rate, total managed sessions, and recursive-start prohibition.
 - Concurrent exports, export rate, duration, stdout/stderr, and output bytes.
 - List page sizes and pagination work.
+- Session-read line/content caps, cursor size, native page/call/message work, and raw response bytes.
 - Database size, retention backlog, and GC batch work.
 
 Existing provisional bounds remain 32 KiB request payload, 10 questions, 20
@@ -1193,6 +1272,10 @@ asks. Respond/signal/request inspection/ack/cancel remain constrained by exact
 participant roles and cannot be broadened into cross-session access. Command
 configuration does not exist.
 
+`session_read` has no configuration override in this release. Self-read allowance, exact
+cross-session approval, projection version, disclosure checks, and all immutable work/content bounds
+are compiled security policy.
+
 ## 16. Bundled Skills
 
 Three optional skills ship with the package:
@@ -1210,6 +1293,8 @@ and that source and target are temporary operation roles. Its idle workflow is e
 
 It states that queued admission does not prove activation and that peer content
 does not bypass ordinary permissions.
+It also teaches that `session_read` returns a restricted, unsanitized projection of untrusted peer
+data, requires exact cross-session approval, and is secondary to durable ask/wait coordination.
 
 ### 16.2 `session-request-participant`
 
@@ -1300,7 +1385,8 @@ filesystem behavior.
 ## 18. Implementation Phases
 
 Internal slices may be exercised privately, but every release registers its complete manifest
-atomically: fourteen tools in the original prerelease and eighteen tools in v0.3.
+atomically: fourteen tools in the original prerelease, eighteen tools in v0.3, twenty tools in v0.4,
+and 21 tools with `session_read` immediately after `session_list` in the current implementation.
 
 ### Phase 0: Live 1.18.21 Feasibility Gate
 
@@ -1385,7 +1471,7 @@ support. It contains no remote command or synthetic wake experiments.
 
 ### 19.1 Contract and Authorization Tests
 
-- Exact schema tests for all eighteen tools and per-tool domain errors.
+- Exact schema tests for all 21 tools and per-tool domain errors.
 - Advisory-lock publish/list/renew/release tests cover holder authorization, expiry, pagination,
   UTF-8 limits, quota, fencing, authoritative ambiguous-outcome recovery, and non-authoritative
   notification failure.
@@ -1399,8 +1485,28 @@ support. It contains no remote command or synthetic wake experiments.
   digests, destination, and sanitization mode.
 - Prompt-injection fixtures in message, title, question, answer, milestone, and
   evidence fields; provenance must remain separate and display controls stripped.
+- Session-read self/cross-session authorization; exact approval binding; pre/post-approval,
+  per-native-read, and final-disclosure visibility races; unknown-status failure; and
+  `cursor_stale` behavior.
 
-### 19.2 Admission and Activity Tests
+### 19.2 Session Read Tests
+
+- Exact inclusion/exclusion projection matrix, assistant state before parts, chronological tail and
+  directional pages, CR/LF normalization, UTF-8-safe 4,096-byte wrapping, 100/500 line limits, and
+  65,536-byte aggregate output.
+- Opaque cursor binding to workspace, session, projection, message, item, UTF-8 boundary, and prefix;
+  empty-transcript boundaries; append-only suffix reads; and stale prefix/anchor recovery.
+- Native caps of 8 messages/page, 96 calls, 512 examined messages, 4 MiB per response and 32 MiB
+  cumulatively before deserialization, and 512 native-cursor characters, with no unbounded fallback
+  or guessed result.
+- Malformed/unknown native variants, excluded fields, prompt-injection-capable assistant text, abort
+  propagation, and proof that no transcript content is persisted, logged, exported, or written.
+- Isolated supported-range live acceptance must prove real V2 pagination and fixed-message shapes,
+  chronological projection, append behavior, approval, and packed self/cross-session cursor journeys. Deterministic adversarial tests prove visibility races and bounded transport, and the
+  exact 21-tool manifest. The implementation and deterministic tests exist, but this issue must not
+  be described as having passed that live acceptance until the live job supplies the evidence.
+
+### 19.3 Admission and Activity Tests
 
 - Message queue admission to active and idle sessions.
 - Idle activation observed separately through `session_list`.
@@ -1414,7 +1520,7 @@ support. It contains no remote command or synthetic wake experiments.
 - No hidden polling, retry, synthetic wake, reminder, or system-transform use.
 - `started` absent unless the Phase 0 evidence test passes.
 
-### 19.3 Request Tests
+### 19.4 Request Tests
 
 - Durable pending requests across backend restart and process replacement.
 - Reconstructed timers and immediate expiry of elapsed deadlines.
@@ -1435,7 +1541,7 @@ support. It contains no remote command or synthetic wake experiments.
   `result_expired` retrieval.
 - Thirty-day payload-free metadata retention and bounded GC.
 
-### 19.4 Start and Stop Tests
+### 19.5 Start and Stop Tests
 
 - Stop always asks, including permissive administrator configuration.
 - Approved idle stop returns `already_idle` without native interrupt.
@@ -1448,7 +1554,7 @@ support. It contains no remote command or synthetic wake experiments.
 - Per-source/workspace rates and managed-session counts.
 - Managed-session recursive start denied by default and explicitly opt-in only.
 
-### 19.5 Store and Ownership Tests
+### 19.6 Store and Ownership Tests
 
 - Migration atomicity, corruption, WAL behavior, disk full, and private sidecars.
 - Every mutation rejects a stale fencing token.
@@ -1459,7 +1565,7 @@ support. It contains no remote command or synthetic wake experiments.
 - Source, target, workspace, timer, retained-result, delivery, start, export,
   list, and database hard ceilings.
 
-### 19.6 Export Tests
+### 19.7 Export Tests
 
 - Exact executable path/version verified for every invocation.
 - Executable replacement, hostile PATH, writable executable location, dangerous
@@ -1476,7 +1582,7 @@ support. It contains no remote command or synthetic wake experiments.
 - Equivalent adversarial tests for state/database/WAL/SHM paths.
 - Linux x64 matrix before prerelease; additional architecture and Linux/macOS/Windows matrices before stable.
 
-### 19.7 Skills and Live Acceptance
+### 19.8 Skills and Live Acceptance
 
 - Skill discovery through config hook or documented explicit installers.
 - No silent file copy and no correctness dependency on skills.
@@ -1489,6 +1595,8 @@ support. It contains no remote command or synthetic wake experiments.
   or authorization semantics.
 - Live multi-session acceptance covers all tools, restart recovery, idle flow,
   role authorization, partial starts, stop approval, and sanitized export.
+- Session-read live acceptance is required before release evidence may claim support; implementation
+  and non-live tests alone are not live compatibility proof.
 - Live tests run against isolated exact 1.18.21, never the user's active 1.17.20
   installation.
 
@@ -1498,6 +1606,8 @@ Structured diagnostics include workspace hash, operation type, opaque IDs,
 states, durations, quota class, native evidence IDs, ownership generation, and
 safe error code. They exclude peer payloads, answers, evidence, raw workspace
 paths, unsanitized titles, transcript content, approval secrets, and export JSON.
+Session-read content, cursor plaintext, message/part text, and approval resources are likewise
+excluded; only safe outcome and bounded-work metadata may be observed.
 
 Metrics cover admissions and ambiguity, request age/outcomes, deadline lag,
 retained result bytes, quota rejection, database/GC size, lease renewal,
@@ -1516,7 +1626,7 @@ Diagnostics must distinguish:
 The v0.3 release requires:
 
 1. Exact 1.18.21 host validation and isolated Phase 0 evidence.
-2. All eighteen tools implemented with tested role/workspace authorization and exactly three
+2. All 21 tools implemented with tested role/workspace authorization and exactly three
    bundled skills.
 3. Message-only queue admission and explicit idle activation workflow.
 4. Active-only ask/wait with `target_idle`, no persisted idle request, no hidden
@@ -1537,7 +1647,9 @@ The v0.3 release requires:
 13. Both peer-communication skills available through a proven registration or
     explicit installer.
 14. No command execution, synthetic wake/reminder subsystem, system-transform
-    dependency, restart orphaning, or exactly-once external-effect claim.
+     dependency, restart orphaning, or exactly-once external-effect claim.
+15. `session_read` meets its exact projection, cursor, approval, visibility, resource-bound, and
+    no-persistence contract, and passes isolated supported-OpenCode live acceptance before release.
 
 Stable additionally requires complete macOS and Windows filesystem/process
 security matrices, cross-platform live acceptance, measured frozen limits, and

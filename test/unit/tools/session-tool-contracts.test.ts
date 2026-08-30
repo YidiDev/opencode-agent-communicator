@@ -12,6 +12,8 @@ import {
   sessionDeliveryGetFailureCodes,
   sessionListArgumentsSchema,
   sessionListFailureCodes,
+  sessionReadArgumentsSchema,
+  sessionReadFailureCodes,
   sessionSendArgumentsSchema,
   sessionSendFailureCodes,
   ToolContractFault,
@@ -35,6 +37,11 @@ describe("internal session tool contracts", () => {
     expect(sessionListArgumentsSchema.safeParse({ limit: 0 }).success).toBe(false);
     expect(sessionListArgumentsSchema.safeParse({ limit: 1.5 }).success).toBe(false);
     expect(sessionListArgumentsSchema.safeParse({ extra: true }).success).toBe(false);
+    expect(sessionReadArgumentsSchema.parse({ session_id: "ses_target" }).limit).toBe(100);
+    expect(
+      sessionReadArgumentsSchema.safeParse({ session_id: "ses_target", direction: "before" })
+        .success,
+    ).toBe(false);
 
     expect(
       sessionSendArgumentsSchema.safeParse({ session_id: "ses_target", content: "hi" }).success,
@@ -92,6 +99,16 @@ describe("internal session tool contracts", () => {
       "caller_not_visible",
       "deadline_expired",
       "native_unavailable",
+    ]);
+    expect(sessionReadFailureCodes).toEqual([
+      "invalid_arguments",
+      "caller_not_visible",
+      "target_not_visible",
+      "permission_denied",
+      "approval_rejected",
+      "deadline_expired",
+      "native_unavailable",
+      "cursor_stale",
     ]);
     expect(new Set(sessionSendFailureCodes)).toEqual(
       new Set([

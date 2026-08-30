@@ -3,6 +3,9 @@
 `session_export` is a Linux x64-hardened contract registered by the plugin composition. Composition
 must provide a securely configured export root and a
 canonical absolute OpenCode executable outside workspace and plugin directories.
+Export is not a fallback for `session_read`: code must not read an exported file to bypass the
+restricted projection or its cross-session approval. See
+[Session read security](session-read-security.md) for that separate disclosure boundary.
 
 The adapter opens the root and every destination parent through retained directory descriptors
 with `O_NOFOLLOW`, flushing each newly created directory and its parent. Transcript bytes exist only
