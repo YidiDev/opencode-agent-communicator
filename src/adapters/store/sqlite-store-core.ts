@@ -5,6 +5,7 @@ import type { OperationControl, StartupRecoveryBarrier } from "../../application
 import type { StartOperationPersistencePort } from "../../application/session-start-ports";
 import { type FencingToken, OwnershipLostFault } from "../../domain/ownership";
 import { validateWorkspaceKey } from "../../domain/workspaces";
+import { AdvisoryLockRepository } from "./advisory-lock-repository";
 import {
   configureDatabaseConnection,
   configureOwnedDatabase,
@@ -53,6 +54,7 @@ export class SqliteStoreCore {
   readonly schemaVersion = sqliteStoreMigrations.length;
   readonly starts: StartOperationPersistencePort;
   protected readonly ownershipRepository: OwnershipRepository;
+  protected readonly advisoryLockRepository: AdvisoryLockRepository;
   protected readonly deliveryRepository: DeliveryRepository;
   protected readonly deliveryQueryRepository: DeliveryQueryRepository;
   protected readonly requestRepository: RequestRepository;
@@ -177,6 +179,10 @@ export class SqliteStoreCore {
       retainCloseFailure,
     );
     this.ownershipRepository = new OwnershipRepository(this.context);
+    this.advisoryLockRepository = new AdvisoryLockRepository(
+      this.context,
+      this.ownershipRepository,
+    );
     this.deliveryRepository = new DeliveryRepository(this.context, this.ownershipRepository);
     this.deliveryQueryRepository = new DeliveryQueryRepository(
       this.context,

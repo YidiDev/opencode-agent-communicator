@@ -2,6 +2,10 @@ import type { FencingToken } from "../domain/ownership";
 import { OwnershipLostFault } from "../domain/ownership";
 import type { WorkspaceKey } from "../domain/workspaces";
 import { runUntilAborted } from "./abortable-operation";
+import type {
+  AdvisoryLockExpirySchedule,
+  AdvisoryLockPersistencePort,
+} from "./advisory-lock-ports";
 import { inspectPendingDeadlineSchedule } from "./request-deadline-boundaries";
 import {
   inspectRequestDeadlineExpiration,
@@ -19,16 +23,21 @@ import {
   createTerminalNotificationEvent,
   notifyTerminalSafely,
 } from "./request-terminal-notification";
+import { snapshotDataRecord } from "./strict-port-boundaries";
 
 export const requestDeadlineMaximumBatchesPerPump = 22;
+export const advisoryLockCleanupLimitPerPump = 1_024;
 
 export type RequestDeadlineTimedSchedule = Readonly<{
   schedule: NextPendingRequestDeadline;
   elapsedMs: number;
+  lockSchedule?: AdvisoryLockExpirySchedule;
+  lockElapsedMs?: number;
 }>;
 
 export interface RequestDeadlinePumpOptions extends RequestDeadlineMaintenanceOptions {
   readonly requests: RequestDeadlinePersistencePort;
+  readonly locks?: AdvisoryLockPersistencePort;
   readonly notifications: CommittedRequestNotificationPort;
   readonly fencingToken: FencingToken;
   readonly workspaceKey: WorkspaceKey;
@@ -45,6 +54,68 @@ export interface RequestDeadlinePumpContext {
 }
 
 type BatchDecision = "full" | "done" | "stopped";
+
+function expirySchedule(value: unknown): AdvisoryLockExpirySchedule | undefined {
+  const row = snapshotDataRecord(value, 3);
+  if (!row) return undefined;
+  const keys = Object.keys(row);
+  if (
+    keys.length < 2 ||
+    keys.length > 3 ||
+    !keys.includes("storeObservedAtMs") ||
+    !keys.includes("maximumSleepMs") ||
+    !keys.every((key) => ["storeObservedAtMs", "maximumSleepMs", "nextExpiryAtMs"].includes(key)) ||
+    !Number.isSafeInteger(row.storeObservedAtMs) ||
+    (row.storeObservedAtMs as number) < 0 ||
+    !Number.isSafeInteger(row.maximumSleepMs) ||
+    (row.maximumSleepMs as number) < 1 ||
+    (Object.hasOwn(row, "nextExpiryAtMs") &&
+      (!Number.isSafeInteger(row.nextExpiryAtMs) || (row.nextExpiryAtMs as number) < 0))
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    storeObservedAtMs: row.storeObservedAtMs as number,
+    maximumSleepMs: row.maximumSleepMs as number,
+    ...(Object.hasOwn(row, "nextExpiryAtMs")
+      ? { nextExpiryAtMs: row.nextExpiryAtMs as number }
+      : {}),
+  });
+}
+
+async function maintainExpiredLocks(context: RequestDeadlinePumpContext): Promise<boolean> {
+  const locks = context.options.locks;
+  if (!locks) return true;
+  let returned: unknown;
+  try {
+    const settlement = await runUntilAborted(context.abort, () =>
+      locks.cleanupExpired({
+        fencingToken: context.options.fencingToken,
+        workspaceKey: context.options.workspaceKey,
+        limit: advisoryLockCleanupLimitPerPump,
+      }),
+    );
+    if (settlement.kind === "aborted") return false;
+    if (settlement.kind === "rejected") throw settlement.cause;
+    returned = settlement.value;
+  } catch (cause: unknown) {
+    context.fail(cause instanceof OwnershipLostFault ? "ownership_lost" : "storage_failure");
+    return false;
+  }
+  if (!context.isActive()) return false;
+  const cleanup = snapshotDataRecord(returned, 1);
+  if (
+    !cleanup ||
+    Object.keys(cleanup).length !== 1 ||
+    !Number.isSafeInteger(cleanup.deleted) ||
+    (cleanup.deleted as number) < 0 ||
+    (cleanup.deleted as number) > advisoryLockCleanupLimitPerPump
+  ) {
+    context.fail("port_contract_violation");
+    return false;
+  }
+  return true;
+}
 
 async function expireBatch(
   context: RequestDeadlinePumpContext,
@@ -112,22 +183,67 @@ async function readSchedule(
     return undefined;
   }
   if (!context.isActive()) return undefined;
+  const requestAfter = context.readMonotonicMs();
+  if (requestAfter === undefined) return undefined;
+  if (requestAfter < before) {
+    context.fail("port_contract_violation");
+    return undefined;
+  }
+  const schedule = inspectPendingDeadlineSchedule(returned);
+  if (!schedule) {
+    context.fail("port_contract_violation");
+    return undefined;
+  }
+  if (!context.options.locks) return { schedule, elapsedMs: requestAfter - before };
+  const lock = await readLockSchedule(context, requestAfter);
+  if (!lock) return undefined;
+  return {
+    schedule,
+    elapsedMs: lock.after - before,
+    lockSchedule: lock.schedule,
+    lockElapsedMs: lock.after - requestAfter,
+  };
+}
+
+async function readLockSchedule(
+  context: RequestDeadlinePumpContext,
+  before: number,
+): Promise<{ readonly schedule: AdvisoryLockExpirySchedule; readonly after: number } | undefined> {
+  let lockReturned: unknown;
+  try {
+    const settlement = await runUntilAborted(context.abort, () =>
+      (context.options.locks as AdvisoryLockPersistencePort).readNextExpiry({
+        fencingToken: context.options.fencingToken,
+        workspaceKey: context.options.workspaceKey,
+      }),
+    );
+    if (settlement.kind === "aborted") return undefined;
+    if (settlement.kind === "rejected") throw settlement.cause;
+    lockReturned = settlement.value;
+  } catch (cause: unknown) {
+    context.fail(cause instanceof OwnershipLostFault ? "ownership_lost" : "storage_failure");
+    return undefined;
+  }
+  if (!context.isActive()) return undefined;
   const after = context.readMonotonicMs();
   if (after === undefined) return undefined;
   if (after < before) {
     context.fail("port_contract_violation");
     return undefined;
   }
-  const schedule = inspectPendingDeadlineSchedule(returned);
-  if (schedule) return { schedule, elapsedMs: after - before };
-  context.fail("port_contract_violation");
-  return undefined;
+  const lockSchedule = expirySchedule(lockReturned);
+  if (!lockSchedule) {
+    context.fail("port_contract_violation");
+    return undefined;
+  }
+  return { schedule: lockSchedule, after };
 }
 
 async function expireMaintainAndRead(
   context: RequestDeadlinePumpContext,
   budget: RequestDeadlineInspectionBudget & { batches: number },
 ): Promise<RequestDeadlineTimedSchedule | undefined> {
+  if (context.options.locks && !(await maintainExpiredLocks(context))) return undefined;
   while (context.isActive()) {
     budget.batches += 1;
     if (budget.batches > requestDeadlineMaximumBatchesPerPump) {

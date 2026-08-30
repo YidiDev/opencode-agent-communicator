@@ -5,6 +5,7 @@ export const pendingRequestsPerWorkspaceHardCeiling = 1_024;
 export const submittingRequestsPerWorkspaceHardCeiling = 4_096;
 export const availableResultsPerWorkspaceHardCeiling = 4_096;
 export const managedSessionsPerWorkspaceHardCeiling = 1_024;
+export const activeAdvisoryLocksPerWorkspaceHardCeiling = 1_024;
 /** Distinct deletion candidates from two pending roles, available-result sources, and provenance. */
 export const participantDeletionCandidatesHardCeiling =
   pendingRequestsPerWorkspaceHardCeiling * 2 +

@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { validateDeliveryId } from "../domain/generated-ids";
+import {
+  validateAdvisoryLockDescription,
+  validateAdvisoryLockInstructions,
+  validateAdvisoryLockTitle,
+  validateAdvisoryLockTtlSeconds,
+} from "../domain/advisory-locks";
+import { validateAdvisoryLockId, validateDeliveryId } from "../domain/generated-ids";
 import { validateMessageContent } from "../domain/message-payload";
 import type { DomainFailureCode, DomainResult } from "../domain/results";
 import { validateExportDestination } from "../domain/session-export";
@@ -19,6 +25,66 @@ export const sessionListArgumentsSchema = z
     include_archived: z.boolean().optional(),
     limit: z.number().int().min(1).max(100).optional(),
   })
+  .strict();
+
+function advisoryLockField(
+  validator: (
+    value: unknown,
+  ) => { readonly ok: true } | { readonly ok: false; readonly message: string },
+) {
+  return z.string().superRefine((value, context) => {
+    const validation = validator(value);
+    if (!validation.ok) context.addIssue({ code: "custom", message: validation.message });
+  });
+}
+
+const nonemptyAdvisoryLockField = (
+  validator: (
+    value: unknown,
+  ) => { readonly ok: true } | { readonly ok: false; readonly message: string },
+) =>
+  advisoryLockField(validator).superRefine((value, context) => {
+    if (new TextEncoder().encode(value).length === 0) {
+      context.addIssue({ code: "custom", message: "Field must contain at least one UTF-8 byte." });
+    }
+  });
+
+const advisoryLockIdSchema = advisoryLockField(validateAdvisoryLockId);
+const advisoryLockTtlSchema = z
+  .number()
+  .int()
+  .superRefine((value, context) => {
+    const validation = validateAdvisoryLockTtlSeconds(value);
+    if (!validation.ok) context.addIssue({ code: "custom", message: validation.message });
+  });
+
+export const sessionLockListArgumentsSchema = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[A-Za-z0-9_-]+$/)
+      .optional(),
+    limit: z.number().int().min(1).max(100).optional().default(50),
+  })
+  .strict();
+
+export const sessionLockPublishArgumentsSchema = z
+  .object({
+    ttl_seconds: advisoryLockTtlSchema,
+    title: advisoryLockField(validateAdvisoryLockTitle),
+    description: nonemptyAdvisoryLockField(validateAdvisoryLockDescription),
+    instructions: nonemptyAdvisoryLockField(validateAdvisoryLockInstructions),
+  })
+  .strict();
+
+export const sessionLockReleaseArgumentsSchema = z
+  .object({ lock_id: advisoryLockIdSchema })
+  .strict();
+
+export const sessionLockRenewArgumentsSchema = z
+  .object({ lock_id: advisoryLockIdSchema, ttl_seconds: advisoryLockTtlSchema })
   .strict();
 
 export const sessionSendArgumentsSchema = z
@@ -99,6 +165,10 @@ export const sessionExportArgumentsSchema = z
   .strict();
 
 export type SessionListToolArguments = z.infer<typeof sessionListArgumentsSchema>;
+export type SessionLockListToolArguments = z.infer<typeof sessionLockListArgumentsSchema>;
+export type SessionLockPublishToolArguments = z.infer<typeof sessionLockPublishArgumentsSchema>;
+export type SessionLockReleaseToolArguments = z.infer<typeof sessionLockReleaseArgumentsSchema>;
+export type SessionLockRenewToolArguments = z.infer<typeof sessionLockRenewArgumentsSchema>;
 export type SessionSendToolArguments = z.infer<typeof sessionSendArgumentsSchema>;
 export type SessionDeliveryGetToolArguments = z.infer<typeof sessionDeliveryGetArgumentsSchema>;
 export type SessionStopToolArguments = z.infer<typeof sessionStopArgumentsSchema>;
@@ -110,6 +180,26 @@ export const sessionListFailureCodes = [
   "caller_not_visible",
   "deadline_expired",
   "native_unavailable",
+] as const satisfies readonly DomainFailureCode[];
+export const sessionLockListFailureCodes = [
+  "invalid_arguments",
+  "caller_not_visible",
+  "ownership_lost",
+  "storage_unavailable",
+] as const satisfies readonly DomainFailureCode[];
+export const sessionLockPublishFailureCodes = [
+  "invalid_arguments",
+  "caller_not_visible",
+  "quota_exceeded",
+  "ownership_lost",
+  "storage_unavailable",
+] as const satisfies readonly DomainFailureCode[];
+export const sessionLockOwnedMutationFailureCodes = [
+  "invalid_arguments",
+  "caller_not_visible",
+  "not_found_or_unauthorized",
+  "ownership_lost",
+  "storage_unavailable",
 ] as const satisfies readonly DomainFailureCode[];
 export const sessionSendFailureCodes = [
   "invalid_arguments",

@@ -206,7 +206,7 @@ describe("production composition resources", () => {
         pluginInput(),
         {},
       ]);
-      expect(Object.keys(hooks.tool ?? {})).toHaveLength(14);
+      expect(Object.keys(hooks.tool ?? {})).toHaveLength(18);
       expect(warning).toHaveBeenCalledWith(
         "Session export is unavailable because secure initialization failed.",
       );

@@ -5,7 +5,7 @@ configuration, and values above compiled safety ceilings stop startup before the
 
 ```json
 [
-  "file:///home/operator/.local/share/opencode-agent-communicator/v0.2.5/node_modules/opencode-agent-communicator/src/index.ts",
+  "file:///home/operator/.local/share/opencode-agent-communicator/v0.3.0/node_modules/opencode-agent-communicator/src/index.ts",
   {
     "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
     "startupDeadlineMs": 30000,
@@ -57,7 +57,7 @@ configuration, and values above compiled safety ceilings stop startup before the
 `XDG_STATE_HOME` or `HOME/.local/state`, outside the workspace; the store verifies ownership,
 permissions, no-follow traversal, and filesystem support. This implementation fails closed on any
 runtime other than Linux x64 before it opens the state store. Linux ARM64 and all other CPU
-architectures are outside the certified `0.2.5` package scope; package metadata also restricts
+architectures are outside the certified `0.3.0` package scope; package metadata also restricts
 installation to x64. Install the immutable private Git release externally with npm, then configure
 its absolute `file://` source entry; OpenCode `1.18.x` does not reliably populate its cache directly
 from a private `git+ssh` spec. Bun `1.4.0` remains the exact development and verification target.
@@ -72,7 +72,7 @@ boundary.
 `ToolContext.abort` remains the only explicit action that durably cancels the request.
 
 Export remains registered when its three trust fields are omitted or its secure adapter cannot be
-opened. Only `session_export` then returns `export_unavailable`; the other thirteen tools remain
+opened. Only `session_export` then returns `export_unavailable`; the other seventeen tools remain
 available. The executable must report a stable version in `>=1.18.21 <1.19.0` and satisfy the
 root-owned OpenCode trust checks. No shell is used.
 
@@ -84,6 +84,11 @@ The established `allowManagedSessionRecursion` and `managedSessionsPerWorkspace`
 sessions created and tracked through `session_start`. This provenance supports idempotency, quotas,
 recovery, and chained-start policy; it does not make one session the supervisor of another. Started
 sessions remain independent roots with their own instructions, permissions, and judgment.
+
+Advisory locks have no configuration switch or policy bypass. Any current visible root may list and
+publish workspace locks; only their holder may renew or release them. Locks are advisory and do not
+enforce exclusion or grant authorization. Their TTL, UTF-8 field bounds, list limits, and 1024-active
+workspace quota are immutable compiled safety policies documented in the README.
 
 Start operation count and retained private-payload bytes are hard admission quotas below immutable
 compiled ceilings. Denied and approval-rejected starts keep only payload-free idempotency metadata

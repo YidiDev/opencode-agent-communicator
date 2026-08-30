@@ -6,6 +6,10 @@ import { pathToFileURL } from "node:url";
 
 export const expectedToolIds = Object.freeze([
   "session_list",
+  "session_lock_list",
+  "session_lock_publish",
+  "session_lock_release",
+  "session_lock_renew",
   "session_send",
   "session_delivery_get",
   "session_ask",
@@ -24,8 +28,8 @@ export const expectedToolIds = Object.freeze([
 // This is SHA-256(npm-reported pack paths joined with LF), not a content digest. Any added, removed,
 // renamed, or reordered archive entry requires an explicit review and fingerprint update.
 export const expectedPackedPathPolicy = Object.freeze({
-  entryCount: 251,
-  sha256: "c2c58407241eba3b5bd631209e396524132f497636498bc184153c7b1245c958",
+  entryCount: 258,
+  sha256: "705fd22432db9c7f9ebc01dd99edf5b97ddf51a0a5777c70207cba12465985d6",
 });
 
 const forbiddenPathSegments = new Set([
@@ -102,7 +106,7 @@ function packedReport(root) {
 
 export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
   const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
-  assert(packageJson.version === "0.2.5", "version must be 0.2.5");
+  assert(packageJson.version === "0.3.0", "version must be 0.3.0");
   assert(packageJson.private !== true, "package must be publishable");
   assert(packageJson.license === "MIT", "license metadata must match LICENSE");
   assert(
@@ -165,9 +169,31 @@ export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
     `ordered public tool IDs changed: ${JSON.stringify(toolIds)}`,
   );
 
+  for (const skillName of [
+    "session-communication",
+    "session-request-participant",
+    "session-locks",
+  ]) {
+    const skill = await readFile(resolve(root, `skills/${skillName}/SKILL.md`), "utf8");
+    assert(
+      skill.startsWith(`---\nname: ${skillName}\ndescription:`),
+      `${skillName} skill frontmatter is absent or malformed`,
+    );
+  }
+
   const report = packedReport(root);
   assert(Array.isArray(report.files), "npm pack file report is absent");
   const packedPaths = report.files.map((entry) => entry.path);
+  const packedSkillFiles = packedPaths.filter((path) => path.startsWith("skills/"));
+  assert(
+    JSON.stringify(packedSkillFiles) ===
+      JSON.stringify([
+        "skills/session-communication/SKILL.md",
+        "skills/session-locks/SKILL.md",
+        "skills/session-request-participant/SKILL.md",
+      ]),
+    `packed skill surface changed: ${JSON.stringify(packedSkillFiles)}`,
+  );
   assert(
     packedPaths.length === expectedPackedPathPolicy.entryCount &&
       packedPathFingerprint(packedPaths) === expectedPackedPathPolicy.sha256,

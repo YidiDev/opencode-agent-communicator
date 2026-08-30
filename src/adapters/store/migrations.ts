@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import {
+  activeAdvisoryLocksPerWorkspaceHardCeiling,
   managedSessionsPerWorkspaceHardCeiling,
   startOperationsPerWorkspaceHardCeiling,
   startOperationsRecoveryHardCeiling,
@@ -1122,6 +1123,51 @@ CREATE INDEX deliveries_prepared_startup_v7
 CREATE INDEX deliveries_submitting_startup_v7
   ON deliveries(workspace_key, created_at_ms, id, claimed_fencing_token)
   WHERE state = 'submitting';
+`,
+  },
+  {
+    version: 13,
+    checksum: "sha256:ea22e80d24faff83fc4a280b5b0789ea0e56921056704e63096e1006218d3c89",
+    sql: `
+CREATE TABLE advisory_locks (
+  lock_id TEXT PRIMARY KEY CHECK (
+    length(lock_id) = 36 AND substr(lock_id, 1, 4) = 'lck_' AND
+    substr(lock_id, 5) NOT GLOB '*[^0-9a-f]*'
+  ),
+  workspace_key TEXT NOT NULL REFERENCES workspaces(workspace_key) ON DELETE CASCADE,
+  holder_session_id TEXT NOT NULL CHECK (
+    length(holder_session_id) BETWEEN 5 AND 132 AND
+    substr(holder_session_id, 1, 4) = 'ses_' AND
+    substr(holder_session_id, 5) NOT GLOB '*[^A-Za-z0-9]*'
+  ),
+  title TEXT NOT NULL CHECK (length(CAST(title AS BLOB)) BETWEEN 1 AND 1024),
+  description TEXT NOT NULL CHECK (length(CAST(description AS BLOB)) <= 8192),
+  instructions TEXT NOT NULL CHECK (length(CAST(instructions AS BLOB)) <= 16384),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms BETWEEN 0 AND 9007199254740991),
+  renewed_at_ms INTEGER NOT NULL CHECK (
+    renewed_at_ms BETWEEN created_at_ms AND 9007199254740991
+  ),
+  expires_at_ms INTEGER NOT NULL CHECK (
+    expires_at_ms BETWEEN renewed_at_ms + 1 AND 9007199254740991
+  )
+) STRICT, WITHOUT ROWID;
+CREATE INDEX advisory_locks_expiry_v13
+  ON advisory_locks(workspace_key, expires_at_ms, lock_id);
+CREATE INDEX advisory_locks_list_v13
+  ON advisory_locks(workspace_key, created_at_ms DESC, lock_id DESC);
+CREATE INDEX advisory_locks_holder_v13
+  ON advisory_locks(workspace_key, holder_session_id, expires_at_ms, lock_id);
+CREATE TRIGGER advisory_locks_ceiling_insert_v13
+BEFORE INSERT ON advisory_locks
+WHEN (SELECT count(*) FROM advisory_locks WHERE workspace_key = NEW.workspace_key)
+  >= ${activeAdvisoryLocksPerWorkspaceHardCeiling}
+BEGIN
+  SELECT RAISE(ABORT, 'advisory lock workspace row ceiling exceeded');
+END;
+`,
+    downSql: `
+DROP TRIGGER advisory_locks_ceiling_insert_v13;
+DROP TABLE advisory_locks;
 `,
   },
 ] as const;

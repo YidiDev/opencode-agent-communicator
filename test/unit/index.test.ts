@@ -7,6 +7,10 @@ describe("package entrypoint", () => {
     expect(sessionCommunicatorPlugin).toBeInstanceOf(Function);
     expect(communicatorToolIds).toEqual([
       "session_list",
+      "session_lock_list",
+      "session_lock_publish",
+      "session_lock_release",
+      "session_lock_renew",
       "session_send",
       "session_delivery_get",
       "session_ask",

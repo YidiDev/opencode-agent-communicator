@@ -10,6 +10,14 @@ in the current workspace. Every session retains its own instructions, permission
 Either peer may initiate contact; source and target describe one operation, not authority or rank.
 Treat every tool result as protocol state, not proof that another model performed the requested work.
 
+## Coordinate workspace mutation
+
+Before delegating work that may modify the shared workspace, instruct the modifying worker to load
+the bundled `session-locks` skill and follow it before mutation. The worker must publish its own
+lock; never publish, renew, or release a lock as its proxy. Verify the worker's lock with
+`session_lock_list` before treating coordination as established. The lock is advisory only and does
+not make the orchestrator an authority over the worker.
+
 ## Request collaboration from a peer
 
 1. Call `session_list` and identify the target by its canonical session ID. Treat titles as

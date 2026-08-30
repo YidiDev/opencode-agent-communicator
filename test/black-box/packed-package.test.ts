@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -47,6 +47,10 @@ describe("packed npm archive", () => {
 
     const expectedToolIds = [
       "session_list",
+      "session_lock_list",
+      "session_lock_publish",
+      "session_lock_release",
+      "session_lock_renew",
       "session_send",
       "session_delivery_get",
       "session_ask",
@@ -87,7 +91,7 @@ describe("packed npm archive", () => {
       cpu: string[];
     };
     expect(metadata).toMatchObject({
-      version: "0.2.5",
+      version: "0.3.0",
       exports: { ".": "./src/index.ts" },
       os: ["linux"],
       cpu: ["x64"],
@@ -98,6 +102,14 @@ describe("packed npm archive", () => {
     expect(
       await readFile(join(installedRoot, "skills/session-request-participant/SKILL.md"), "utf8"),
     ).toContain("session_respond");
+    expect(await readFile(join(installedRoot, "skills/session-locks/SKILL.md"), "utf8")).toContain(
+      "session_lock_publish",
+    );
+    expect((await readdir(join(installedRoot, "skills"))).sort()).toEqual([
+      "session-communication",
+      "session-locks",
+      "session-request-participant",
+    ]);
     expect(await readFile(join(installedRoot, "docs/plugin-configuration.md"), "utf8")).toContain(
       ">=1.18.21 <1.19.0",
     );

@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   createGeneratedIdFactory,
   generatedIdPolicy,
+  validateAdvisoryLockId,
   validateDeliveryId,
   validateManagedSessionId,
   validateNativeMessageId,
@@ -19,17 +20,19 @@ describe("strict generated identifiers", () => {
         return Uint8Array.from({ length }, (_, index) => index);
       },
     });
+    expect(String(ids.advisoryLockId())).toBe("lck_000102030405060708090a0b0c0d0e0f");
     expect(String(ids.deliveryId())).toBe("dlv_000102030405060708090a0b0c0d0e0f");
     expect(String(ids.nativeMessageId())).toBe("msg_000102030405060708090a0b0c0d0e0f");
     expect(String(ids.requestId())).toBe("req_000102030405060708090a0b0c0d0e0f");
     expect(String(ids.managedSessionId())).toBe("ses_000102030405060708090a0b0c0d0e0f");
     expect(String(ids.startOperationId())).toBe("op_000102030405060708090a0b0c0d0e0f");
-    expect(calls).toEqual([16, 16, 16, 16, 16]);
+    expect(calls).toEqual([16, 16, 16, 16, 16, 16]);
     expect(generatedIdPolicy.randomBytes * 8).toBe(128);
   });
 
   test("validates only the exact prefix, length, character set, and canonical case", () => {
     const hex = "0123456789abcdef0123456789abcdef";
+    expect(validateAdvisoryLockId(`lck_${hex}`).ok).toBe(true);
     expect(validateDeliveryId(`dlv_${hex}`).ok).toBe(true);
     expect(validateNativeMessageId(`msg_${hex}`).ok).toBe(true);
     expect(validateRequestId(`req_${hex}`).ok).toBe(true);
@@ -39,6 +42,7 @@ describe("strict generated identifiers", () => {
     expect(validateRequestId(`req_${hex.slice(1)}`).ok).toBe(false);
     expect(validateManagedSessionId(`ses_${hex}0`).ok).toBe(false);
     expect(validateStartOperationId(`start_${hex}`).ok).toBe(false);
+    expect(validateAdvisoryLockId(`lck_${hex.toUpperCase()}`).ok).toBe(false);
     for (const malformed of [
       `dlv_${hex.slice(1)}`,
       `dlv_${hex}0`,
@@ -54,6 +58,7 @@ describe("strict generated identifiers", () => {
 
   test("fails closed when the entropy implementation violates its contract", () => {
     const ids = createGeneratedIdFactory({ randomBytes: () => new Uint8Array(15) });
+    expect(() => ids.advisoryLockId()).toThrow("128-bit");
     expect(() => ids.deliveryId()).toThrow("128-bit");
     expect(() => ids.nativeMessageId()).toThrow("128-bit");
     expect(() => ids.requestId()).toThrow("128-bit");

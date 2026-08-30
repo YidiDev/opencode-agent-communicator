@@ -1,5 +1,6 @@
 import type { FencingToken } from "../domain/ownership";
 import type { WorkspaceKey } from "../domain/workspaces";
+import type { AdvisoryLockPersistencePort } from "./advisory-lock-ports";
 import type { DeliveryRetentionPersistencePort } from "./delivery-retention";
 import type { RequestDeadlinePumpFaultCode } from "./request-deadline-maintenance";
 import type { RequestMaintenancePorts } from "./request-maintenance";
@@ -23,6 +24,8 @@ export class RequestDeadlineSchedulerFault extends Error {
 
 export interface RequestDeadlineSchedulerOptions {
   readonly requests: RequestDeadlinePersistencePort;
+  /** Optional during compatibility tests; production always supplies the workspace lock store. */
+  readonly locks?: AdvisoryLockPersistencePort;
   readonly notifications: CommittedRequestNotificationPort;
   readonly fencingToken: FencingToken;
   readonly workspaceKey: WorkspaceKey;
