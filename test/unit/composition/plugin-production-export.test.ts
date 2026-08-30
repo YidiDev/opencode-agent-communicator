@@ -87,6 +87,7 @@ function injectedDependencies(
         stop: () => order.push("runtime-stop"),
       }) as never,
     recoverStartup: async () => ({ ok: true, value: lifecycle(order) as never }),
+    recoverContextStartup: async () => undefined,
   };
 }
 

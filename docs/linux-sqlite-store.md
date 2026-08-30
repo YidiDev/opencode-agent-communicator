@@ -146,6 +146,23 @@ matching or created root keeps managed provenance while any not-yet-started titl
 admission becomes `payload_unavailable`; submitting or known admission outcomes are preserved and
 never replayed.
 
+Schema v16 adds `requests.delivery_transport` (`native` or `context`) and the
+`context_admissions` table. Existing-root context requests keep the legacy physical
+`delivery_mode = 'steer'` value but are distinguished by `delivery_transport = 'context'`; linked
+`initial` requests must remain native. The context table stores a bounded canonical envelope only
+while its state is `prepared` or `awaiting_context`, caps one envelope at 64 KiB, and uses the
+existing delivery record, byte, and rate ceilings. One provider transform selects at most 32 rows
+and 48 KiB for a visible `busy`/`retry` target, then atomically claims the exact digest-bound set and
+erases its payload. It may also include at most 20 payload-free available-result reminders and an
+active-lock count. These values are provider-visible, transcript-invisible, and explicitly marked
+as untrusted.
+
+Migration v16 does not reinterpret uncertain legacy native delivery as context. Pending existing-root
+`steer`/`queue` rows in `prepared`, `submitting`, or `delivery_unknown` have private payload and wait
+edges erased and become `delivery_failed`. At every startup, any context admission left
+`awaiting_context` is likewise failed and erased in bounded batches, because a crash cannot prove
+whether the provider already received the transformed messages. Neither path replays content.
+
 An administrator owner label is diagnostic only. Every store construction creates
 a fresh random process-generation identity. Repeated acquisition by one live
 generation returns its existing token, while every valid new-generation takeover

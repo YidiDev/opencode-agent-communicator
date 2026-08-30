@@ -2,13 +2,15 @@ import type {
   AdvisoryLockListValue,
   AdvisoryLockMutationValue,
 } from "../application/advisory-lock-use-cases";
+import type { ParticipantMessageDelivery } from "../application/get-session-delivery";
 import type { VisibleRootSession } from "../application/list-visible-root-sessions";
 import type {
   ParticipantRequestGet,
   ParticipantRequestMetadata,
 } from "../application/request-ports";
 import type { AdvisoryLock } from "../domain/advisory-locks";
-import type { DeliveryMetadata, ParticipantDelivery } from "../domain/deliveries";
+import type { ContextAdmissionMetadata } from "../domain/context-admissions";
+import type { DeliveryMetadata } from "../domain/deliveries";
 import type {
   PendingRequestPayload,
   RequestMetadata,
@@ -113,8 +115,34 @@ export function publicDelivery(delivery: DeliveryMetadata): Record<string, unkno
   };
 }
 
-export function publicParticipantDelivery(value: ParticipantDelivery): Record<string, unknown> {
-  return { role: value.role, delivery: publicDelivery(value.delivery) };
+export function publicMessageDelivery(
+  delivery: DeliveryMetadata | ContextAdmissionMetadata,
+): Record<string, unknown> {
+  if ("nativeMessageId" in delivery) return { ...publicDelivery(delivery), delivery: "user" };
+  return {
+    delivery_id: delivery.id,
+    source_session_id: delivery.sourceSessionId,
+    target_session_id: delivery.targetSessionId,
+    delivery: "context",
+    state: delivery.state,
+    content_byte_length: delivery.contentByteLength,
+    created_at_ms: delivery.createdAtMs,
+    updated_at_ms: delivery.updatedAtMs,
+    ...(delivery.awaitingContextAtMs === undefined
+      ? {}
+      : { awaiting_context_at_ms: delivery.awaitingContextAtMs }),
+    ...(delivery.contextAdmittedAtMs === undefined
+      ? {}
+      : { context_admitted_at_ms: delivery.contextAdmittedAtMs }),
+    ...(delivery.failedAtMs === undefined ? {} : { failed_at_ms: delivery.failedAtMs }),
+    ...(delivery.cancelledAtMs === undefined ? {} : { cancelled_at_ms: delivery.cancelledAtMs }),
+  };
+}
+
+export function publicParticipantDelivery(
+  value: ParticipantMessageDelivery,
+): Record<string, unknown> {
+  return { role: value.role, delivery: publicMessageDelivery(value.delivery) };
 }
 
 export function publicSession(value: VisibleRootSession): Record<string, unknown> {

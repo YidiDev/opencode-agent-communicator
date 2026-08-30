@@ -1,5 +1,10 @@
 import type { AdvisoryLockPersistencePort } from "../../application/advisory-lock-ports";
 import type {
+  ContextAdmissionParticipantQueryPort,
+  ContextAdmissionPersistencePort,
+  ParticipantContextPersistencePort,
+} from "../../application/context-admission-ports";
+import type {
   CompleteSubmissionInput,
   DeliveryClaimResult,
   DeliveryPersistencePort,
@@ -58,8 +63,79 @@ export class LinuxBunSqliteStore
     ParticipantStopPersistencePort,
     ParticipantDeletionPersistencePort,
     DeliveryRetentionPersistencePort,
-    AdvisoryLockPersistencePort
+    AdvisoryLockPersistencePort,
+    ContextAdmissionPersistencePort,
+    ParticipantContextPersistencePort,
+    ContextAdmissionParticipantQueryPort
 {
+  async createContextMessage(
+    input: Parameters<ContextAdmissionPersistencePort["createContextMessage"]>[0],
+  ): ReturnType<ContextAdmissionPersistencePort["createContextMessage"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.contextAdmissionRepository.createMessage(input));
+  }
+
+  async getContextAdmission(
+    input: Parameters<ContextAdmissionPersistencePort["getContextAdmission"]>[0],
+  ): ReturnType<ContextAdmissionPersistencePort["getContextAdmission"]> {
+    this.assertOpen();
+    return this.access.inspect(() => this.contextAdmissionRepository.get(input));
+  }
+
+  async getContextAdmissionForParticipant(
+    input: Parameters<ContextAdmissionParticipantQueryPort["getContextAdmissionForParticipant"]>[0],
+  ): ReturnType<ContextAdmissionParticipantQueryPort["getContextAdmissionForParticipant"]> {
+    this.assertOpen();
+    return this.access.inspect(() => this.contextAdmissionRepository.getForParticipant(input));
+  }
+
+  async listPendingContext(
+    input: Parameters<ContextAdmissionPersistencePort["listPendingContext"]>[0],
+  ): ReturnType<ContextAdmissionPersistencePort["listPendingContext"]> {
+    this.assertOpen();
+    return this.access.inspect(() => this.contextAdmissionRepository.listPending(input));
+  }
+
+  async claimPendingContext(
+    input: Parameters<ContextAdmissionPersistencePort["claimPendingContext"]>[0],
+  ): ReturnType<ContextAdmissionPersistencePort["claimPendingContext"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.contextAdmissionRepository.claim(input));
+  }
+
+  async cancelContextAdmission(
+    input: Parameters<ContextAdmissionPersistencePort["cancelContextAdmission"]>[0],
+  ): ReturnType<ContextAdmissionPersistencePort["cancelContextAdmission"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.contextAdmissionRepository.cancel(input));
+  }
+
+  async readContextReminders(
+    input: Parameters<ContextAdmissionPersistencePort["readContextReminders"]>[0],
+  ): ReturnType<ContextAdmissionPersistencePort["readContextReminders"]> {
+    this.assertOpen();
+    return this.access.inspect(() => this.contextAdmissionRepository.readReminders(input));
+  }
+
+  async failPendingContextForParticipant(
+    input: Parameters<ContextAdmissionPersistencePort["failPendingContextForParticipant"]>[0],
+  ): ReturnType<ContextAdmissionPersistencePort["failPendingContextForParticipant"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.contextAdmissionRepository.failForTarget(input));
+  }
+  async settlePendingContextForParticipant(
+    input: Parameters<ParticipantContextPersistencePort["settlePendingContextForParticipant"]>[0],
+  ): ReturnType<ParticipantContextPersistencePort["settlePendingContextForParticipant"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.contextAdmissionRepository.settleForParticipant(input));
+  }
+
+  async failUncertainContextOnStartup(
+    input: Parameters<ContextAdmissionPersistencePort["failUncertainContextOnStartup"]>[0],
+  ): ReturnType<ContextAdmissionPersistencePort["failUncertainContextOnStartup"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.contextAdmissionRepository.failUncertainOnStartup(input));
+  }
   async publish(
     input: Parameters<AdvisoryLockPersistencePort["publish"]>[0],
   ): ReturnType<AdvisoryLockPersistencePort["publish"]> {

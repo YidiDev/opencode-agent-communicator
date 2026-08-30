@@ -72,7 +72,7 @@ function details(
 }
 
 describe("request migration and query plans", () => {
-  test("fresh migration records exact history and pins v1-v15 checksums", () => {
+  test("fresh migration records exact history and pins v1-v16 checksums", () => {
     const database = migratedDatabase();
     expect(sqliteStoreMigrations.map((migration) => migration.checksum)).toEqual([
       "sha256:929ff898b24a6bfefa276939fee895e41185ed9c58bd59c3f2c3359f4daa8a86",
@@ -90,6 +90,7 @@ describe("request migration and query plans", () => {
       "sha256:ea22e80d24faff83fc4a280b5b0789ea0e56921056704e63096e1006218d3c89",
       "sha256:605db48886f6a6f0aca23ad659a804fe8c6f5773c7ea822d81ae8a17c9f0fb6e",
       "sha256:f4ab984ddfa044ca0b203bbb0d9b35cbc63b8a2cc004d2402bdf723c33047c09",
+      "sha256:719cc560922e9603ee51989db9d2b1e1c4aca30a8ecbd32ef8097cf2a9077988",
     ]);
     expect(
       database
@@ -138,7 +139,7 @@ describe("request migration and query plans", () => {
         database
           .query<{ value: number }, []>("SELECT user_version AS value FROM pragma_user_version")
           .get()?.value,
-      ).toBe(15);
+      ).toBe(16);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM deliveries").get()
           ?.count,

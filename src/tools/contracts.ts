@@ -106,6 +106,7 @@ export const sessionSendArgumentsSchema = z
       const validation = validateMessageContent(value);
       if (!validation.ok) context.addIssue({ code: "custom", message: validation.message });
     }),
+    delivery: z.enum(["context", "user"]).optional(),
   })
   .strict();
 
@@ -220,6 +221,8 @@ export const sessionSendFailureCodes = [
   "invalid_arguments",
   "caller_not_visible",
   "target_not_visible",
+  "target_idle",
+  "target_status_unknown",
   "permission_denied",
   "approval_rejected",
   "deadline_expired",

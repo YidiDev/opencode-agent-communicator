@@ -19,13 +19,13 @@ export const requestNextPendingDeadlineSql = `SELECT deadline_at_ms AS deadlineA
 export const requestPreparedRecoveryFirstPageSql = `SELECT ${requestMetadataColumns}
   FROM requests INDEXED BY requests_prepared_recovery
   WHERE workspace_key = ? AND resolution_state = 'pending' AND delivery_state = 'prepared'
-    AND deadline_at_ms > ?
+    AND delivery_transport = 'native' AND deadline_at_ms > ?
   ORDER BY created_at_ms, id LIMIT ?`;
 
 export const requestPreparedRecoveryAfterSql = `SELECT ${requestMetadataColumns}
   FROM requests INDEXED BY requests_prepared_recovery
   WHERE workspace_key = ? AND resolution_state = 'pending' AND delivery_state = 'prepared'
-    AND deadline_at_ms > ? AND (created_at_ms, id) > (?, ?)
+    AND delivery_transport = 'native' AND deadline_at_ms > ? AND (created_at_ms, id) > (?, ?)
   ORDER BY created_at_ms, id LIMIT ?`;
 
 export class RequestQueryRepository {
@@ -89,7 +89,8 @@ export class RequestQueryRepository {
       rows = this.context.database
         .query<RequestRow, [string, number, number]>(
           `SELECT ${requestMetadataColumns} FROM requests INDEXED BY requests_submitting_recovery
-           WHERE workspace_key = ? AND delivery_state = 'submitting' AND claimed_fencing_token != ?
+           WHERE workspace_key = ? AND delivery_transport = 'native'
+             AND delivery_state = 'submitting' AND claimed_fencing_token != ?
            ORDER BY created_at_ms, id LIMIT ?`,
         )
         .all(input.workspaceKey, input.excludeClaimedByToken, input.limit);

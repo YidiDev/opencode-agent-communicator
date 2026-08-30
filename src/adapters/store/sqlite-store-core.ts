@@ -6,6 +6,7 @@ import type { StartOperationPersistencePort } from "../../application/session-st
 import { type FencingToken, OwnershipLostFault } from "../../domain/ownership";
 import { validateWorkspaceKey } from "../../domain/workspaces";
 import { AdvisoryLockRepository } from "./advisory-lock-repository";
+import { ContextAdmissionRepository } from "./context-admission-repository";
 import {
   configureDatabaseConnection,
   configureOwnedDatabase,
@@ -56,6 +57,7 @@ export class SqliteStoreCore {
   protected readonly ownershipRepository: OwnershipRepository;
   protected readonly advisoryLockRepository: AdvisoryLockRepository;
   protected readonly deliveryRepository: DeliveryRepository;
+  protected readonly contextAdmissionRepository: ContextAdmissionRepository;
   protected readonly deliveryQueryRepository: DeliveryQueryRepository;
   protected readonly requestRepository: RequestRepository;
   protected readonly requestDeliveryRepository: RequestDeliveryRepository;
@@ -185,11 +187,19 @@ export class SqliteStoreCore {
       this.ownershipRepository,
     );
     this.deliveryRepository = new DeliveryRepository(this.context, this.ownershipRepository);
+    this.contextAdmissionRepository = new ContextAdmissionRepository(
+      this.context,
+      this.ownershipRepository,
+    );
     this.deliveryQueryRepository = new DeliveryQueryRepository(
       this.context,
       this.ownershipRepository,
     );
-    this.requestRepository = new RequestRepository(this.context, this.ownershipRepository);
+    this.requestRepository = new RequestRepository(
+      this.context,
+      this.ownershipRepository,
+      this.contextAdmissionRepository,
+    );
     this.requestDeliveryRepository = new RequestDeliveryRepository(
       this.context,
       this.ownershipRepository,

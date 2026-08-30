@@ -34,11 +34,17 @@ export function listParticipantDeletionCandidates(
                      AND start.session_id = request.target_session_id
                      AND start.creation_state IN ('prepared','submitting','outcome_unknown')
                 ))
-             UNION ALL
-             SELECT source_session_id, 1 FROM requests
-              WHERE workspace_key = ?1 AND resolution_state = 'pending'
-             UNION ALL
-             SELECT source_session_id, 2 FROM requests
+              UNION ALL
+              SELECT target_session_id, 0 FROM context_admissions
+               WHERE workspace_key = ?1 AND state = 'awaiting_context'
+              UNION ALL
+              SELECT source_session_id, 1 FROM requests
+               WHERE workspace_key = ?1 AND resolution_state = 'pending'
+              UNION ALL
+              SELECT source_session_id, 1 FROM context_admissions
+               WHERE workspace_key = ?1 AND state = 'awaiting_context'
+              UNION ALL
+              SELECT source_session_id, 2 FROM requests
               WHERE workspace_key = ?1 AND result_state = 'available'
                 AND resolution_state IN ('answered','reached')
              UNION ALL

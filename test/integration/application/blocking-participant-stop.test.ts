@@ -5,6 +5,8 @@ import { askSession } from "../../../src/application/ask-session";
 import { ParticipantStopLifecycle } from "../../../src/application/participant-stop-lifecycle";
 import { stopSession } from "../../../src/application/stop-session";
 import { waitSession } from "../../../src/application/wait-session";
+import { validateDeliveryId } from "../../../src/domain/generated-ids";
+import type { Sha256Digest } from "../../../src/domain/message-payload";
 import { validateSessionId } from "../../../src/domain/sessions";
 import { blockingRequestFixture, deferred } from "../../support/blocking-request-fixture";
 import { cleanupRequestStoreRoots, requestTestWorkspace } from "../../support/request-store";
@@ -16,6 +18,28 @@ const digest = {
     return new Uint8Array(createHash("sha256").update(bytes).digest());
   },
 };
+
+function contextMessageInput(
+  setup: Awaited<ReturnType<typeof blockingRequestFixture>>,
+  index: number,
+  sourceSessionId = setup.source,
+  targetSessionId = setup.target,
+) {
+  const id = validateDeliveryId(`dlv_${index.toString(16).padStart(32, "0")}`);
+  if (!id.ok) throw new Error(id.message);
+  const envelopeJson = JSON.stringify({ content: `message-${index}` });
+  return {
+    fencingToken: setup.token,
+    id: id.value,
+    workspaceKey: requestTestWorkspace(),
+    sourceSessionId,
+    targetSessionId,
+    envelopeJson,
+    contentByteLength: Buffer.byteLength(envelopeJson),
+    contentSha256: createHash("sha256").update(envelopeJson).digest("hex") as Sha256Digest,
+    createdAtMs: 24_000 + index,
+  } as const;
+}
 
 test.each(["ask", "wait"] as const)(
   "approved session_stop releases a blocked %s with target_stopped",
@@ -68,6 +92,87 @@ test.each(["ask", "wait"] as const)(
     setup.store.close();
   },
 );
+
+test("missed idle events reconcile message-only context participants with role-correct outcomes", async () => {
+  const setup = await blockingRequestFixture(async () => ({
+    kind: "admitted",
+    admittedSeq: 1,
+    observedAtMs: 25_000,
+  }));
+  const idleTarget = validateSessionId("ses_idleTarget");
+  const idleSource = validateSessionId("ses_idleSource");
+  const otherA = validateSessionId("ses_otherA");
+  const otherB = validateSessionId("ses_otherB");
+  if (!idleTarget.ok || !idleSource.ok || !otherA.ok || !otherB.ok)
+    throw new Error("invalid fixture");
+  const targeted = contextMessageInput(setup, 201, otherA.value, idleTarget.value);
+  const sourced = contextMessageInput(setup, 202, idleSource.value, otherB.value);
+  expect((await setup.store.createContextMessage(targeted)).ok).toBe(true);
+  expect((await setup.store.createContextMessage(sourced)).ok).toBe(true);
+  let wake: (() => void) | undefined;
+  const lifecycle = new ParticipantStopLifecycle({
+    requests: setup.store,
+    activity: {
+      observeParticipantActivities: async (_workspace, sessionIds) =>
+        sessionIds.map((sessionId) => ({
+          sessionId,
+          activity:
+            sessionId === idleTarget.value || sessionId === idleSource.value
+              ? ("idle" as const)
+              : ("busy" as const),
+        })),
+    },
+    operations: setup.ports.participantOperations,
+    notifications: setup.runtime,
+    contexts: setup.store,
+    contextNotifications: setup.contextRuntime,
+    lifecycle: {
+      fencingToken: setup.token,
+      status: "ready",
+      effectSignal: setup.runtime.effectSignal,
+      stop: () => undefined,
+    } as never,
+    workspaceKey: requestTestWorkspace(),
+    timers: {
+      set: (_delay, callback) => {
+        wake = callback;
+        return 1;
+      },
+      clear: () => undefined,
+    },
+  });
+  wake?.();
+  for (let index = 0; index < 100; index += 1) {
+    const target = await setup.store.getContextAdmission({
+      fencingToken: setup.token,
+      workspaceKey: requestTestWorkspace(),
+      id: targeted.id,
+    });
+    const source = await setup.store.getContextAdmission({
+      fencingToken: setup.token,
+      workspaceKey: requestTestWorkspace(),
+      id: sourced.id,
+    });
+    if (target?.state === "failed" && source?.state === "cancelled") break;
+    await Promise.resolve();
+  }
+  expect(
+    await setup.store.getContextAdmission({
+      fencingToken: setup.token,
+      workspaceKey: requestTestWorkspace(),
+      id: targeted.id,
+    }),
+  ).toMatchObject({ state: "failed" });
+  expect(
+    await setup.store.getContextAdmission({
+      fencingToken: setup.token,
+      workspaceKey: requestTestWorkspace(),
+      id: sourced.id,
+    }),
+  ).toMatchObject({ state: "cancelled" });
+  await lifecycle.dispose();
+  setup.store.close();
+});
 
 test("stopping the source releases its blocked request with source_stopped", async () => {
   const steered = deferred<void>();

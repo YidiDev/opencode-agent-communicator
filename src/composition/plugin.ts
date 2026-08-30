@@ -7,12 +7,12 @@ import {
 } from "../adapters/native/opencode-1-18";
 import { createOpenCode118HealthPort } from "../adapters/native/opencode-1-18-health";
 import { LinuxBunSqliteStore } from "../adapters/store/sqlite-store";
-import { ActiveSessionAdvisoryLockNotifier } from "../application/advisory-lock-active-session-notifier";
 import type {
   AdvisoryLockPostCommitNotificationPort,
   AdvisoryLockWakePort,
 } from "../application/advisory-lock-use-cases";
 import { checkHostCompatibility } from "../application/check-host-compatibility";
+import { ContextAdmissionRuntime } from "../application/context-admission-runtime";
 import { ParticipantDeletionLifecycle } from "../application/participant-deletion-lifecycle";
 import { ParticipantOperationGate } from "../application/participant-operation-gate";
 import { ParticipantStopLifecycle } from "../application/participant-stop-lifecycle";
@@ -22,9 +22,9 @@ import {
 } from "../application/recover-communicator-startup";
 import { RequestRuntime } from "../application/request-runtime";
 import type { SessionExportAdapterPort } from "../application/session-export-ports";
-import { createGeneratedIdFactory } from "../domain/generated-ids";
 import type { HostHealthPort, RuntimeIdentityPort } from "../domain/host";
 import { ActiveInvocationRegistry } from "./active-invocations";
+import { createChatMessagesTransform } from "./chat-messages-transform";
 import { type CommunicatorOptions, parseCommunicatorOptions } from "./config";
 import {
   enforceMandatoryApproval,
@@ -34,7 +34,6 @@ import { createCompositionDisposer } from "./plugin-disposal";
 import { createProductionExporter } from "./plugin-exporter";
 import {
   productionClock,
-  productionEntropy,
   productionMonotonicNowMs,
   productionRuntimeIdentity,
   productionSchedulerTimers,
@@ -61,17 +60,19 @@ export interface CompositionDependencies {
   readonly createStore: (
     options: ConstructorParameters<typeof LinuxBunSqliteStore>[0],
   ) => LinuxBunSqliteStore;
-  readonly createRuntime: () => RequestRuntime;
+  readonly createRuntime: (contextRuntime?: ContextAdmissionRuntime) => RequestRuntime;
+  readonly createContextRuntime: () => ContextAdmissionRuntime;
   readonly createAdvisoryLockHooks: (input: {
     readonly native: OpenCodeNativeAdapter;
     readonly lifecycle: CommunicatorStartupRecoveryLifecycle;
   }) => {
     readonly wake: AdvisoryLockWakePort;
-    readonly notifications: AdvisoryLockPostCommitNotificationPort;
+    readonly notifications?: AdvisoryLockPostCommitNotificationPort;
     readonly dispose?: () => void;
     readonly drain?: () => Promise<void>;
   };
   readonly recoverStartup: typeof recoverCommunicatorStartup;
+  readonly recoverContextStartup: typeof failUncertainContextOnStartup;
   readonly createExporter: (
     options: CommunicatorOptions,
     input: PluginInput,
@@ -91,28 +92,17 @@ const productionDependencies: CompositionDependencies = Object.freeze({
   checkCompatibility: checkHostCompatibility,
   createStore: (options: ConstructorParameters<typeof LinuxBunSqliteStore>[0]) =>
     new LinuxBunSqliteStore(options),
-  createRuntime: () => new RequestRuntime(),
+  createRuntime: (contextRuntime?: ContextAdmissionRuntime) =>
+    new RequestRuntime(undefined, undefined, undefined, contextRuntime),
+  createContextRuntime: () => new ContextAdmissionRuntime(),
   createAdvisoryLockHooks: ({
-    native,
     lifecycle,
   }: {
     readonly native: OpenCodeNativeAdapter;
     readonly lifecycle: CommunicatorStartupRecoveryLifecycle;
-  }) => {
-    const notifier = new ActiveSessionAdvisoryLockNotifier({
-      roots: native,
-      steer: native,
-      ids: createGeneratedIdFactory(productionEntropy),
-      timers: productionSchedulerTimers,
-    });
-    return {
-      wake: { wakeAdvisoryLockExpiry: () => lifecycle.scheduler.wake() },
-      notifications: notifier,
-      dispose: () => notifier.dispose(),
-      drain: () => notifier.drain(),
-    };
-  },
+  }) => ({ wake: { wakeAdvisoryLockExpiry: () => lifecycle.scheduler.wake() } }),
   recoverStartup: recoverCommunicatorStartup,
+  recoverContextStartup: failUncertainContextOnStartup,
   createExporter: createProductionExporter,
 });
 
@@ -152,6 +142,26 @@ function bridgeContracts(
   return Object.freeze(definitions);
 }
 
+async function failUncertainContextOnStartup(
+  store: LinuxBunSqliteStore,
+  lifecycle: CommunicatorStartupRecoveryLifecycle,
+  workspaceKey: WorkspaceBinding["workspaceKey"],
+): Promise<void> {
+  let recoveredContextRows = 0;
+  while (true) {
+    const failed = await store.failUncertainContextOnStartup({
+      fencingToken: lifecycle.fencingToken,
+      workspaceKey,
+      limit: 100,
+    });
+    recoveredContextRows += failed.length;
+    if (failed.length < 100) return;
+    if (recoveredContextRows >= 4_096) {
+      throw new Error("Context startup recovery exceeded its hard bound.");
+    }
+  }
+}
+
 export function createCompositionFactory(
   overrides: Partial<CompositionDependencies> = {},
 ): (input: PluginInput, options?: PluginOptions) => Promise<Hooks> {
@@ -159,6 +169,7 @@ export function createCompositionFactory(
   return async (input, rawOptions) => {
     let store: LinuxBunSqliteStore | undefined;
     let runtime: RequestRuntime | undefined;
+    let contextRuntime: ContextAdmissionRuntime | undefined;
     let lifecycle: CommunicatorStartupRecoveryLifecycle | undefined;
     let deletion: ParticipantDeletionLifecycle | undefined;
     let participantStop: ParticipantStopLifecycle | undefined;
@@ -174,6 +185,7 @@ export function createCompositionFactory(
       participantStop: () => participantStop,
       participantOperations: () => participantOperations,
       runtime: () => runtime,
+      contextRuntime: () => contextRuntime,
       invocations,
       exporterDrain: () => exporterDrain,
       exporterDispose: () => exporterDispose,
@@ -205,7 +217,8 @@ export function createCompositionFactory(
         serverUrl: input.serverUrl,
         workspaceKey,
       });
-      runtime = dependencies.createRuntime();
+      contextRuntime = dependencies.createContextRuntime();
+      runtime = dependencies.createRuntime(contextRuntime);
       store = dependencies.createStore({
         stateDirectory: options.stateDirectory,
         // Linux private-path filenames are capped at 64 characters; retain a 208-bit digest.
@@ -247,11 +260,15 @@ export function createCompositionFactory(
       );
       if (!recovered.ok) throw new Error(recovered.error.message);
       lifecycle = recovered.value;
+      await dependencies.recoverContextStartup(store, lifecycle, workspaceKey);
       participantOperations = new ParticipantOperationGate();
       deletion = new ParticipantDeletionLifecycle({
         requests: store,
         presence: native,
         notifications: runtime,
+        contexts: store,
+        contextNotifications: contextRuntime,
+        operations: participantOperations,
         lifecycle,
         workspaceKey,
         directory: workspace.directory,
@@ -262,6 +279,8 @@ export function createCompositionFactory(
         activity: native,
         operations: participantOperations,
         notifications: runtime,
+        contexts: store,
+        contextNotifications: contextRuntime,
         lifecycle,
         workspaceKey,
       });
@@ -287,16 +306,33 @@ export function createCompositionFactory(
         native,
         store,
         runtime,
+        contextRuntime,
         lifecycle,
         participantOperations,
         exporter: exporter.adapter,
         advisoryLockWake: advisoryLockHooks.wake,
-        advisoryLockNotifications: advisoryLockHooks.notifications,
+        ...(advisoryLockHooks.notifications
+          ? { advisoryLockNotifications: advisoryLockHooks.notifications }
+          : {}),
       });
       const tools = bridgeContracts(contracts, invocations, workspace);
+      const chatMessagesTransform = createChatMessagesTransform(
+        {
+          readiness: lifecycle,
+          contexts: store,
+          participantOperations,
+          notifications: contextRuntime,
+        },
+        {
+          workspaceKey,
+          fencingToken: lifecycle.fencingToken,
+          abort: lifecycle.effectSignal,
+        },
+      );
       return {
         tool: tools,
         "permission.ask": enforceMandatoryApproval,
+        "experimental.chat.messages.transform": chatMessagesTransform,
         config: async (config) => {
           enforceMandatoryStopConfiguration(config);
           registerBundledSkills(config);

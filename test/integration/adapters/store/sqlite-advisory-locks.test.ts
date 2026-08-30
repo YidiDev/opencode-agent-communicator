@@ -196,7 +196,7 @@ describe("SQLite advisory lock persistence", () => {
     });
   });
 
-  test("appends migration 13 to a version-12 database with strict schema and ceiling trigger", () => {
+  test("appends migrations 13-16 to a version-12 database with strict schemas", () => {
     const database = new Database(":memory:", { strict: true });
     database.exec("PRAGMA foreign_keys = ON");
     database.exec(`CREATE TABLE schema_migrations (
@@ -215,7 +215,7 @@ describe("SQLite advisory lock persistence", () => {
       database
         .query<{ version: number }, []>("SELECT user_version AS version FROM pragma_user_version")
         .get()?.version,
-    ).toBe(15);
+    ).toBe(16);
     expect(
       database
         .query<{ strict: number }, []>(
@@ -223,7 +223,14 @@ describe("SQLite advisory lock persistence", () => {
         )
         .get()?.strict,
     ).toBe(1);
-    expect(sqliteStoreMigrations).toHaveLength(15);
+    expect(
+      database
+        .query<{ strict: number }, []>(
+          "SELECT strict FROM pragma_table_list WHERE name = 'context_admissions'",
+        )
+        .get()?.strict,
+    ).toBe(1);
+    expect(sqliteStoreMigrations).toHaveLength(16);
     database.close(true);
   });
 });

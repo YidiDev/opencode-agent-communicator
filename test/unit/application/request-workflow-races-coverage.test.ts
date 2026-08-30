@@ -43,7 +43,7 @@ const immediateArguments = {
 function immediateFixture() {
   let prepared: PrepareRequestInput | undefined;
   let schedulerWakes = 0;
-  let claims = 0;
+  let nativeCalls = 0;
   const ports = {
     readiness: { fencingToken: token, assertReady() {} },
     membership: {
@@ -58,19 +58,14 @@ function immediateFixture() {
         prepared = input;
         return { ok: true as const, request: input.request };
       },
-      async claimPrepared() {
-        claims += 1;
+      async getRequestMetadata() {
         if (!prepared) throw new Error("request was not prepared");
-        const claimed = {
+        return {
           ...prepared.request,
-          deliveryState: "submitting" as const,
-          submittedAtMs: 10_001,
-        } as RequestMetadata & { deliveryState: "submitting" };
-        return { ok: true as const, request: claimed, envelopeJson: prepared.envelopeJson };
-      },
-      async completeDelivery() {
-        if (!prepared) throw new Error("request was not prepared");
-        return { ok: true as const, request: prepared.request };
+          deliveryState: "context_admitted" as const,
+          updatedAtMs: 10_002,
+          contextAdmittedAtMs: 10_002,
+        } as RequestMetadata;
       },
     },
     scheduler: {
@@ -79,11 +74,57 @@ function immediateFixture() {
       },
     },
     nativeQueue: {
-      queueMessage: async () => ({
-        kind: "admitted" as const,
-        admittedSeq: 1,
-        observedAtMs: 10_002,
+      queueMessage: async () => {
+        nativeCalls += 1;
+        return { kind: "unknown" as const };
+      },
+    },
+    contexts: {
+      async getContextAdmission() {
+        if (!prepared?.contextAdmission) throw new Error("context was not prepared");
+        return {
+          id: requestId,
+          kind: "request" as const,
+          workspaceKey,
+          sourceSessionId,
+          targetSessionId,
+          state: "context_admitted" as const,
+          contentByteLength: prepared.contextAdmission.contentByteLength,
+          contentSha256: "ab".repeat(32),
+          createdAtMs: 10_000,
+          updatedAtMs: 10_002,
+          awaitingContextAtMs: 10_001,
+          contextAdmittedAtMs: 10_002,
+          claimedFencingToken: token,
+        };
+      },
+    },
+    contextRuntime: {
+      effectSignal: new AbortController().signal,
+      attach: () => ({
+        outcome: Promise.resolve({
+          outcome: "settled" as const,
+          event: { id: requestId, kind: "request" as const, state: "context_admitted" as const },
+        }),
+        detach() {},
       }),
+      notifyContextSettled: () => undefined,
+    },
+    activity: {
+      observeRequestParticipants: async () => ({
+        sourceVisible: true,
+        targetVisible: true,
+        targetStatus: "busy" as const,
+      }),
+    },
+    participantOperations: {
+      async run<Value>(
+        _participants: readonly (typeof sourceSessionId)[],
+        _abort: AbortSignal,
+        operation: () => Promise<Value>,
+      ) {
+        return operation();
+      },
     },
     ownership: { acquire: async () => token, isCurrent: async () => true },
     clock: { nowMs: () => 10_000 },
@@ -103,8 +144,8 @@ function immediateFixture() {
       get schedulerWakes() {
         return schedulerWakes;
       },
-      get claims() {
-        return claims;
+      get nativeCalls() {
+        return nativeCalls;
       },
     },
   };
@@ -169,7 +210,7 @@ describe("immediate request deterministic race coverage", () => {
     expect(current.state.prepared).toBeUndefined();
   });
 
-  test("wakes the scheduler but does not claim when persistence loses the abort race", async () => {
+  test("returns durable admission without native I/O when persistence wins the abort race", async () => {
     const current = immediateFixture();
     const controller = new AbortController();
     const createPrepared = current.ports.requests.createPrepared.bind(current.ports.requests);
@@ -185,9 +226,9 @@ describe("immediate request deterministic race coverage", () => {
         immediateContext(controller),
         immediateArguments,
       ),
-    ).toMatchObject({ ok: false, error: { code: "request_cancelled" } });
+    ).toMatchObject({ ok: true, value: { deliveryState: "context_admitted" } });
     expect(current.state.schedulerWakes).toBe(1);
-    expect(current.state.claims).toBe(0);
+    expect(current.state.nativeCalls).toBe(0);
   });
 
   test("fails closed when envelope digesting throws after earlier digests succeeded", async () => {

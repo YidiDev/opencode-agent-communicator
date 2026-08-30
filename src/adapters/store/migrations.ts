@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import {
   activeAdvisoryLocksPerWorkspaceHardCeiling,
+  deliveryRecordsPerWorkspaceHardCeiling,
   managedSessionsPerWorkspaceHardCeiling,
   startOperationsPerWorkspaceHardCeiling,
   startOperationsRecoveryHardCeiling,
@@ -1246,6 +1247,165 @@ DROP TRIGGER start_operations_terminal_private_guard_v15;
 DROP TRIGGER start_operations_terminal_reason_update_v15;
 DROP TRIGGER start_operations_terminal_reason_insert_v15;
 ALTER TABLE start_operations DROP COLUMN terminal_reason;
+`,
+  },
+  {
+    version: 16,
+    checksum: "sha256:719cc560922e9603ee51989db9d2b1e1c4aca30a8ecbd32ef8097cf2a9077988",
+    sql: `
+ALTER TABLE requests ADD COLUMN delivery_transport TEXT NOT NULL DEFAULT 'native'
+  CHECK (delivery_transport IN ('native','context'));
+CREATE TRIGGER requests_delivery_transport_insert_v16 BEFORE INSERT ON requests
+WHEN (NEW.delivery_transport = 'context' AND (
+  NEW.delivery_mode <> 'steer' OR NEW.linked_start_operation_id IS NOT NULL
+)) OR (NEW.delivery_mode = 'initial' AND NEW.delivery_transport <> 'native')
+BEGIN
+  SELECT RAISE(ABORT, 'request delivery transport is incoherent');
+END;
+CREATE TRIGGER requests_delivery_transport_update_v16
+BEFORE UPDATE OF delivery_transport, delivery_mode, linked_start_operation_id ON requests
+WHEN (NEW.delivery_transport = 'context' AND (
+  NEW.delivery_mode <> 'steer' OR NEW.linked_start_operation_id IS NOT NULL
+)) OR (NEW.delivery_mode = 'initial' AND NEW.delivery_transport <> 'native')
+BEGIN
+  SELECT RAISE(ABORT, 'request delivery transport is incoherent');
+END;
+
+-- Existing-root native work that was never definitely admitted cannot be replayed as context.
+DELETE FROM request_payloads WHERE request_id IN (
+  SELECT id FROM requests
+  WHERE resolution_state = 'pending' AND delivery_mode IN ('steer','queue')
+    AND delivery_state IN ('prepared','submitting','delivery_unknown')
+);
+DELETE FROM request_wait_edges WHERE request_id IN (
+  SELECT id FROM requests
+  WHERE resolution_state = 'pending' AND delivery_mode IN ('steer','queue')
+    AND delivery_state IN ('prepared','submitting','delivery_unknown')
+);
+UPDATE requests
+SET delivery_state = 'delivery_failed', resolution_state = 'delivery_failed',
+  submitted_at_ms = COALESCE(submitted_at_ms, updated_at_ms),
+  delivery_failed_at_ms = updated_at_ms, resolved_at_ms = updated_at_ms,
+  claimed_fencing_token = COALESCE(claimed_fencing_token, 1),
+  retained_content_byte_length = NULL, payload_sha256 = NULL
+WHERE resolution_state = 'pending' AND delivery_mode IN ('steer','queue')
+  AND delivery_state IN ('prepared','submitting','delivery_unknown');
+
+CREATE TABLE context_admissions (
+  id TEXT PRIMARY KEY CHECK (
+    (kind = 'message' AND length(id) = 36 AND substr(id, 1, 4) = 'dlv_' AND
+      substr(id, 5) NOT GLOB '*[^0-9a-f]*') OR
+    (kind = 'request' AND length(id) = 36 AND substr(id, 1, 4) = 'req_' AND
+      substr(id, 5) NOT GLOB '*[^0-9a-f]*')
+  ),
+  kind TEXT NOT NULL CHECK (kind IN ('message','request')),
+  workspace_key TEXT NOT NULL REFERENCES workspaces(workspace_key) ON DELETE CASCADE,
+  source_session_id TEXT NOT NULL CHECK (
+    length(source_session_id) BETWEEN 5 AND 132 AND substr(source_session_id, 1, 4) = 'ses_' AND
+    substr(source_session_id, 5) NOT GLOB '*[^A-Za-z0-9]*'
+  ),
+  target_session_id TEXT NOT NULL CHECK (
+    length(target_session_id) BETWEEN 5 AND 132 AND substr(target_session_id, 1, 4) = 'ses_' AND
+    substr(target_session_id, 5) NOT GLOB '*[^A-Za-z0-9]*'
+  ),
+  request_id TEXT UNIQUE,
+  state TEXT NOT NULL CHECK (
+    state IN ('prepared','awaiting_context','context_admitted','failed','cancelled')
+  ),
+  payload_json TEXT CHECK (
+    payload_json IS NULL OR (
+      length(CAST(payload_json AS BLOB)) BETWEEN 1 AND 65536 AND json_valid(payload_json)
+    )
+  ),
+  content_byte_length INTEGER NOT NULL CHECK (content_byte_length BETWEEN 1 AND 65536),
+  content_sha256 TEXT NOT NULL CHECK (
+    length(content_sha256) = 64 AND content_sha256 NOT GLOB '*[^0-9a-f]*'
+  ),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms BETWEEN 0 AND 9007199254740991),
+  updated_at_ms INTEGER NOT NULL CHECK (
+    updated_at_ms BETWEEN created_at_ms AND 9007199254740991
+  ),
+  awaiting_context_at_ms INTEGER CHECK (
+    awaiting_context_at_ms IS NULL OR
+    awaiting_context_at_ms BETWEEN created_at_ms AND updated_at_ms
+  ),
+  context_admitted_at_ms INTEGER CHECK (
+    context_admitted_at_ms IS NULL OR
+    context_admitted_at_ms BETWEEN awaiting_context_at_ms AND updated_at_ms
+  ),
+  failed_at_ms INTEGER CHECK (
+    failed_at_ms IS NULL OR failed_at_ms BETWEEN created_at_ms AND updated_at_ms
+  ),
+  cancelled_at_ms INTEGER CHECK (
+    cancelled_at_ms IS NULL OR cancelled_at_ms BETWEEN created_at_ms AND updated_at_ms
+  ),
+  claimed_fencing_token INTEGER CHECK (
+    claimed_fencing_token IS NULL OR claimed_fencing_token BETWEEN 1 AND 9007199254740991
+  ),
+  CHECK (source_session_id <> target_session_id),
+  CHECK ((kind = 'request') = (request_id IS NOT NULL)),
+  CHECK (kind <> 'request' OR request_id = id),
+  CHECK ((state IN ('prepared','awaiting_context')) = (payload_json IS NOT NULL)),
+  CHECK (state <> 'prepared' OR awaiting_context_at_ms IS NULL),
+  CHECK (state NOT IN ('awaiting_context','context_admitted') OR awaiting_context_at_ms IS NOT NULL),
+  CHECK ((state = 'context_admitted') = (context_admitted_at_ms IS NOT NULL)),
+  CHECK ((state = 'failed') = (failed_at_ms IS NOT NULL)),
+  CHECK ((state = 'cancelled') = (cancelled_at_ms IS NOT NULL)),
+  CHECK ((state = 'context_admitted') = (claimed_fencing_token IS NOT NULL)),
+  FOREIGN KEY (request_id, workspace_key, source_session_id, target_session_id)
+    REFERENCES requests(id, workspace_key, source_session_id, target_session_id) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+CREATE INDEX context_admissions_target_pending_v16
+  ON context_admissions(workspace_key, target_session_id, created_at_ms, id)
+  WHERE state = 'awaiting_context';
+CREATE INDEX context_admissions_source_v16
+  ON context_admissions(workspace_key, source_session_id, created_at_ms, id);
+CREATE INDEX context_admissions_terminal_gc_v16
+  ON context_admissions(workspace_key, updated_at_ms, id)
+  WHERE state IN ('context_admitted','failed','cancelled');
+CREATE TRIGGER context_admissions_retention_insert_v16 BEFORE INSERT ON context_admissions
+BEGIN
+  DELETE FROM context_admissions
+  WHERE workspace_key = NEW.workspace_key
+    AND state IN ('context_admitted','failed','cancelled')
+    AND updated_at_ms < MAX(0, NEW.created_at_ms - 86400000);
+END;
+CREATE TRIGGER context_admissions_request_insert_v16 BEFORE INSERT ON context_admissions
+WHEN NEW.kind = 'request' AND NOT EXISTS (
+  SELECT 1 FROM requests WHERE id = NEW.request_id AND workspace_key = NEW.workspace_key
+    AND source_session_id = NEW.source_session_id AND target_session_id = NEW.target_session_id
+    AND delivery_transport = 'context' AND resolution_state = 'pending'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'context request parent is incoherent');
+END;
+CREATE TRIGGER context_admissions_ceiling_insert_v16 BEFORE INSERT ON context_admissions
+WHEN (SELECT count(*) FROM context_admissions
+      WHERE workspace_key = NEW.workspace_key AND state IN ('prepared','awaiting_context'))
+  >= ${deliveryRecordsPerWorkspaceHardCeiling}
+BEGIN
+  SELECT RAISE(ABORT, 'context admission workspace row ceiling exceeded');
+END;
+CREATE TRIGGER requests_context_terminal_v16
+AFTER UPDATE OF resolution_state ON requests
+WHEN OLD.resolution_state = 'pending' AND NEW.resolution_state <> 'pending'
+  AND NEW.delivery_transport = 'context'
+BEGIN
+  UPDATE context_admissions
+  SET state = 'cancelled', payload_json = NULL, cancelled_at_ms = NEW.resolved_at_ms,
+    updated_at_ms = NEW.resolved_at_ms
+  WHERE id = NEW.id AND state IN ('prepared','awaiting_context');
+END;
+`,
+    downSql: `
+DROP TRIGGER requests_context_terminal_v16;
+DROP TRIGGER context_admissions_ceiling_insert_v16;
+DROP TRIGGER context_admissions_retention_insert_v16;
+DROP TRIGGER context_admissions_request_insert_v16;
+DROP TABLE context_admissions;
+DROP TRIGGER requests_delivery_transport_update_v16;
+DROP TRIGGER requests_delivery_transport_insert_v16;
+ALTER TABLE requests DROP COLUMN delivery_transport;
 `,
   },
 ] as const;

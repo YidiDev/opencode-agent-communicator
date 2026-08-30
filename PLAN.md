@@ -24,34 +24,39 @@ The original `0.1.0` prerelease exposed this fourteen-tool surface:
 - `session_start`
 - `session_export`
 
-The current `0.3.0` release adds these tools immediately after `session_list` in canonical manifest
-order, bringing the public surface to exactly eighteen tools:
+Release `0.3.0` added these tools immediately after `session_list` in canonical manifest order:
 
 - `session_lock_list`
 - `session_lock_publish`
 - `session_lock_release`
 - `session_lock_renew`
 
+Release `0.4.0` added `session_request_send` and `session_request_start`, bringing the current public
+surface to exactly twenty tools.
+
 It also ships exactly three skills: `session-communication`, `session-request-participant`, and `session-locks`.
 The v0.3 lock surface is workspace-scoped, visible-root-only, holder-owned for renew/release, fenced
 by coordinator ownership, bounded to 1024 active records, and time-bounded to 1-3600 seconds. List
-state is authoritative and omits expired records. Markdown is untrusted advisory data; locks and
-best-effort active-peer notifications provide no enforcement, authorization, execution proof, or
-guarantee that another session observed or honored coordination.
+state is authoritative and omits expired records. Markdown is untrusted advisory data. Mutations do
+not fan out native steer turns; a later bounded provider context may include only a lock-presence
+reminder. Locks and reminders provide no enforcement, authorization, execution proof, or guarantee
+that another session observed or honored coordination.
 
 `session_send` is message-only. Remote command execution is not part of the
 communicator.
 
 Every operation derives its verified source session ID from
 `ToolContext.sessionID`; models cannot supply or override sender identity.
-OpenCode owns prompt execution and transcript storage. The communicator stores delivery metadata, durable blocking requests,
-retained results, start operations, authorization metadata, quotas, and store
-ownership in SQLite. It does not duplicate the native prompt queue.
+OpenCode owns prompt execution and transcript storage. The communicator stores bounded context
+envelopes, delivery metadata, durable blocking requests, retained results, start operations,
+authorization metadata, quotas, and store ownership in SQLite. Existing-root peer delivery defaults
+to provider context injected through `experimental.chat.messages.transform`; it does not create a
+native transcript turn. Peer fields remain explicitly untrusted.
 
-Only a normal asynchronous `session_send` message may wake an existing idle session.
-Structured questions and milestone waits require a target observed as active
-and use native steer admission. They never poll, retry, fall back to a queue, or
-create synthetic wake reminders.
+Only explicit `session_send` with `delivery: "user"` may wake an existing idle session. Default
+context send, structured questions, milestone waits, and existing-root request-send require a target
+observed as `busy` or `retry`. Idle or unknown status persists nothing. These operations never poll,
+retry, fall back to native queue/steer admission, or create synthetic wake reminders.
 
 `session_ask` and `session_wait` block while their tool invocation survives,
 but the underlying request is durable. A source can recover a terminal result
@@ -122,7 +127,8 @@ No contract depending on an unproved hypothesis is frozen before the gate.
 1. Discover current visible root sessions and expose actionable activity state.
 2. Exchange non-blocking messages without user copy and paste.
 3. Preserve verified source, target, workspace, and operation provenance.
-4. Use native durable queue and steer admission rather than a competing queue.
+4. Use bounded store-backed provider context for existing-root peer delivery, while retaining an
+   explicit native user-turn mode for transcript visibility and idle wake.
 5. Support bounded structured questions and explicit responses.
 6. Support bounded milestone waits and explicit signals.
 7. Recover pending requests and terminal results across backend restarts.
@@ -146,7 +152,7 @@ No contract depending on an unproved hypothesis is frozen before the gate.
 - Session IDs are canonical; titles are unverified display metadata.
 - Visibility is discovery and scope, not authorization.
 - Admission does not imply activation, execution, understanding, or completion.
-- Only ordinary queued messages may initiate work in an idle session.
+- Only explicit native user-turn delivery may initiate work in an existing idle session.
 - Blocking calls always have absolute finite deadlines.
 - Durable recovery is preferred over hidden retries and synthetic reminders.
 - Terminal state commits before an in-memory waiter is resolved.
@@ -164,10 +170,10 @@ Version one will not:
   shared filesystem.
 - Treat idle status as evidence that a human is or is not viewing a session.
 - Automatically poll until a target becomes active.
-- Automatically convert a failed or raced steer into a queued message.
+- Automatically convert failed context delivery into a native user turn.
 - Create coalesced wakes, reminder prompts, wake markers, render snapshots, or
   successor wakes.
-- Depend on `experimental.chat.system.transform` for correctness.
+- Use `experimental.chat.system.transform`; context injection uses the scoped messages transform.
 - Retract an input after native admission.
 - Guarantee that a target model obeys, notices, or answers a message.
 - Guarantee exactly-once delivery to a live tool invocation.
@@ -209,9 +215,9 @@ constant-shape `not_found_or_unauthorized` response to limit ID enumeration.
 
 ### 5.3 Activity Status
 
-- `busy`: active and eligible for observed-active steer operations.
-- `retry`: active and eligible for observed-active steer operations.
-- `idle`: inactive. A normal queued message is required to initiate work.
+- `busy`: active and eligible for existing-root context delivery.
+- `retry`: active and eligible for existing-root context delivery.
+- `idle`: inactive. Explicit `session_send` with `delivery: "user"` is required to initiate work.
 - `unknown`: host status cannot be established; fail closed for active-only
   operations.
 
@@ -424,9 +430,9 @@ boolean, updated time, and communicator-managed provenance when applicable.
 
 The result includes enough current state for this explicit workflow:
 
-1. Submit a normal message with `session_send` to wake/resume an idle session.
+1. Submit `session_send` with `delivery: "user"` to wake/resume an idle session.
 2. Inspect `session_list` until the target is observed `busy` or `retry`.
-3. Invoke `session_ask` or `session_wait`.
+3. Use default context send, `session_ask`, `session_wait`, or `session_request_send`.
 
 Listing never claims a human is viewing a session.
 
@@ -436,21 +442,25 @@ Listing never claims a human is viewing a session.
 type SessionSendArgs = {
   session_id: string
   content: string
+  delivery?: "context" | "user"
 }
 ```
 
-The coordinator validates source, target, authorization, size, and quotas;
-creates a delivery record and caller-supplied native message ID; then submits
-the escaped message envelope once through the public asynchronous prompt surface and reconciles it
-through fixed-message read-back.
+`delivery` defaults to `context`. The coordinator validates source, target, authorization, size, and
+quotas, requires the target to be observed `busy` or `retry`, and durably stores one bounded verified
+envelope. The next provider messages transform for that exact active target appends the envelope to
+provider input, atomically claims it, and erases the stored payload. The context is provider-visible,
+transcript-invisible, and explicitly marks peer data as untrusted. Idle or unknown target status
+persists no delivery.
 
-The result reports admission evidence only. It never reports that an idle
-target became active. The caller uses `session_list` for a later status
-observation. After confirmed native admission, the communicator does not retain
-a duplicate normal-message payload.
+The transform's strictly validated transcript session identity is authoritative for admission. It
+does not re-read the lagging native root list during a tool-to-provider transition; participant-gated
+idle and deletion lifecycle handling remains responsible for settling context that loses its target.
 
-`session_send` is the only communicator operation that may initiate work in an
-existing idle session.
+Explicit `delivery: "user"` creates a caller-ID-correlated native user turn through the public
+asynchronous prompt surface and reconciles it through fixed-message read-back. It is transcript- and
+export-visible and is the only existing-root delivery that may initiate idle work. Its result reports
+admission evidence, not activation; use `session_list` for a later status observation.
 
 ### 8.3 `session_delivery_get`
 
@@ -460,9 +470,21 @@ type SessionDeliveryGetArgs = {
 }
 ```
 
-Only the source or target participant may inspect a delivery in the same
-workspace. The result contains payload-free metadata, native correlation
-evidence, timestamps, and one of:
+Only the source or target participant may inspect a delivery in the same workspace. The result
+contains payload-free metadata, its `context` or `user` transport, timestamps, and the applicable
+state. Native user delivery retains the historical state machine below. Context delivery uses:
+
+```text
+prepared -> awaiting_context -> context_admitted
+prepared | awaiting_context -> failed | cancelled
+```
+
+`context_admitted` proves only that one provider messages transform received and claimed the bounded
+envelope. It does not prove model understanding, compliance, or response, and it does not add a
+transcript turn. Context awaiting injection at process loss is failed during startup and never
+replayed because prior provider visibility is uncertain.
+
+Native user delivery states are:
 
 ```text
 prepared
@@ -531,19 +553,16 @@ type SessionAskArgs = {
 }
 ```
 
-The target must be observed `busy` or `retry`. If idle, no request is persisted
-and `target_idle` tells the caller to queue a wake message and inspect status.
+The target must be observed `busy` or `retry`. If idle, no request is persisted and `target_idle`
+tells the caller to use explicit `session_send` user delivery if wake is intended, then inspect
+status.
 If status is unknown, the operation fails closed.
 
-The coordinator serializes the final active check and durable creation against
-participant stop processing for both source and target. It then performs V2
-steer admission. The exact native result is reported or recorded; the
-coordinator never polls, retries, or converts the request into a queued wake.
-
-On confirmed admission failure, the request transitions terminal and content
-is logically erased. On admission ambiguity, it remains pending with
-`delivery_unknown`, is not resubmitted, remains answerable through the inbox,
-and expires at its original deadline.
+The coordinator serializes the final active check and durable creation against participant stop
+processing for both source and target. It stores a bounded context envelope for the next provider
+messages transform. Confirmed injection records `context_admitted` and erases the stored envelope.
+Failure terminalizes the request and logically erases content. A crash while injection is uncertain
+fails the request during startup without replay.
 
 While the invocation survives, the tool blocks until an atomic terminal
 transition. If the invocation disappears without an explicit abort, the durable
@@ -584,8 +603,8 @@ type SessionWaitArgs = {
 }
 ```
 
-`session_wait` follows the same observed-active, persist-before-steer, status
-race, ambiguity, blocking, restart, deadline, and explicit-abort rules as
+`session_wait` follows the same observed-active, persist-before-context, status
+race, no-replay recovery, blocking, restart, deadline, and explicit-abort rules as
 `session_ask`. It never wakes an idle target.
 
 ### 8.7 `session_signal`
@@ -692,11 +711,11 @@ An approved `session_stop` transitions every pending request by role:
 - Requests targeting the stopped session become `target_stopped`.
 - Requests sourced by the stopped session become `source_stopped`.
 
-Each transition is atomic, logically erases payload/result content, and rejects
-late actions with the stored reason. A fresh authoritative idle observation applies the same
-role-specific outcomes only to blocking steer requests created by `session_ask` or `session_wait`;
-queued `session_request_send` and initial `session_request_start` work remains durable. These states
-do not assert that a native interrupt occurred. This is why an already-idle approved stop still
+Each transition is atomic, logically erases payload/result content, and rejects late actions with the
+stored reason. A fresh authoritative idle observation applies the same role-specific outcomes to
+every existing-root context request created by `session_ask`, `session_wait`, or
+`session_request_send`; linked initial `session_request_start` work remains durable. These states do
+not assert that a native interrupt occurred. This is why an already-idle approved stop still
 terminates every pending request with those reasons.
 
 Pinned `session.idle` and idle `session.status` events are wake hints only. The
@@ -784,6 +803,11 @@ Creation provenance is recorded. Communicator-created sessions cannot call
 `session_start` recursively by default; only an explicit administrator opt-in
 may permit it, still subject to approval and quotas.
 
+`session_request_start` composes this start operation with one durable ask or wait. Unlike every
+existing-root request path, it retains one native, transcript-visible initial user turn so the newly
+created root has an initial execution trigger. Crash recovery preserves the existing no-replay rule
+for uncertain native initial admission.
+
 ### 8.14 `session_export`
 
 ```ts
@@ -855,8 +879,8 @@ continues waiting for an ordinary terminal result.
 
 ### 9.2 Delivery States
 
-Requests use this delivery state machine independently from their resolution
-state:
+Native historical and linked-initial requests use this delivery state machine independently from
+their resolution state:
 
 ```text
 prepared -> submitting -> admitted -> promoted
@@ -868,7 +892,7 @@ delivery_unknown -> admitted | promoted | delivery_failed
 Direct `submitting -> promoted` persistence is one atomic mutation that records
 the implied admitted and promoted history together, rather than two commits.
 
-`prepared` is committed before the first steer attempt and proves no native call
+`prepared` is committed before the first native attempt and proves no native call
 has begun, so restart recovery may perform that first submission. `submitting`
 is committed immediately before the call; restart or ownership loss converts it
 to `delivery_unknown` unless authoritative native evidence resolves it. Unknown
@@ -876,6 +900,11 @@ delivery is never resubmitted. Confirmed admission failure atomically resolves
 the request as `delivery_failed` and logically erases its payload. Resolution
 may become `answered` or `reached` even while delivery is unknown because the
 durable inbox and target action are authoritative.
+
+Existing-root context requests instead use `prepared -> awaiting_context -> context_admitted`, with
+failure or cancellation possible before admission. The provider transform claims an exact bounded,
+digest-bound set and erases each envelope atomically. Startup fails every surviving
+`awaiting_context` row and never replays it.
 
 ### 9.3 Deadlines and Restart
 
@@ -901,12 +930,11 @@ single successful compare-and-set transition wins.
 
 ### 9.5 Target Later Becomes Idle
 
-A durable request created through `session_request_send` or `session_request_start` remains pending
-if the target later becomes idle. The communicator creates no reminder or wake. The target can
-retrieve it from its inbox after later resumption. It remains pending until response, signal,
-deadline, explicit source cancellation, approved stop, or participant deletion. Blocking
-`session_ask` and `session_wait` requests instead transition to the participant's role-specific
-stopped outcome after an authoritative idle observation.
+A context request created through `session_ask`, `session_wait`, or `session_request_send` transitions
+to the participant's role-specific stopped outcome after an authoritative idle observation. The
+communicator creates no native reminder or wake. A linked initial request created through
+`session_request_start` remains pending across later idle status because its initial user turn was
+already admitted natively.
 
 ### 9.6 Participant Deletion
 
@@ -948,29 +976,29 @@ and truncation are hygiene measures, not secure-erasure claims.
 
 ### 10.1 Messages
 
-Messages use one public asynchronous prompt submission. Exact fixed-message read-back proves public
-transcript admission but is not proof that an
-idle session became active. Payload is not stored in SQLite after confirmed
-admission.
+Messages default to bounded durable provider context for an observed-active target. Context is
+appended to the latest user text only in the provider messages transform, is absent from stored
+transcripts and exports, and is erased from SQLite when claimed. Explicit `delivery: "user"` uses one
+public asynchronous prompt submission. Exact fixed-message read-back proves public transcript
+admission but is not proof that an idle session became active.
 
 ### 10.2 Questions and Milestones
 
-Ask/wait require an observed active target and use steer. Persistence occurs
-before native admission so ambiguity cannot lose request identity. The target
+Ask/wait and existing-root request-send require an observed active target and use context injection.
+Persistence occurs before provider admission so ambiguity cannot lose request identity. The target
 receives the request ID and guidance to use `session_respond` or
 `session_signal`; the durable inbox remains authoritative.
 
-There is an unavoidable status-to-admission race. The coordinator returns or
-stores the native outcome and never silently changes delivery mode.
+There is an unavoidable status-to-admission race. The provider transform revalidates that the exact
+target remains visible and `busy`/`retry`; it never silently changes delivery mode.
 
 ### 10.3 Admission Ambiguity
 
-Timeout, transport loss, backend ownership loss, or a crash between native
-effect and SQLite update may make admission unknowable. Such operations are
-marked `admission_unknown` or request `delivery_unknown`, never retried
-automatically, and reconciled only from authoritative evidence. A pending
-request with unknown delivery remains visible and answerable until its original
-deadline.
+Native user/start timeout, transport loss, backend ownership loss, or a crash between a native effect
+and SQLite update may remain `admission_unknown` or `delivery_unknown` and are never retried
+automatically. Context has a stricter recovery rule: startup fails and erases every uncertain
+unadmitted context row without replay, because transcript evidence cannot prove whether a provider
+already received it.
 
 ### 10.4 Non-Retractability
 
@@ -986,7 +1014,10 @@ late responses, not native transcript retraction.
   lifecycle wiring, and fail-closed diagnostics.
 - Coordinator: authorization, quotas, request/delivery/start state machines,
   waiters, deadline scheduling, and ownership checks.
-- Native adapter: the narrow proven V2/legacy API and event surface.
+- Provider-context adapter: the scoped messages transform, strict target derivation, active-state
+  revalidation, bounded selection, and atomic context claim.
+- Native adapter: the narrow proven public/V2/legacy API and event surface used for explicit user
+  delivery, start, status, and lifecycle operations.
 - Store: SQLite migrations, fenced transactions, retention, and recovery.
 - Export service: CLI identity verification, bounded spawn, secure destination
   handling, native JSON validation, and durability.
@@ -995,17 +1026,18 @@ late responses, not native transcript retraction.
 
 ### 11.2 Adapter Rules
 
-Use V2 for queue/steer admissions, deterministic IDs, creation, and correlation
-where Phase 0 proves behavior. Use a legacy endpoint only when 1.18.21 lacks a
+Use native admission for explicit user turns and managed-root initial turns, and V2 for deterministic
+IDs, creation, and correlation where Phase 0 proves behavior. Use a legacy endpoint only when 1.18.21 lacks a
 proven V2 equivalent for status, visible-set discovery, title update, or stop.
 Every fallback is isolated behind a typed adapter and covered by live tests.
 There is no silent fallback after an unexpected native failure.
 
 ### 11.3 Plugin Hooks
 
-The plugin uses only hooks required for tool registration, event correlation,
-configuration, approval, and disposal. `experimental.chat.system.transform` is
-not required. If `skills.paths` mutation through the config hook is unreliable,
+The plugin uses only hooks required for tool registration, scoped provider-message context, event
+correlation, configuration, approval, and disposal. It uses
+`experimental.chat.messages.transform`, not `experimental.chat.system.transform`. If `skills.paths`
+mutation through the config hook is unreliable,
 the package provides explicit project/global installer commands instead of
 silently copying files.
 
@@ -1030,6 +1062,7 @@ The schema includes:
 - Workspace metadata and migration version.
 - Backend lease and monotonically increasing fencing token.
 - Deliveries and native correlation evidence.
+- Bounded context admissions, digest-bound provider claims, and payload-erasure timestamps.
 - Requests, role participants, deadlines, delivery state, terminal state,
   retained result, acknowledgement, and retention timestamps.
 - Source-scoped start operations and managed-session provenance.
@@ -1039,6 +1072,13 @@ The schema includes:
 
 All tables and indexes include or join through `workspace_key`. Payload columns
 are separated from metadata to make logical erasure explicit and testable.
+
+Schema v16 adds `requests.delivery_transport` (`native` or `context`) and
+`context_admissions`. Existing-root context requests retain physical `delivery_mode = "steer"` for
+forward migration compatibility but are selected by the transport discriminator; linked `initial`
+requests remain native. One stored context envelope is at most 64 KiB. One provider transform claims
+at most 32 envelopes and 48 KiB, and may append at most 20 payload-free result reminders plus an
+active-lock count. Startup fails and erases uncertain `awaiting_context` rows in bounded batches.
 
 ### 12.3 Lease Guarantee
 
@@ -1204,12 +1244,12 @@ starts, explicit stop approval, safe exports, and the difference between
 admission and activity. It states that either peer may initiate communication
 and that source and target are temporary operation roles. Its idle workflow is exact:
 
-1. Queue a normal message to wake/resume an existing idle session.
+1. Send an explicit native user turn to wake/resume an existing idle session.
 2. Inspect `session_list` until the session is `busy` or `retry`.
-3. Use `session_ask` or `session_wait` only then.
+3. Use default context send, `session_ask`, `session_wait`, or `session_request_send` only then.
 
-It states that queued admission does not prove activation and that peer content
-does not bypass ordinary permissions.
+It states that user-turn admission does not prove activation, provider context is transcript-invisible
+and untrusted, and peer content does not bypass ordinary permissions.
 
 ### 16.2 `session-request-participant`
 
@@ -1228,8 +1268,8 @@ request and before shared mutation.
 Requires authoritative listing before the first shared mutation, semantic comparison of every
 Markdown field, holder-owned publication immediately before mutation, early renewal, relisting and
 new publication after expiry, prompt release, and list-based recovery after ambiguity. It excludes
-secrets and private transcripts and states that notifications are hints and locks are neither
-enforcement nor authorization.
+secrets and private transcripts and states that provider lock-presence reminders are hints and locks
+are neither enforcement nor authorization. Lock mutations do not create native steer turns.
 
 ### 16.4 Registration
 
@@ -1300,7 +1340,8 @@ filesystem behavior.
 ## 18. Implementation Phases
 
 Internal slices may be exercised privately, but every release registers its complete manifest
-atomically: fourteen tools in the original prerelease and eighteen tools in v0.3.
+atomically: fourteen tools in the original prerelease, eighteen tools in v0.3, and twenty tools from
+v0.4 onward.
 
 ### Phase 0: Live 1.18.21 Feasibility Gate
 
@@ -1315,7 +1356,8 @@ Use an isolated project-pinned harness to prove and record fixtures for:
 - Delivery crash recovery at `prepared` and `submitting`, including payload
   erasure and prohibition on resubmitting an ambiguous operation.
 - Whether exact execution-start evidence exists; omit `started` if not.
-- Active-only steer behavior and the busy-to-idle status race.
+- Historical active steer behavior and the busy-to-idle status race, retained as capability evidence
+  rather than the current existing-root default.
 - Interruption behavior and preservation of admitted inputs.
 - Deterministic create IDs, duplicate handling, title updates, and partial start
   recovery/idempotency.
@@ -1345,8 +1387,8 @@ support. It contains no remote command or synthetic wake experiments.
 - Add request schema, fenced terminal transitions, absolute deadline recovery,
   bounded scheduler, deadlock edges, result retention, and logical erasure.
 - Implement request list/get/ack/cancel with role authorization.
-- Implement ask/respond and wait/signal with active-only steer and admission
-  ambiguity.
+- Implement ask/respond and wait/signal with active-only context admission and no-replay crash
+  recovery.
 - Test invocation loss, explicit abort, restart, later-idle targets, and all
   response/signal/deadline/cancel races.
 
@@ -1385,10 +1427,10 @@ support. It contains no remote command or synthetic wake experiments.
 
 ### 19.1 Contract and Authorization Tests
 
-- Exact schema tests for all eighteen tools and per-tool domain errors.
+- Exact schema tests for all twenty tools and per-tool domain errors.
 - Advisory-lock publish/list/renew/release tests cover holder authorization, expiry, pagination,
-  UTF-8 limits, quota, fencing, authoritative ambiguous-outcome recovery, and non-authoritative
-  notification failure.
+  UTF-8 limits, quota, fencing, authoritative ambiguous-outcome recovery, no native mutation fan-out,
+  and bounded provider lock-presence reminders.
 - Malformed, wrong-prefix, wrong-length, collision, and entropy tests for IDs.
 - Caller/target stale, deleted, invisible, foreign-workspace, and malformed
   context tests.
@@ -1402,16 +1444,20 @@ support. It contains no remote command or synthetic wake experiments.
 
 ### 19.2 Admission and Activity Tests
 
-- Message queue admission to active and idle sessions.
-- Idle activation observed separately through `session_list`.
+- Default context admission only to `busy`/`retry`; idle/unknown persists nothing.
+- Explicit user-turn admission to active and idle sessions, with idle activation observed separately
+  through `session_list`.
 - Admission never represented as activation.
-- Queue FIFO, promotion correlation, interruption preservation, and ambiguity.
+- Provider context is bounded, transcript-invisible, explicitly untrusted, and atomically claimed.
+- Context crash recovery fails uncertain unadmitted rows without replay.
+- Historical native queue/steer capability evidence remains preserved but is not the existing-root
+  default.
 - Crash before and after `prepared -> submitting`: only `prepared` performs a
   first submission after restart; recovered `submitting` becomes unknown and is
   never resubmitted.
 - `target_idle` persists no ask/wait request.
-- Busy/retry-to-idle races report native behavior with no queue fallback.
-- No hidden polling, retry, synthetic wake, reminder, or system-transform use.
+- Busy/retry-to-idle races persist no new context and never fall back to a user turn.
+- No hidden polling, retry, synthetic wake, native lock-mutation fan-out, or system-transform use.
 - `started` absent unless the Phase 0 evidence test passes.
 
 ### 19.3 Request Tests
@@ -1423,10 +1469,12 @@ support. It contains no remote command or synthetic wake experiments.
 - Terminal transition races among respond/signal/deadline/abort/cancel/stop/delete.
 - Commit-before-waiter resolution and injected commit failure.
 - Explicit abort cancels; mere invocation/backend loss does not.
-- Admission unknown remains pending, is never retried, and can be answered.
-- Request delivery states recover `prepared`, conservatively mark `submitting`,
-  and terminalize confirmed admission failure as `delivery_failed`.
-- Target later idle creates no wake and leaves request in inbox.
+- Native admission unknown remains pending where historically applicable and is never retried;
+  uncertain context admission fails without replay.
+- Context request delivery states progress through `awaiting_context` and `context_admitted`, and
+  terminalize failed injection as `delivery_failed`.
+- Target later idle creates no wake and terminalizes existing-root context requests by participant
+  role; linked initial requests remain pending.
 - Source/target stop and deletion reasons remain distinguishable.
 - Missed deletion hooks reconcile at startup and by bounded periodic anti-entropy
   from direct per-ID evidence; list absence and malformed/uncorrelated 404s do not
@@ -1480,8 +1528,8 @@ support. It contains no remote command or synthetic wake experiments.
 
 - Skill discovery through config hook or documented explicit installers.
 - No silent file copy and no correctness dependency on skills.
-- Both communication skills teach message -> inspect active -> ask/wait and state that
-  admission does not prove activity.
+- Both communication skills teach explicit user delivery -> inspect active -> context/ask/wait and
+  state that admission does not prove activity.
 - Both communication skills describe independent peers and temporary per-operation source and
   target roles without supervisor/worker authority.
 - The lock skill requires list-before-mutation, semantic comparison of all Markdown, holder-owned
@@ -1518,8 +1566,9 @@ The v0.3 release requires:
 1. Exact 1.18.21 host validation and isolated Phase 0 evidence.
 2. All eighteen tools implemented with tested role/workspace authorization and exactly three
    bundled skills.
-3. Message-only queue admission and explicit idle activation workflow.
-4. Active-only ask/wait with `target_idle`, no persisted idle request, no hidden
+3. Active-only default context delivery, explicit user-turn idle activation, transcript invisibility,
+   bounded injection, and no-replay crash recovery.
+4. Active-only ask/wait/request-send with `target_idle`, no persisted idle request, no hidden
    retry/fallback, and tested status races.
 5. Durable request restart recovery, reconstructed deadlines, metadata-only
    inbox/outbox, source retrieval, acknowledgement, and cancellation.
@@ -1536,7 +1585,7 @@ The v0.3 release requires:
     overwrite approval, and adversarial Linux x64 containment tests.
 13. Both peer-communication skills available through a proven registration or
     explicit installer.
-14. No command execution, synthetic wake/reminder subsystem, system-transform
+14. No command execution, synthetic wake subsystem, native advisory-lock fan-out, system-transform
     dependency, restart orphaning, or exactly-once external-effect claim.
 
 Stable additionally requires complete macOS and Windows filesystem/process
@@ -1553,9 +1602,9 @@ ambiguity, and omit `started`; never infer stronger evidence.
 
 ### 22.2 Status Races
 
-An active target can become idle before steer admission. Mitigation: document
-the point-in-time check, expose the exact native outcome, keep ambiguous durable
-requests recoverable, and never auto-queue.
+An active target can become idle before context injection. Mitigation: revalidate at the provider
+transform, persist nothing when initially idle or unknown, fail uncertain crash survivors without
+replay, and never fall back to a native user turn.
 
 ### 22.3 Model Compliance
 

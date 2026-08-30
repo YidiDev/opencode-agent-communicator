@@ -213,10 +213,10 @@ not happen.
 | --- | --- | --- | --- |
 | `session_list` | optional `status`, `include_archived`, `limit` | visible root caller | Current visible roots with sanitized titles and observed status. |
 | `session_lock_list` | optional `cursor`, optional `limit` (default 50) | visible root caller | Active workspace locks as `{ locks, next_cursor? }`; each lock has `lock_id`, `held_by_session_id`, Markdown fields, and ISO 8601 UTC `created_at`, `renewed_at`, and `expires_at`. |
-| `session_lock_publish` | `ttl_seconds`, `title`, `description`, `instructions` | visible root caller | Publishes a caller-held advisory lock and returns `{ lock, notification: { eligible, admitted, unknown } }`. |
-| `session_lock_release` | `lock_id` | current lock holder | Removes an unexpired caller-held lock and returns its final lock plus notification summary. |
-| `session_lock_renew` | `lock_id`, `ttl_seconds` | current lock holder | Replaces an unexpired caller-held lock's expiry and returns the renewed lock plus notification summary. |
-| `session_send` | `session_id`, `content` | visible source targeting a visible root | Durable delivery ID and exact public-message admission state. This is the only tool that may wake an idle target. |
+| `session_lock_publish` | `ttl_seconds`, `title`, `description`, `instructions` | visible root caller | Publishes a caller-held advisory lock. The compatibility notification summary does not represent native fan-out. |
+| `session_lock_release` | `lock_id` | current lock holder | Removes an unexpired caller-held lock without sending native steer turns. |
+| `session_lock_renew` | `lock_id`, `ttl_seconds` | current lock holder | Replaces an unexpired caller-held lock's expiry without sending native steer turns. |
+| `session_send` | `session_id`, `content`, optional `delivery` (`context` or `user`) | visible source targeting a visible root | Defaults to durable provider-context delivery for a `busy`/`retry` target. Explicit `delivery: "user"` creates a native transcript-visible user turn and is the only existing-root delivery that may wake idle. |
 | `session_delivery_get` | `delivery_id` | delivery source or target | Payload-free delivery metadata. |
 | `session_ask` | `session_id`, 1-10 `questions`, `timeout_seconds` 1-3600 | visible source targeting an observed-active root | Blocks for validated answers or a durable terminal state. Never wakes idle work. |
 | `session_respond` | `request_id`, `answers` | pending ask target | Atomically stores the answer and terminalizes the ask. |
@@ -226,7 +226,7 @@ not happen.
 | `session_request_get` | `request_id` | request participant | Target pending payload, source retained result, or authorized metadata view. |
 | `session_request_ack` | `request_id` | source of an available result | Acknowledges the result and logically erases retained result content. |
 | `session_request_cancel` | `request_id` | pending request source | Durably cancels a pending request. |
-| `session_request_send` | `session_id`, `content`, discriminated `request` | visible source targeting a visible root | Persists an ask/wait, then queues one canonical work-and-request envelope; may wake idle targets and returns immediately. |
+| `session_request_send` | `session_id`, `content`, discriminated `request` | visible source targeting an observed-active root | Persists an ask/wait and admits one canonical envelope through provider context; never wakes idle work. |
 | `session_request_start` | `idempotency_key`, `initial_message`, discriminated `request`, optional `title`, `agent`, `model` | visible root under start policy | Persists a linked ask/wait before one canonical initial envelope creates and starts a managed root. |
 | `session_stop` | `session_id`, optional `reason` | visible root after user approval | Interrupts the target and terminalizes its pending participant requests. |
 | `session_start` | `idempotency_key`, `initial_message`, optional `title`, `agent`, `model` | visible root under start policy | Creates and admits another independent root session, or resumes the same durable operation. |
@@ -251,10 +251,9 @@ locks. `title` is 1-1024 UTF-8 bytes, `description` is 1-8192 UTF-8 bytes, and `
 private transcript content, and compare all three semantically before mutation. Public timestamps
 are canonical ISO 8601 UTC strings.
 
-Publish, renew, and release may send best-effort notification hints only to observed-active
-`busy` or `retry` roots, excluding the holder and idle/archived roots, with at most 100 recipients.
-Notification admission can be unknown and does not prove reading or compliance. A fresh
-`session_lock_list` is always authoritative.
+Publish, renew, and release do not fan out native steer turns. On a later provider turn, the bounded
+communicator context may remind an active root that locks exist, without copying lock Markdown into
+the transcript. A fresh `session_lock_list` is always authoritative.
 
 ### Ask question shape
 
@@ -278,11 +277,25 @@ Each question has `prompt`, `options`, and optional `multiple` and `allow_custom
 The target responds with one string-array per question. Values must match the offered options unless
 custom answers were allowed.
 
+### Context delivery contract
+
+Context delivery appends a fixed, explicitly untrusted communicator block to the latest user text
+only while OpenCode assembles the target's provider request. It does not modify the stored message,
+create a user turn, or appear in `session_export`. One provider transform admits at most 32 envelopes
+and 48 KiB. It may also include up to 20 payload-free result reminders and an active advisory-lock
+count. The durable inbox and `session_lock_list` remain authoritative.
+
+`context_admitted` proves that the transform claimed the envelope, not that the model read, obeyed,
+or answered it. If the target is idle or its status is unknown, the call persists nothing. If the
+backend crashes while an envelope is awaiting injection, startup marks it failed and erases its
+payload instead of risking replay.
+
 ### Preferred durable result channel
 
-Use `session_request_send` for an existing peer, including an idle visible root, and
-`session_request_start` for a new managed root. Both return request metadata immediately; recover the
-result later with `session_request_list` and `session_request_get`, then call `session_request_ack`.
+Use `session_request_send` for an existing peer already observed as `busy` or `retry`, and
+`session_request_start` for a new managed root. Both return request metadata after admission; recover
+the result later with `session_request_list` and `session_request_get`, then call
+`session_request_ack`.
 Use an `ask` request for a substantive result and a `wait` request only for a milestone. Do not ask
 the peer to also send an ordinary proof message or use both ask and wait for the same result.
 
@@ -355,9 +368,11 @@ After consuming the result, acknowledge it so its retained content is logically 
 }
 ```
 
-The canonical envelope names `session_respond` or `session_signal` and the request ID. Its work and
-request text remain untrusted peer content, not authenticated credentials or authorization. The
-target can verify the pending payload with `session_request_get` before responding.
+For an existing root, the canonical envelope is injected into the next provider request without
+adding a native user turn or appearing in the stored transcript or export. It names
+`session_respond` or `session_signal` and the request ID. Its work and request text remain explicitly
+untrusted peer content, not authenticated credentials or authorization. The target can verify the
+pending payload with `session_request_get` before responding.
 
 `session_request_start` completes request authorization and the mandatory start approval over the
 complete public argument digest before one fenced SQLite transaction persists the start reservation,
@@ -398,9 +413,11 @@ symlinks, unsafe filesystems, mount transitions, and reserved staging names fail
 ### Send work without waiting
 
 1. Call `session_list` and choose a visible root.
-2. Call `session_send` with the task or context.
-3. Inspect `session_delivery_get` if public-message admission was uncertain.
-4. Call `session_list` until the target is `busy` or `retry` before using ask or wait.
+2. If it is `busy` or `retry`, call `session_send` without `delivery`; the default `context` mode is
+   provider-visible and transcript-invisible.
+3. If it is idle and you intend to wake it, call `session_send` with `delivery: "user"`.
+4. Inspect `session_delivery_get` for payload-free delivery state. Before ask, wait, or
+   `session_request_send`, confirm the target is `busy` or `retry`.
 
 ### Coordinate shared workspace mutation
 
@@ -448,6 +465,11 @@ reports `admission_unknown` or `native_outcome_unknown`, preserves reconcilable 
 automatically retry an ambiguous effect. Do not interpret a timeout, abort, transport failure, or
 `retryable` field as proof that an effect did not happen. Inspect durable metadata and authoritative
 OpenCode state before deciding what to do next.
+
+Context admission is store-backed but is not replayed after an uncertain crash boundary. Startup
+fails any context row that was awaiting injection when the previous process stopped, because it
+cannot prove whether that provider request already received the context. A failed row remains
+payload-free evidence; the plugin never injects it again automatically.
 
 Missed participant-deletion hooks are reconciled before request recovery at startup and by a
 lifecycle-owned bounded periodic pass. Reconciliation uses direct per-session OpenCode reads: only a
@@ -507,8 +529,10 @@ startup log.
 
 ### A target looks idle
 
-Only `session_send` can wake an idle target. `session_ask` and `session_wait` require a fresh active
-observation and return `target_idle` or `target_status_unknown` instead of silently queueing.
+Only explicit `session_send` with `delivery: "user"` can wake an existing idle target. Default
+context send, `session_ask`, `session_wait`, and `session_request_send` require a fresh `busy` or
+`retry` observation. Idle or unknown status persists no new context delivery or request and returns
+`target_idle` or `target_status_unknown`.
 
 ### An outcome is unknown
 
@@ -538,6 +562,16 @@ Release `0.5.0` makes blocked asks and waits reconcile promptly when either part
 including authoritatively revalidated idle events and missed-event recovery. It does not change the
 SQLite schema. Install tag `v0.5.0` into a new private versioned directory, update the plugin entry,
 restart OpenCode, and verify all 20 tools before removing the previous installation.
+
+### Upgrade to Unreleased schema v16
+
+The Unreleased change adds store-backed context admissions and a request `delivery_transport`
+discriminator. Existing-root sends default to transcript-invisible `context`; use explicit
+`delivery: "user"` when you need a native user turn or idle wake. Existing-root ask, wait, and
+request-send also use context, while `session_request_start` retains its native initial user turn.
+Stop every backend and back up the complete state directory before upgrading. Migration v16
+terminalizes uncertain unadmitted legacy `steer`/`queue` requests as `delivery_failed` rather than
+replaying them through the new transport. Older plugin code must not open the migrated store.
 
 ### Upgrade to 0.4.1
 

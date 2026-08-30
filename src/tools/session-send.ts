@@ -1,6 +1,7 @@
 import type { SessionSendPorts } from "../application/send-session-message";
 import { sendSessionMessage } from "../application/send-session-message";
 import type { PolicyDecision } from "../domain/authorization-policy";
+import type { ContextAdmissionMetadata } from "../domain/context-admissions";
 import type { DeliveryMetadata } from "../domain/deliveries";
 import { domainFailure } from "../domain/results";
 import { validateSessionId } from "../domain/sessions";
@@ -13,7 +14,7 @@ import {
   sessionSendFailureCodes,
 } from "./contracts";
 import { invocationMessageAuthorization } from "./invocation-authorization";
-import { publicDelivery } from "./public-values";
+import { publicMessageDelivery } from "./public-values";
 
 export function createSessionSendTool(
   ports: Omit<SessionSendPorts, "authorization">,
@@ -23,7 +24,7 @@ export function createSessionSendTool(
 ): InternalToolContract<SessionSendToolArguments> {
   return {
     description:
-      "Submit an asynchronous message to a visible root session. Public transcript admission does not prove activation; inspect session_list until busy or retry before asking or waiting.",
+      "Submit an asynchronous message to a visible root. Default context delivery requires busy or retry and is transcript-invisible. Explicit user delivery may wake idle and is transcript-visible, but admission does not prove activation; confirm with session_list before asking or waiting.",
     args: sessionSendArgumentsSchema,
     async execute(arguments_, context) {
       const source = validateSessionId(context.sessionID);
@@ -43,11 +44,10 @@ export function createSessionSendTool(
             arguments_,
           )
         : domainFailure("invalid_arguments", source.message, false);
-      return serializeDomainResult<DeliveryMetadata, Record<string, unknown>>(
-        result,
-        publicDelivery,
-        sessionSendFailureCodes,
-      );
+      return serializeDomainResult<
+        DeliveryMetadata | ContextAdmissionMetadata,
+        Record<string, unknown>
+      >(result, publicMessageDelivery, sessionSendFailureCodes);
     },
   };
 }

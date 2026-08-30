@@ -1,8 +1,17 @@
-import { participantStopCandidatesHardCeiling } from "../domain/safety-ceilings";
+import { isCoherentContextAdmission } from "../domain/context-admissions";
+import {
+  deliveryRecordsPerWorkspaceHardCeiling,
+  participantStopCandidatesHardCeiling,
+} from "../domain/safety-ceilings";
 import { type SessionId, validateSessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
 import { runUntilAborted } from "./abortable-operation";
 import type { CommunicatorStartupRecoveryLifecycle } from "./communicator-startup-lifecycle";
+import type { ParticipantContextPersistencePort } from "./context-admission-ports";
+import {
+  type ContextAdmissionNotificationPort,
+  notifyContextAdmissionSafely,
+} from "./context-admission-runtime";
 import type { ParticipantOperationPort } from "./participant-operation-gate";
 import {
   ParticipantOperationAbortedFault,
@@ -109,6 +118,8 @@ export interface ParticipantStopLifecycleOptions {
   readonly activity: NativeParticipantStopActivityPort;
   readonly operations: ParticipantOperationPort;
   readonly notifications: CommittedRequestNotificationPort;
+  readonly contexts?: ParticipantContextPersistencePort;
+  readonly contextNotifications?: ContextAdmissionNotificationPort;
   readonly lifecycle: CommunicatorStartupRecoveryLifecycle;
   readonly workspaceKey: WorkspaceKey;
   readonly timers?: ParticipantStopTimerPort;
@@ -191,31 +202,9 @@ export class ParticipantStopLifecycle {
 
   private async applyBatchIfIdle(sessionIds: readonly SessionId[]): Promise<number> {
     try {
-      return await this.options.operations.run(sessionIds, this.effects.signal, async () => {
-        const settlement = await runUntilAborted(this.effects.signal, () =>
-          this.options.activity.observeParticipantActivities(
-            this.options.workspaceKey,
-            sessionIds,
-            this.effects.signal,
-          ),
-        );
-        if (settlement.kind !== "settled") return 0;
-        const idle = snapshotIdleSessionIds(settlement.value, sessionIds);
-        let terminalized = 0;
-        for (const sessionId of idle) {
-          if (this.effects.signal.aborted || this.options.lifecycle.status !== "ready") return 0;
-          await terminalizeStoppedParticipant({
-            scope: "blocking",
-            requests: this.options.requests,
-            notifications: this.options.notifications,
-            fencingToken: this.options.lifecycle.fencingToken,
-            workspaceKey: this.options.workspaceKey,
-            stoppedSessionId: sessionId,
-          });
-          terminalized += 1;
-        }
-        return terminalized;
-      });
+      return await this.options.operations.run(sessionIds, this.effects.signal, () =>
+        this.applyBatchOwned(sessionIds),
+      );
     } catch (cause: unknown) {
       if (
         cause instanceof ParticipantOperationAbortedFault ||
@@ -226,6 +215,81 @@ export class ParticipantStopLifecycle {
         cause instanceof ParticipantStopTerminalizationFault ? cause.code : "storage_failure";
       this.fail(code);
       throw new Error("Participant stop persistence failed closed.", { cause });
+    }
+  }
+
+  private async applyBatchOwned(sessionIds: readonly SessionId[]): Promise<number> {
+    const settlement = await runUntilAborted(this.effects.signal, () =>
+      this.options.activity.observeParticipantActivities(
+        this.options.workspaceKey,
+        sessionIds,
+        this.effects.signal,
+      ),
+    );
+    if (settlement.kind !== "settled") return 0;
+    const idle = snapshotIdleSessionIds(settlement.value, sessionIds);
+    for (const sessionId of idle) {
+      if (this.effects.signal.aborted || this.options.lifecycle.status !== "ready") return 0;
+      await this.settleIdleSession(sessionId);
+    }
+    return idle.length;
+  }
+
+  private async settleIdleSession(sessionId: SessionId): Promise<void> {
+    const stopped = await terminalizeStoppedParticipant({
+      scope: "blocking",
+      requests: this.options.requests,
+      notifications: this.options.notifications,
+      fencingToken: this.options.lifecycle.fencingToken,
+      workspaceKey: this.options.workspaceKey,
+      stoppedSessionId: sessionId,
+    });
+    for (const request of stopped) {
+      if ((request.deliveryMode ?? "steer") === "context" && this.options.contextNotifications) {
+        notifyContextAdmissionSafely(this.options.contextNotifications, {
+          id: request.id,
+          kind: "request",
+          state: "cancelled",
+        });
+      }
+    }
+    await this.settleIdleContext(sessionId);
+  }
+
+  private async settleIdleContext(sessionId: SessionId): Promise<void> {
+    if (!this.options.contexts || !this.options.contextNotifications) return;
+    const seen = new Set<string>();
+    for (let settled = 0; settled < deliveryRecordsPerWorkspaceHardCeiling; settled += 100) {
+      const admissions = await this.options.contexts.settlePendingContextForParticipant({
+        fencingToken: this.options.lifecycle.fencingToken,
+        workspaceKey: this.options.workspaceKey,
+        participantSessionId: sessionId,
+        terminalParticipantSessionIds: [sessionId],
+        limit: 100,
+      });
+      const admissionValues = snapshotDenseArray(admissions, 100);
+      if (!admissionValues)
+        throw new ParticipantStopTerminalizationFault("port_contract_violation");
+      for (const admission of admissionValues) {
+        if (!isCoherentContextAdmission(admission))
+          throw new ParticipantStopTerminalizationFault("port_contract_violation");
+        const expected = admission.targetSessionId === sessionId ? "failed" : "cancelled";
+        if (
+          admission.workspaceKey !== this.options.workspaceKey ||
+          (admission.targetSessionId !== sessionId && admission.sourceSessionId !== sessionId) ||
+          admission.state !== expected ||
+          seen.has(admission.id)
+        ) {
+          throw new ParticipantStopTerminalizationFault("port_contract_violation");
+        }
+        seen.add(admission.id);
+        notifyContextAdmissionSafely(this.options.contextNotifications, {
+          id: admission.id,
+          kind: admission.kind,
+          state: admission.state,
+        });
+      }
+      if (admissionValues.length < 100) return;
     }
   }
 

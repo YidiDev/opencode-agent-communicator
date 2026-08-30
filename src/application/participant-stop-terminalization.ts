@@ -56,7 +56,9 @@ export async function terminalizeStoppedParticipant(
   }
   if (
     input.scope === "blocking" &&
-    inspected.value.some((request) => (request.deliveryMode ?? "steer") !== "steer")
+    inspected.value.some(
+      (request) => !["steer", "context"].includes(request.deliveryMode ?? "steer"),
+    )
   ) {
     throw new ParticipantStopTerminalizationFault("port_contract_violation");
   }

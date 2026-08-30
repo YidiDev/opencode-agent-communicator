@@ -5,6 +5,8 @@ import type { RequestMetadata } from "./request-types";
 import { safeInteger } from "./request-validation";
 
 const deliveryFields = [
+  "awaitingContextAtMs",
+  "contextAdmittedAtMs",
   "submittedAtMs",
   "deliveryUnknownAtMs",
   "admittedAtMs",
@@ -29,8 +31,8 @@ function transitionTime(value: RequestMetadata, timestamp: unknown): timestamp i
 
 function onlyFields(
   value: RequestMetadata,
-  universe: readonly (keyof RequestMetadata)[],
-  allowed: readonly (keyof RequestMetadata)[],
+  universe: readonly string[],
+  allowed: readonly string[],
 ): boolean {
   return universe.every((field) => allowed.includes(field) || !Object.hasOwn(value, field));
 }
@@ -74,7 +76,39 @@ function validEvidence(value: RequestMetadata, state: "admitted" | "promoted"): 
   );
 }
 
-export function coherentRequestDelivery(value: RequestMetadata): boolean {
+function coherentContextRequestDelivery(value: RequestMetadata): boolean {
+  if (value.deliveryState === "prepared") return onlyFields(value, deliveryFields, []);
+  if (value.deliveryState === "awaiting_context") {
+    return (
+      onlyFields(value, deliveryFields, ["awaitingContextAtMs"]) &&
+      transitionTime(value, value.awaitingContextAtMs)
+    );
+  }
+  if (value.deliveryState === "context_admitted") {
+    return (
+      onlyFields(value, deliveryFields, ["awaitingContextAtMs", "contextAdmittedAtMs"]) &&
+      transitionTime(value, value.awaitingContextAtMs) &&
+      transitionTime(value, value.contextAdmittedAtMs) &&
+      value.contextAdmittedAtMs >= value.awaitingContextAtMs
+    );
+  }
+  if (value.deliveryState !== "delivery_failed") return false;
+  const failed = value as RequestMetadata & {
+    readonly awaitingContextAtMs: number;
+    readonly deliveryFailedAtMs: number;
+  };
+  return (
+    onlyFields(value, deliveryFields, ["awaitingContextAtMs", "deliveryFailedAtMs"]) &&
+    transitionTime(value, failed.awaitingContextAtMs) &&
+    transitionTime(value, failed.deliveryFailedAtMs) &&
+    failed.deliveryFailedAtMs >= failed.awaitingContextAtMs
+  );
+}
+
+function coherentNativeRequestDelivery(value: RequestMetadata): boolean {
+  if (value.deliveryState === "awaiting_context" || value.deliveryState === "context_admitted") {
+    return false;
+  }
   if (value.deliveryState === "prepared") return onlyFields(value, deliveryFields, []);
   if (!transitionTime(value, value.submittedAtMs)) return false;
   if (value.deliveryState === "submitting") {
@@ -116,6 +150,12 @@ export function coherentRequestDelivery(value: RequestMetadata): boolean {
     value.admittedAtMs >= value.submittedAtMs &&
     validEvidence(value, value.deliveryState)
   );
+}
+
+export function coherentRequestDelivery(value: RequestMetadata): boolean {
+  return (value.deliveryMode ?? "steer") === "context"
+    ? coherentContextRequestDelivery(value)
+    : coherentNativeRequestDelivery(value);
 }
 
 export function coherentRequestResolution(value: RequestMetadata): boolean {

@@ -20,6 +20,8 @@ const requestMetadataKeys = [
   "updatedAtMs",
   "deadlineAtMs",
   "payloadSha256",
+  "awaitingContextAtMs",
+  "contextAdmittedAtMs",
   "submittedAtMs",
   "deliveryUnknownAtMs",
   "admittedAtMs",

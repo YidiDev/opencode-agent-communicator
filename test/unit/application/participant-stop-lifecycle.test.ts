@@ -95,11 +95,16 @@ function fixture(
     },
   };
   const operations = new ParticipantOperationGate();
+  const contexts = {
+    settlePendingContextForParticipant: async () => [],
+  };
   const handler = new ParticipantStopLifecycle({
     requests: requests as never,
     activity: native,
     operations,
     notifications: { notifyTerminal: () => undefined },
+    contexts,
+    contextNotifications: { notifyContextSettled: () => undefined },
     lifecycle: lifecycle as never,
     workspaceKey,
     timers: timerOverrides ?? {
@@ -120,6 +125,7 @@ function fixture(
     requests,
     native,
     operations,
+    contexts,
     handler,
     setActivity(value: ParticipantStopActivity) {
       activity = value;
@@ -346,6 +352,11 @@ test("batches anti-entropy activity snapshots under the participant gate", async
 });
 
 test("fails closed on malformed activity, duplicate candidates, and ownership loss", async () => {
+  const context = fixture();
+  context.contexts.settlePendingContextForParticipant = async () => [{}] as never;
+  await expect(context.handler.handle(idleEvent())).rejects.toThrow("failed closed");
+  expect(context.calls).toContain("stop:shutdown");
+
   const activity = fixture();
   activity.setActivity("malformed" as never);
   await expect(activity.handler.handle(idleEvent())).rejects.toThrow("failed closed");

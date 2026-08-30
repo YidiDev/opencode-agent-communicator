@@ -61,11 +61,21 @@ export class RequestStopRepository {
               `SELECT session_id AS sessionId FROM (
                  SELECT target_session_id AS session_id FROM requests
                   WHERE workspace_key = ?1 AND resolution_state = 'pending'
-                    AND delivery_mode = 'steer' AND deadline_at_ms > ?2
+                     AND (delivery_transport = 'context' OR
+                       (delivery_transport = 'native' AND delivery_mode = 'steer'))
+                     AND deadline_at_ms > ?2
                  UNION
                  SELECT source_session_id AS session_id FROM requests
                   WHERE workspace_key = ?1 AND resolution_state = 'pending'
-                    AND delivery_mode = 'steer' AND deadline_at_ms > ?2
+                     AND (delivery_transport = 'context' OR
+                       (delivery_transport = 'native' AND delivery_mode = 'steer'))
+                      AND deadline_at_ms > ?2
+                 UNION
+                 SELECT target_session_id AS session_id FROM context_admissions
+                  WHERE workspace_key = ?1 AND state = 'awaiting_context'
+                 UNION
+                 SELECT source_session_id AS session_id FROM context_admissions
+                  WHERE workspace_key = ?1 AND state = 'awaiting_context'
                ) ORDER BY session_id LIMIT ${participantStopCandidatesHardCeiling + 1}`,
             )
             .all(input.workspaceKey, nowMs);
@@ -119,7 +129,9 @@ export class RequestStopRepository {
     blockingOnly: boolean,
   ): StopPendingRequestsResult {
     this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
-    const scope = blockingOnly ? " AND delivery_mode = 'steer'" : "";
+    const scope = blockingOnly
+      ? " AND (delivery_transport = 'context' OR (delivery_transport = 'native' AND delivery_mode = 'steer'))"
+      : "";
     const nowMs = requestStoreNowMs(this.context);
     const rows = this.context.database
       .query<RequestRow, [string, string, number]>(

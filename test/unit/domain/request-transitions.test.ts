@@ -30,6 +30,9 @@ describe("request state machines", () => {
   test("implements the exact independent delivery graph", () => {
     const edges = new Set([
       "prepared->submitting",
+      "prepared->awaiting_context",
+      "awaiting_context->context_admitted",
+      "awaiting_context->delivery_failed",
       "submitting->delivery_unknown",
       "submitting->admitted",
       "submitting->promoted",

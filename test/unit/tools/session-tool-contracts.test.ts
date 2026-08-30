@@ -98,6 +98,8 @@ describe("internal session tool contracts", () => {
         "invalid_arguments",
         "caller_not_visible",
         "target_not_visible",
+        "target_idle",
+        "target_status_unknown",
         "permission_denied",
         "approval_rejected",
         "deadline_expired",
@@ -171,9 +173,9 @@ describe("internal session tool contracts", () => {
     expect(value).not.toHaveProperty("workspace_key");
     expect(value).not.toHaveProperty("contentSha256");
     expect(JSON.stringify(value)).not.toContain("payload");
-    expect(publicParticipantDelivery({ role: "source", delivery })).toEqual({
+    expect(publicParticipantDelivery({ role: "source", transport: "user", delivery })).toEqual({
       role: "source",
-      delivery: value,
+      delivery: { ...value, delivery: "user" },
     });
   });
 });

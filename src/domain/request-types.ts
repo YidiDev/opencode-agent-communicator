@@ -26,6 +26,8 @@ export type UnsuccessfulRequestResolutionState = Exclude<
 
 export const requestDeliveryStates = [
   "prepared",
+  "awaiting_context",
+  "context_admitted",
   "submitting",
   "delivery_unknown",
   "admitted",
@@ -38,7 +40,7 @@ export const requestResultStates = ["none", "available", "expired", "acknowledge
 export type RequestResultState = (typeof requestResultStates)[number];
 export type RequestParticipantRole = "source" | "target";
 export type RequestListRole = "inbox" | "outbox" | "all";
-export const requestDeliveryModes = ["steer", "queue", "initial"] as const;
+export const requestDeliveryModes = ["steer", "queue", "initial", "context"] as const;
 export type RequestDeliveryMode = (typeof requestDeliveryModes)[number];
 
 export interface AskQuestion {
@@ -90,25 +92,51 @@ interface NoAdmissionFields {
   readonly promotedAtMs?: never;
   readonly admissionEvidence?: never;
 }
+interface NoContextAdmissionFields {
+  readonly awaitingContextAtMs?: never;
+  readonly contextAdmittedAtMs?: never;
+}
 export interface RequestPreparedDeliveryMetadata extends NoAdmissionFields {
   readonly deliveryState: "prepared";
   readonly submittedAtMs?: never;
   readonly deliveryUnknownAtMs?: never;
   readonly deliveryFailedAtMs?: never;
+  readonly awaitingContextAtMs?: never;
+  readonly contextAdmittedAtMs?: never;
+}
+export interface RequestAwaitingContextDeliveryMetadata extends NoAdmissionFields {
+  readonly deliveryState: "awaiting_context";
+  readonly awaitingContextAtMs: number;
+  readonly contextAdmittedAtMs?: never;
+  readonly submittedAtMs?: never;
+  readonly deliveryUnknownAtMs?: never;
+  readonly deliveryFailedAtMs?: never;
+}
+export interface RequestContextAdmittedDeliveryMetadata extends NoAdmissionFields {
+  readonly deliveryState: "context_admitted";
+  readonly awaitingContextAtMs: number;
+  readonly contextAdmittedAtMs: number;
+  readonly submittedAtMs?: never;
+  readonly deliveryUnknownAtMs?: never;
+  readonly deliveryFailedAtMs?: never;
 }
 export interface RequestSubmittingDeliveryMetadata extends NoAdmissionFields {
+  readonly awaitingContextAtMs?: never;
+  readonly contextAdmittedAtMs?: never;
   readonly deliveryState: "submitting";
   readonly submittedAtMs: number;
   readonly deliveryUnknownAtMs?: never;
   readonly deliveryFailedAtMs?: never;
 }
 export interface RequestUnknownDeliveryMetadata extends NoAdmissionFields {
+  readonly awaitingContextAtMs?: never;
+  readonly contextAdmittedAtMs?: never;
   readonly deliveryState: "delivery_unknown";
   readonly submittedAtMs: number;
   readonly deliveryUnknownAtMs: number;
   readonly deliveryFailedAtMs?: never;
 }
-export interface RequestAdmittedDeliveryMetadata {
+export interface RequestAdmittedDeliveryMetadata extends NoContextAdmissionFields {
   readonly deliveryState: "admitted";
   readonly submittedAtMs: number;
   readonly deliveryUnknownAtMs?: never;
@@ -117,7 +145,7 @@ export interface RequestAdmittedDeliveryMetadata {
   readonly deliveryFailedAtMs?: never;
   readonly admissionEvidence: Extract<RequestAdmissionEvidence, { readonly state: "admitted" }>;
 }
-export interface RequestPromotedDeliveryMetadata {
+export interface RequestPromotedDeliveryMetadata extends NoContextAdmissionFields {
   readonly deliveryState: "promoted";
   readonly submittedAtMs: number;
   readonly deliveryUnknownAtMs?: never;
@@ -139,11 +167,22 @@ export interface RequestFailedFromUnknownDeliveryMetadata
   extends RequestFailedDeliveryMetadataBase {
   readonly deliveryUnknownAtMs: number;
 }
+export interface RequestContextFailedDeliveryMetadata extends NoAdmissionFields {
+  readonly deliveryState: "delivery_failed";
+  readonly awaitingContextAtMs: number;
+  readonly contextAdmittedAtMs?: never;
+  readonly submittedAtMs?: never;
+  readonly deliveryUnknownAtMs?: never;
+  readonly deliveryFailedAtMs: number;
+}
 export type RequestFailedDeliveryMetadata =
   | RequestFailedFromSubmittingDeliveryMetadata
-  | RequestFailedFromUnknownDeliveryMetadata;
+  | RequestFailedFromUnknownDeliveryMetadata
+  | RequestContextFailedDeliveryMetadata;
 export type RequestDeliveryMetadata =
   | RequestPreparedDeliveryMetadata
+  | RequestAwaitingContextDeliveryMetadata
+  | RequestContextAdmittedDeliveryMetadata
   | RequestSubmittingDeliveryMetadata
   | RequestUnknownDeliveryMetadata
   | RequestAdmittedDeliveryMetadata

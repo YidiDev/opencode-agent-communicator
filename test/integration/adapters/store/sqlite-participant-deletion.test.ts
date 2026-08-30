@@ -1,7 +1,12 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { ParticipantDeletionLifecycle } from "../../../../src/application/participant-deletion-lifecycle";
+import { ParticipantOperationGate } from "../../../../src/application/participant-operation-gate";
 import { RequestRuntime } from "../../../../src/application/request-runtime";
+import { validateDeliveryId } from "../../../../src/domain/generated-ids";
+import type { Sha256Digest } from "../../../../src/domain/message-payload";
+import type { FencingToken } from "../../../../src/domain/ownership";
 import {
   cleanupRequestStoreRoots,
   openRequestStore,
@@ -12,6 +17,23 @@ import {
 } from "../../../support/request-store";
 
 afterEach(cleanupRequestStoreRoots);
+
+function contextMessage(token: FencingToken, index: number, source: string, target: string) {
+  const id = validateDeliveryId(`dlv_${index.toString(16).padStart(32, "0")}`);
+  if (!id.ok) throw new Error(id.message);
+  const envelopeJson = JSON.stringify({ content: `deletion-${index}` });
+  return {
+    fencingToken: token,
+    id: id.value,
+    workspaceKey: requestTestWorkspace(),
+    sourceSessionId: requestSession(source),
+    targetSessionId: requestSession(target),
+    envelopeJson,
+    contentByteLength: Buffer.byteLength(envelopeJson),
+    contentSha256: createHash("sha256").update(envelopeJson).digest("hex") as Sha256Digest,
+    createdAtMs: 20_000 + index,
+  } as const;
+}
 
 function privateState(databasePath: string, requestId: string) {
   const database = new Database(databasePath, { readonly: true, strict: true });
@@ -61,6 +83,70 @@ function installCorruptionTrigger(
 }
 
 describe("fenced participant deletion persistence", () => {
+  test("missed deletion events reconcile message-only context participants", async () => {
+    const store = openRequestStore();
+    const token = await store.acquire();
+    const target = contextMessage(token, 211, "ses_otherTarget", "ses_deletedTarget");
+    const source = contextMessage(token, 212, "ses_deletedSource", "ses_otherSource");
+    expect((await store.createContextMessage(target)).ok).toBe(true);
+    expect((await store.createContextMessage(source)).ok).toBe(true);
+    let wake: (() => void) | undefined;
+    const deleted = new Set([target.targetSessionId, source.sourceSessionId]);
+    const handler = new ParticipantDeletionLifecycle({
+      requests: store,
+      presence: {
+        readParticipantPresence: async (sessionId) =>
+          deleted.has(sessionId) ? "absent" : "present",
+      },
+      notifications: { notifyTerminal: () => undefined },
+      contexts: store,
+      contextNotifications: { notifyContextSettled: () => undefined },
+      operations: new ParticipantOperationGate(),
+      lifecycle: { fencingToken: token, status: "ready", stop: () => undefined } as never,
+      workspaceKey: requestTestWorkspace(),
+      directory: "/workspace",
+      projectId: "project",
+      timers: {
+        set: (_delay, callback) => {
+          wake = callback;
+          return 1;
+        },
+        clear: () => undefined,
+      },
+    });
+    wake?.();
+    for (let index = 0; index < 100; index += 1) {
+      const targetState = await store.getContextAdmission({
+        fencingToken: token,
+        workspaceKey: requestTestWorkspace(),
+        id: target.id,
+      });
+      const sourceState = await store.getContextAdmission({
+        fencingToken: token,
+        workspaceKey: requestTestWorkspace(),
+        id: source.id,
+      });
+      if (targetState?.state === "failed" && sourceState?.state === "cancelled") break;
+      await Promise.resolve();
+    }
+    expect(
+      await store.getContextAdmission({
+        fencingToken: token,
+        workspaceKey: requestTestWorkspace(),
+        id: target.id,
+      }),
+    ).toMatchObject({ state: "failed" });
+    expect(
+      await store.getContextAdmission({
+        fencingToken: token,
+        workspaceKey: requestTestWorkspace(),
+        id: source.id,
+      }),
+    ).toMatchObject({ state: "cancelled" });
+    await handler.dispose();
+    store.close();
+  });
+
   test("queries the bounded candidate union with pending targets before sources and available sources", async () => {
     const store = openRequestStore();
     const token = await store.acquire();
@@ -194,6 +280,7 @@ describe("fenced participant deletion persistence", () => {
       requests: store,
       presence: { readParticipantPresence: async () => "absent" },
       notifications: runtime,
+      operations: new ParticipantOperationGate(),
       lifecycle: { fencingToken: token, status: "ready", stop: () => undefined } as never,
       workspaceKey: requestTestWorkspace(),
       directory: "/workspace",
