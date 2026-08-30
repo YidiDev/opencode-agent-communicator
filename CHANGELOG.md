@@ -6,6 +6,14 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-29
+
+### Changed
+
+- Clarified the nested `session_respond` answer shape in the participant skill, tool description,
+  and public argument schema so single-question answers remain one inner array per question.
+- Strengthened packed live evidence for active-session advisory-lock notifications.
+
 ## [0.4.0] - 2026-08-29
 
 ### Added
@@ -186,7 +194,8 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.4...v0.2.5

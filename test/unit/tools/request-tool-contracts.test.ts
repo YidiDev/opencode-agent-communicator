@@ -61,6 +61,7 @@ describe("request tool argument contracts", () => {
       sessionRespondArgumentsSchema.safeParse({ request_id: requestId, answers: [["one"]] })
         .success,
     ).toBe(true);
+    expect(sessionRespondArgumentsSchema.shape.answers.description).toContain('[["pass"]]');
     expect(
       sessionWaitArgumentsSchema.safeParse({
         session_id: "ses_target",
@@ -108,6 +109,9 @@ describe("request tool argument contracts", () => {
     );
     expect(
       sessionRespondArgumentsSchema.safeParse({ request_id: "bad", answers: [[]] }).success,
+    ).toBe(false);
+    expect(
+      sessionRespondArgumentsSchema.safeParse({ request_id: requestId, answers: ["pass"] }).success,
     ).toBe(false);
     expect(
       sessionRespondArgumentsSchema.safeParse({
