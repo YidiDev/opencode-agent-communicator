@@ -90,7 +90,7 @@ describe("request migration and query plans", () => {
       "sha256:ea22e80d24faff83fc4a280b5b0789ea0e56921056704e63096e1006218d3c89",
       "sha256:605db48886f6a6f0aca23ad659a804fe8c6f5773c7ea822d81ae8a17c9f0fb6e",
       "sha256:f4ab984ddfa044ca0b203bbb0d9b35cbc63b8a2cc004d2402bdf723c33047c09",
-      "sha256:719cc560922e9603ee51989db9d2b1e1c4aca30a8ecbd32ef8097cf2a9077988",
+      "sha256:6eea2005434a094e5db55f04c1fa41a0976a66c30c4c1f23cf54e277ae6d83e8",
     ]);
     expect(
       database

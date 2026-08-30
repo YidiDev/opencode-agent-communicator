@@ -111,6 +111,9 @@ export async function sendContextSessionMessage(
   const envelopeDigest = await runUntilAborted(context.abort, () =>
     digestMessageContent(ports.digest, envelopeBytes),
   );
+  if (envelopeDigest.kind === "aborted") {
+    return domainFailure("deadline_expired", "Message invocation deadline expired.", false);
+  }
   if (envelopeDigest.kind !== "settled") return unavailable();
   let registration: ContextAdmissionRegistration;
   try {

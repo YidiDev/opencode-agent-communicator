@@ -22,6 +22,10 @@ All notable changes to this project are documented in this file. The format is b
   context delivery or request.
 - Advisory-lock mutations no longer fan out native steer turns. Active provider requests receive a
   bounded lock-presence reminder and continue to use `session_lock_list` as authority.
+- Context messages share native delivery record, retained-byte, and rate quotas. Standalone terminal
+  message admissions expire independently, while request admissions remain through parent retention.
+- Context injection now revalidates exact root, archive, project, and directory metadata immediately
+  before provider mutation, and request projections expose context transition timestamps.
 
 ### Security
 

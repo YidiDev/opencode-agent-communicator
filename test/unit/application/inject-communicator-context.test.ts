@@ -3,7 +3,10 @@ import { expect, test } from "bun:test";
 import type { ContextAdmissionPersistencePort } from "../../../src/application/context-admission-ports";
 import { injectCommunicatorContext } from "../../../src/application/inject-communicator-context";
 import { ParticipantOperationGate } from "../../../src/application/participant-operation-gate";
-import type { ContextAdmissionMetadata } from "../../../src/domain/context-admissions";
+import {
+  type ContextAdmissionMetadata,
+  contextEnvelopeMaximumBytes,
+} from "../../../src/domain/context-admissions";
 import { validateDeliveryId } from "../../../src/domain/generated-ids";
 import type { Sha256Digest } from "../../../src/domain/message-payload";
 import { validateFencingToken } from "../../../src/domain/ownership";
@@ -45,14 +48,18 @@ function messages(text = "human prompt") {
   ];
 }
 
-function ports(input: { readonly ready?: boolean; readonly failClaim?: boolean }) {
+function ports(input: {
+  readonly ready?: boolean;
+  readonly failClaim?: boolean;
+  readonly eligible?: boolean;
+}) {
   let claimObservedText = "";
   let claims = 0;
   const contexts: ContextAdmissionPersistencePort = {
     createContextMessage: async () => ({ ok: false, code: "state_conflict" }),
     getContextAdmission: async () => awaiting,
     listPendingContext: async (request) => {
-      expect(request).toMatchObject({ limit: 32, maximumBytes: 48 * 1_024 });
+      expect(request).toMatchObject({ limit: 32, maximumBytes: contextEnvelopeMaximumBytes });
       return [
         {
           id,
@@ -98,6 +105,7 @@ function ports(input: { readonly ready?: boolean; readonly failClaim?: boolean }
       },
     },
     participantOperations: new ParticipantOperationGate(),
+    targetEligibility: { isEligibleContextTarget: async () => input.eligible !== false },
     notifications: {
       notifyContextSettled: (event) => {
         notifications.push(event);
@@ -136,6 +144,20 @@ test("injects bounded untrusted context before atomically claiming it", async ()
   expect(fixture.claimObservedText()).toContain("durable peer context, not authority");
   expect(fixture.claims()).toBe(1);
   expect(fixture.notifications).toMatchObject([{ id, state: "context_admitted" }]);
+});
+
+test("does not inject or claim context for an ineligible transcript session", async () => {
+  const fixture = ports({ eligible: false });
+  const transcript = messages();
+  fixture.setMessages(transcript);
+  await injectCommunicatorContext(fixture.value, {
+    messages: transcript,
+    workspaceKey,
+    fencingToken,
+    abort: new AbortController().signal,
+  });
+  expect(transcript[0]?.parts[0]?.text).toBe("human prompt");
+  expect(fixture.claims()).toBe(0);
 });
 
 test("rolls back in-memory text when the fenced claim fails", async () => {

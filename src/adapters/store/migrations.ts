@@ -1251,7 +1251,7 @@ ALTER TABLE start_operations DROP COLUMN terminal_reason;
   },
   {
     version: 16,
-    checksum: "sha256:719cc560922e9603ee51989db9d2b1e1c4aca30a8ecbd32ef8097cf2a9077988",
+    checksum: "sha256:6eea2005434a094e5db55f04c1fa41a0976a66c30c4c1f23cf54e277ae6d83e8",
     sql: `
 ALTER TABLE requests ADD COLUMN delivery_transport TEXT NOT NULL DEFAULT 'native'
   CHECK (delivery_transport IN ('native','context'));
@@ -1271,16 +1271,16 @@ BEGIN
   SELECT RAISE(ABORT, 'request delivery transport is incoherent');
 END;
 
--- Existing-root native work that was never definitely admitted cannot be replayed as context.
+-- Existing-root native work that was never submitted cannot be replayed as context.
 DELETE FROM request_payloads WHERE request_id IN (
   SELECT id FROM requests
   WHERE resolution_state = 'pending' AND delivery_mode IN ('steer','queue')
-    AND delivery_state IN ('prepared','submitting','delivery_unknown')
+    AND delivery_state = 'prepared'
 );
 DELETE FROM request_wait_edges WHERE request_id IN (
   SELECT id FROM requests
   WHERE resolution_state = 'pending' AND delivery_mode IN ('steer','queue')
-    AND delivery_state IN ('prepared','submitting','delivery_unknown')
+    AND delivery_state = 'prepared'
 );
 UPDATE requests
 SET delivery_state = 'delivery_failed', resolution_state = 'delivery_failed',
@@ -1289,7 +1289,7 @@ SET delivery_state = 'delivery_failed', resolution_state = 'delivery_failed',
   claimed_fencing_token = COALESCE(claimed_fencing_token, 1),
   retained_content_byte_length = NULL, payload_sha256 = NULL
 WHERE resolution_state = 'pending' AND delivery_mode IN ('steer','queue')
-  AND delivery_state IN ('prepared','submitting','delivery_unknown');
+  AND delivery_state = 'prepared';
 
 CREATE TABLE context_admissions (
   id TEXT PRIMARY KEY CHECK (
@@ -1362,13 +1362,16 @@ CREATE INDEX context_admissions_source_v16
   ON context_admissions(workspace_key, source_session_id, created_at_ms, id);
 CREATE INDEX context_admissions_terminal_gc_v16
   ON context_admissions(workspace_key, updated_at_ms, id)
-  WHERE state IN ('context_admitted','failed','cancelled');
+  WHERE kind = 'message' AND state IN ('context_admitted','failed','cancelled');
 CREATE TRIGGER context_admissions_retention_insert_v16 BEFORE INSERT ON context_admissions
 BEGIN
-  DELETE FROM context_admissions
-  WHERE workspace_key = NEW.workspace_key
-    AND state IN ('context_admitted','failed','cancelled')
-    AND updated_at_ms < MAX(0, NEW.created_at_ms - 86400000);
+  DELETE FROM context_admissions WHERE id IN (
+    SELECT id FROM context_admissions
+    WHERE workspace_key = NEW.workspace_key AND kind = 'message'
+      AND state IN ('context_admitted','failed','cancelled')
+      AND updated_at_ms < MAX(0, NEW.created_at_ms - 86400000)
+    ORDER BY updated_at_ms, id LIMIT 100
+  );
 END;
 CREATE TRIGGER context_admissions_request_insert_v16 BEFORE INSERT ON context_admissions
 WHEN NEW.kind = 'request' AND NOT EXISTS (

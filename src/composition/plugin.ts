@@ -216,6 +216,7 @@ export function createCompositionFactory(
         directory: workspace.directory,
         serverUrl: input.serverUrl,
         workspaceKey,
+        projectId: workspace.projectId,
       });
       contextRuntime = dependencies.createContextRuntime();
       runtime = dependencies.createRuntime(contextRuntime);
@@ -322,6 +323,7 @@ export function createCompositionFactory(
           contexts: store,
           participantOperations,
           notifications: contextRuntime,
+          targetEligibility: native,
         },
         {
           workspaceKey,

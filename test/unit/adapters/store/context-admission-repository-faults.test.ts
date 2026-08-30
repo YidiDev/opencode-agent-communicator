@@ -6,7 +6,10 @@ import {
   isExactContextEnvelope,
   settleParticipantContextRows,
 } from "../../../../src/adapters/store/context-admission-repository-shared";
-import { StoreIntegrityError } from "../../../../src/adapters/store/store-types";
+import {
+  StoreIntegrityError,
+  sqliteStoreDefaultLimits,
+} from "../../../../src/adapters/store/store-types";
 import { validateDeliveryId, validateRequestId } from "../../../../src/domain/generated-ids";
 import { validateSessionId } from "../../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../../src/domain/workspaces";
@@ -49,6 +52,7 @@ function repository(database: unknown) {
       workspaceKey,
       nowWallMs: () => 10,
       maximumPageCount: 100,
+      limits: sqliteStoreDefaultLimits,
       database,
     } as never,
     { assertOrdinaryWorkAllowed: () => undefined } as never,
@@ -148,7 +152,10 @@ test("classifies absent create postconditions as state conflicts", () => {
     transaction: (operation: () => unknown) => ({ immediate: operation }),
     run: () => ({ changes: 1 }),
     query: (sql: string) => ({
-      get: () => (sql.includes("page_count") ? { pageCount: 1 } : undefined),
+      get: () => {
+        if (sql.includes("page_count")) return { pageCount: 1 };
+        return sql.includes("AS value") ? { value: 0 } : undefined;
+      },
     }),
   });
   expect(

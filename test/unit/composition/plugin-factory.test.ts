@@ -33,6 +33,7 @@ function incompatibleNative(): OpenCodeNativeAdapter {
     updateSessionTitle: async () => "unknown",
     admitInitialMessage: async () => "unknown",
     readParticipantPresence: async () => "present",
+    isEligibleContextTarget: async () => true,
   };
 }
 

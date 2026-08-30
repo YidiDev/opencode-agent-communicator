@@ -1,4 +1,6 @@
+import { contextEnvelopeMaximumBytes } from "../domain/context-admissions";
 import type { FencingToken } from "../domain/ownership";
+import type { SessionId } from "../domain/sessions";
 import { deriveTranscriptSessionIdentity } from "../domain/transcript-session-identity";
 import type { WorkspaceKey } from "../domain/workspaces";
 import { type CommunicatorReadinessPort, communicatorIsReady } from "./communicator-readiness-port";
@@ -11,6 +13,14 @@ import type { ParticipantOperationPort } from "./participant-operation-gate";
 
 const marker = '<opencode-agent-communicator-context version="1">';
 const endMarker = "</opencode-agent-communicator-context>";
+
+export interface ContextTargetEligibilityPort {
+  isEligibleContextTarget(input: {
+    readonly workspaceKey: WorkspaceKey;
+    readonly sessionId: SessionId;
+    readonly abort: AbortSignal;
+  }): Promise<boolean>;
+}
 
 interface MutableTextPart {
   text: string;
@@ -69,6 +79,7 @@ export async function injectCommunicatorContext(
     readonly contexts: ContextAdmissionPersistencePort;
     readonly participantOperations: ParticipantOperationPort;
     readonly notifications: ContextAdmissionNotificationPort;
+    readonly targetEligibility: ContextTargetEligibilityPort;
   },
   input: {
     readonly messages: unknown;
@@ -86,7 +97,7 @@ export async function injectCommunicatorContext(
       workspaceKey: input.workspaceKey,
       targetSessionId: identity.sessionId,
       limit: 32,
-      maximumBytes: 48 * 1_024,
+      maximumBytes: contextEnvelopeMaximumBytes,
     });
     const reminders = await ports.contexts.readContextReminders({
       fencingToken: input.fencingToken,
@@ -98,6 +109,15 @@ export async function injectCommunicatorContext(
       items.length === 0 &&
       reminders.activeLockCount === 0 &&
       reminders.availableResults.length === 0
+    ) {
+      return;
+    }
+    if (
+      !(await ports.targetEligibility.isEligibleContextTarget({
+        workspaceKey: input.workspaceKey,
+        sessionId: identity.sessionId,
+        abort: input.abort,
+      }))
     ) {
       return;
     }

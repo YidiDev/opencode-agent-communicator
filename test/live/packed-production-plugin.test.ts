@@ -26,6 +26,7 @@ import {
   type ProviderHarness,
   type ProviderRequestGate,
 } from "./harness/provider";
+import { runBlockingRequestJourneys } from "./packed-blocking-request-journeys";
 import { runContextRequestJourney } from "./packed-immediate-request-journeys";
 
 setDefaultTimeout(liveDeadlineMs * 8);
@@ -38,6 +39,7 @@ interface PackedFixture {
   readonly entryPath: string;
   readonly isolation: IsolatedOpenCodeState;
   readonly provider: ProviderHarness;
+  readonly stateDirectory: string;
   exportSession(sessionID: string): Promise<{ readonly exitCode: number; readonly stdout: string }>;
   close(initialFailure?: unknown): Promise<void>;
 }
@@ -251,6 +253,8 @@ async function launchPackedFixture(): Promise<PackedFixture> {
       "production-target-active",
       "production-context-source-gated",
       "production-context-request-source-gated",
+      "production-session-ask:",
+      "production-session-wait:",
       "Packed peer session ready check",
       "packed live delivery",
       "packed private provider context",
@@ -285,6 +289,7 @@ async function launchPackedFixture(): Promise<PackedFixture> {
       entryPath,
       isolation: state,
       provider,
+      stateDirectory,
       async exportSession(sessionID) {
         return runBoundedProcess({
           command: cliPath,
@@ -376,23 +381,30 @@ function createInvoker(client: Client): Invoker {
   };
 }
 
-async function activateTarget(fixture: PackedFixture, label: string): Promise<ActiveTarget> {
-  const target = successful(
-    await fixture.client.session.create({ title: `Packed active ${label}` }),
-    `${label} active target`,
-  );
+async function activateTarget(
+  fixture: PackedFixture,
+  label: string,
+  preparedTargetID?: string,
+): Promise<ActiveTarget> {
+  const targetID =
+    preparedTargetID ??
+    successful(
+      await fixture.client.session.create({ title: `Packed active ${label}` }),
+      `${label} active target`,
+    ).id;
   const marker = `production-target-active-${label}`;
   const run = fixture.client.session.prompt({
-    sessionID: target.id,
+    sessionID: targetID,
     model: { providerID: testProviderID, modelID: testModelID },
     agent: "build",
+    tools: { live_context_hold: true, session_respond: true, session_signal: true },
     parts: [{ type: "text", text: marker }],
   });
   const gate = await fixture.provider.waitForText(marker);
-  await waitForActiveTarget(fixture.client, target.id, label);
+  await waitForActiveTarget(fixture.client, targetID, label);
   return {
     gate,
-    id: target.id,
+    id: targetID,
     async complete(): Promise<void> {
       successful(await run, `${label} target run`);
     },
@@ -462,33 +474,6 @@ async function runLockJourney(invoker: Invoker): Promise<void> {
       published.sessionID,
     ),
   ).toMatchObject({ ok: true, value: { locks: [] } });
-}
-
-async function runAskJourney(fixture: PackedFixture, invoker: Invoker): Promise<void> {
-  const target = await activateTarget(fixture, "ask");
-  const ask = await invoker.begin("session_ask", `production-session-ask:${target.id}`);
-  target.gate.release("complete exact-version ask target");
-  await withinLiveDeadline(target.complete(), "ask target activation completion");
-  const askOutput = await withinLiveDeadline(ask.output(), "ask/respond completion");
-  expect(askOutput).toMatchObject({
-    ok: false,
-    error: { code: "target_idle", retryable: false },
-  });
-}
-
-async function runWaitJourney(fixture: PackedFixture, invoker: Invoker): Promise<void> {
-  const target = await activateTarget(fixture, "wait");
-  const wait = await invoker.begin(
-    "session_wait",
-    `production-session-wait:${target.id}:production-signal`,
-  );
-  target.gate.release("complete exact-version wait target");
-  await withinLiveDeadline(target.complete(), "wait target activation completion");
-  const waitOutput = await withinLiveDeadline(wait.output(), "wait/signal completion");
-  expect(waitOutput).toMatchObject({
-    ok: false,
-    error: { code: "target_idle", retryable: false },
-  });
 }
 
 async function runContextSendJourney(fixture: PackedFixture, invoker: Invoker): Promise<void> {
@@ -714,8 +699,26 @@ test(`runs the exact packed production plugin through OpenCode ${exactOpenCodeVe
     await runBasicPackedJourneys(invoker);
     await runLockJourney(invoker);
     await runStartStopJourney(fixture, invoker, target.id);
-    await runAskJourney(fixture, invoker);
-    await runWaitJourney(fixture, invoker);
+    await runBlockingRequestJourneys(
+      {
+        provider: fixture.provider,
+        prepareTarget: async (label) => {
+          const target = successful(await fixture.client.session.create(), `${label} target`);
+          return { id: target.id, activate: () => activateTarget(fixture, label, target.id) };
+        },
+        readToolOutput: async (sessionId, toolId) =>
+          toolOutput(
+            successful(await fixture.client.session.messages({ sessionID: sessionId }), toolId),
+            toolId,
+          ),
+        readToolState: async (sessionId, toolId) => {
+          const messages = await fixture.client.session.messages({ sessionID: sessionId });
+          return toolPart(successful(messages, `${toolId} state`), toolId)?.state.status;
+        },
+        withinLiveDeadline,
+      },
+      invoker,
+    );
     await runContextSendJourney(fixture, invoker);
     await runContextRequestJourney(fixture, invoker);
     expect(successful(await fixture.client.instance.dispose(), "production plugin disposal")).toBe(

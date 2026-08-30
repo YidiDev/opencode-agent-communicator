@@ -408,3 +408,18 @@ describe("context message delivery", () => {
     expect(aborted.persisted).toEqual([]);
   });
 });
+
+test("maps abort during the envelope digest to deadline expiry", async () => {
+  const value = fixture();
+  const controller = new AbortController();
+  value.ports.digest.sha256 = async () => {
+    value.digestCalls += 1;
+    if (value.digestCalls === 2) controller.abort();
+    return new Uint8Array(32);
+  };
+  expect(await sendContextSessionMessage(value.ports, context(controller), input)).toMatchObject({
+    ok: false,
+    error: { code: "deadline_expired" },
+  });
+  expect(value.persisted).toEqual([]);
+});

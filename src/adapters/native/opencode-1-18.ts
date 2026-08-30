@@ -3,6 +3,7 @@ import type {
   CurrentWorkspaceMembershipPort,
   NativeQueueAdmissionPort,
 } from "../../application/delivery-ports";
+import type { ContextTargetEligibilityPort } from "../../application/inject-communicator-context";
 import type { NativeParticipantPresencePort } from "../../application/participant-deletion-ports";
 import type { NativeParticipantStopActivityPort } from "../../application/participant-stop-ports";
 import type {
@@ -16,7 +17,10 @@ import { type VisibleRootSessionPort, validateSessionId } from "../../domain/ses
 import type { WorkspaceKey } from "../../domain/workspaces";
 import { validateWorkspaceKey } from "../../domain/workspaces";
 import { createAdmissionOperations, createObservationOperations } from "./opencode-1-18-operations";
-import { createDirectParticipantPresencePort } from "./opencode-1-18-presence";
+import {
+  createDirectContextTargetEligibilityPort,
+  createDirectParticipantPresencePort,
+} from "./opencode-1-18-presence";
 import { admitPublicMessage, type PublicMessageSurface } from "./opencode-1-18-public-message";
 import {
   admitLegacyInitialMessage,
@@ -114,6 +118,7 @@ export interface OpenCodeNativeAdapterInput {
   readonly directory: string;
   readonly serverUrl: URL;
   readonly workspaceKey: WorkspaceKey;
+  readonly projectId: string;
 }
 
 export type OpenCodeNativeAdapter = HostHealthPort &
@@ -125,7 +130,8 @@ export type OpenCodeNativeAdapter = HostHealthPort &
   NativeSessionInterruptPort &
   NativeSessionStartPort &
   NativeParticipantPresencePort &
-  NativeParticipantStopActivityPort;
+  NativeParticipantStopActivityPort &
+  ContextTargetEligibilityPort;
 
 function legacySurface(client: unknown): LegacyClientSurface {
   const legacyClient = requireRecord(client, "Injected legacy client is unavailable.");
@@ -223,6 +229,18 @@ export function createOpenCode118NativeAdapter(
   const now = dependencies.now ?? Date.now;
   const configuredWorkspace = validateWorkspaceKey(input.workspaceKey);
   if (!configuredWorkspace.ok) throw new NativeAdapterFault(configuredWorkspace.message);
+  if (
+    typeof input.projectId !== "string" ||
+    input.projectId.length < 1 ||
+    input.projectId.length > 512
+  ) {
+    throw new NativeAdapterFault("Configured project identity is malformed.");
+  }
+  const contextTargetEligibility = createDirectContextTargetEligibilityPort(startSession, {
+    workspaceKey: configuredWorkspace.value,
+    projectId: input.projectId,
+    directory: input.directory,
+  });
   const observations = createObservationOperations({
     active: (options) => v2.v2.session.active(options),
     configuredWorkspace: configuredWorkspace.value,
@@ -245,6 +263,7 @@ export function createOpenCode118NativeAdapter(
     ...observations,
     ...admissions,
     ...participantPresence,
+    ...contextTargetEligibility,
     async queueMessage(request) {
       const result = await admitPublicMessage(
         publicStartSession,

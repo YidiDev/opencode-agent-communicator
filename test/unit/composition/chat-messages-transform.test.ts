@@ -71,6 +71,7 @@ function fixture() {
     },
     participantOperations: new ParticipantOperationGate(),
     notifications: { notifyContextSettled: () => undefined },
+    targetEligibility: { isEligibleContextTarget: async () => true },
   };
   return {
     ports,
@@ -153,6 +154,36 @@ test("removes only owned text after a downstream transform appends content", asy
 
   await transform({} as never, output as never);
   expect(part.text).toBe("human prompt\ndownstream reminder");
+});
+
+test("removes owned text after a downstream transform prepends or rewrites the prompt", async () => {
+  const value = fixture();
+  const transform = createTransform(value);
+  const output = { messages: messages() };
+  value.enqueue("one-shot context");
+  await transform({} as never, output as never);
+  const part = output.messages[0]?.parts[0];
+  if (!part) throw new Error("missing text part");
+  part.text = `downstream prefix\n${part.text.replace("human prompt", "rewritten prompt")}`;
+
+  await transform({} as never, output as never);
+  expect(part.text).toBe("downstream prefix\nrewritten prompt");
+});
+
+test("leaves duplicate synthetic text unchanged when cleanup ownership is ambiguous", async () => {
+  const value = fixture();
+  const transform = createTransform(value);
+  const output = { messages: messages() };
+  value.enqueue("one-shot context");
+  await transform({} as never, output as never);
+  const part = output.messages[0]?.parts[0];
+  if (!part) throw new Error("missing text part");
+  const injected = part.text.slice("human prompt".length);
+  part.text = `${injected}\nhuman prompt${injected}`;
+  const ambiguous = part.text;
+
+  await transform({} as never, output as never);
+  expect(part.text).toBe(ambiguous);
 });
 
 test("coalesces concurrent hook calls for one in-flight provider invocation", async () => {

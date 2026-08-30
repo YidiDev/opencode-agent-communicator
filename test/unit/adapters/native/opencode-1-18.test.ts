@@ -146,6 +146,7 @@ function fixture(options: FixtureOptions = {}) {
         directory: "/workspace",
         serverUrl: new URL("http://127.0.0.1:4321/"),
         workspaceKey,
+        projectId: "project",
       },
       dependencies,
     ),
@@ -473,6 +474,7 @@ describe("OpenCode 1.18.23 native adapter failure boundaries and membership", ()
         directory: "/workspace",
         serverUrl: new URL("http://localhost/"),
         workspaceKey,
+        projectId: "project",
       },
       dependencies,
     );
@@ -528,6 +530,7 @@ describe("OpenCode 1.18.23 native adapter failure boundaries and membership", ()
           directory: "/workspace",
           serverUrl: new URL("http://localhost/"),
           workspaceKey,
+          projectId: "project",
         },
         dependencies,
       ),
@@ -574,6 +577,7 @@ describe("OpenCode 1.18.23 native adapter start and validation boundaries", () =
         directory: "/workspace",
         serverUrl: new URL("http://localhost/"),
         workspaceKey,
+        projectId: "project",
       },
       {
         ...dependencies,

@@ -24,12 +24,19 @@ function textParts(messages: unknown): TextPart[] {
   return result;
 }
 
+function removeOwnedText(part: TextPart, previous: string): void {
+  const offset = part.text.indexOf(previous);
+  if (offset >= 0 && offset === part.text.lastIndexOf(previous)) {
+    part.text = part.text.slice(0, offset) + part.text.slice(offset + previous.length);
+  }
+}
+
 export function createChatMessagesTransform(
   ports: Parameters<typeof injectCommunicatorContext>[0],
   context: Omit<Parameters<typeof injectCommunicatorContext>[1], "messages">,
 ): NonNullable<Hooks["experimental.chat.messages.transform"]> {
   const inFlight = new WeakMap<object, Promise<void>>();
-  const injectedText = new WeakMap<object, { readonly offset: number; readonly text: string }>();
+  const injectedText = new WeakMap<object, string>();
   return async (_input, output) => {
     if (typeof output.messages !== "object" || output.messages === null) return;
     const existing = inFlight.get(output.messages);
@@ -39,14 +46,7 @@ export function createChatMessagesTransform(
       const parts = textParts(output.messages);
       for (const part of parts) {
         const previous = injectedText.get(part);
-        if (
-          previous &&
-          part.text.slice(previous.offset, previous.offset + previous.text.length) === previous.text
-        ) {
-          part.text =
-            part.text.slice(0, previous.offset) +
-            part.text.slice(previous.offset + previous.text.length);
-        }
+        if (previous) removeOwnedText(part, previous);
         injectedText.delete(part);
       }
       const before = new Map(parts.map((part) => [part, part.text]));
@@ -54,10 +54,7 @@ export function createChatMessagesTransform(
       for (const part of parts) {
         const original = before.get(part);
         if (original !== undefined && part.text !== original) {
-          injectedText.set(part, {
-            offset: original.length,
-            text: part.text.slice(original.length),
-          });
+          injectedText.set(part, part.text.slice(original.length));
         }
       }
     })();

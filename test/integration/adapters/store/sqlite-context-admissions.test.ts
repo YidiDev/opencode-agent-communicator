@@ -8,6 +8,7 @@ import type { Sha256Digest } from "../../../../src/domain/message-payload";
 import {
   cleanupRequestStoreRoots,
   openRequestStore,
+  requestClock,
   requestFixture,
   requestSession,
   requestTemporaryRoot,
@@ -259,5 +260,53 @@ test("startup recovery fails ambiguous pre-crash context without replay", async 
       maximumBytes: 65_536,
     }),
   ).toEqual([]);
+  store.close();
+});
+
+test("retains terminal request context until its parent reaches request retention", async () => {
+  const clock = requestClock();
+  const store = openRequestStore({ nowWallMs: clock.wall, nowMonotonicMs: clock.monotonic });
+  let token = await store.acquire();
+  const fixture = contextRequest(await requestFixture(token));
+  await store.createPrepared(fixture);
+  await store.failUncertainContextOnStartup({
+    fencingToken: token,
+    workspaceKey: fixture.request.workspaceKey,
+    limit: 100,
+  });
+
+  clock.set(25_000 + 86_400_001);
+  token = await store.acquire();
+  const envelopeJson = JSON.stringify({ content: "trigger message retention" });
+  expect(
+    await store.createContextMessage({
+      fencingToken: token,
+      id: deliveryId("c"),
+      workspaceKey: fixture.request.workspaceKey,
+      sourceSessionId: fixture.request.sourceSessionId,
+      targetSessionId: fixture.request.targetSessionId,
+      envelopeJson,
+      contentByteLength: new TextEncoder().encode(envelopeJson).length,
+      contentSha256: digest(envelopeJson),
+      createdAtMs: clock.wall(),
+    }),
+  ).toMatchObject({ ok: true });
+  expect(
+    await store.getRequestMetadata({
+      fencingToken: token,
+      workspaceKey: fixture.request.workspaceKey,
+      requestId: fixture.request.id,
+    }),
+  ).toMatchObject({ resolutionState: "delivery_failed", deliveryState: "delivery_failed" });
+
+  const database = new Database(store.databasePath, { readonly: true, strict: true });
+  expect(
+    database
+      .query<{ count: number }, [string]>(
+        "SELECT count(*) AS count FROM context_admissions WHERE id = ? AND kind = 'request'",
+      )
+      .get(fixture.request.id)?.count,
+  ).toBe(1);
+  database.close(true);
   store.close();
 });

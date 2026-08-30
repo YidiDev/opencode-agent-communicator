@@ -350,6 +350,21 @@ function shouldGateRequest(
   ) {
     return true;
   }
+  if (
+    (serialized.includes("production-target-active-ask") &&
+      serialized.includes('\\"operation\\":\\"ask\\"')) ||
+    (serialized.includes("production-target-active-wait") &&
+      serialized.includes('\\"operation\\":\\"wait\\"'))
+  ) {
+    return true;
+  }
+  if (
+    (serialized.includes("production-target-active-ask") ||
+      serialized.includes("production-target-active-wait")) &&
+    lastMessageSerialized(body).includes("live context hold complete")
+  ) {
+    return true;
+  }
   const message = body.messages.at(-1);
   return isRecord(message) && markers.some((marker) => String(message.content).includes(marker));
 }

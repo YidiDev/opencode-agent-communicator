@@ -1,12 +1,18 @@
 import { createHash } from "node:crypto";
 
-import type { ContextSnapshotItem } from "../../application/context-admission-ports";
+import type {
+  ContextSnapshotItem,
+  PrepareRequestContextAdmissionInput,
+} from "../../application/context-admission-ports";
 import {
   type ContextAdmissionId,
   type ContextAdmissionMetadata,
+  contextEnvelopeMaximumBytes,
   isCoherentContextAdmission,
 } from "../../domain/context-admissions";
+import { validateRequestId } from "../../domain/generated-ids";
 import type { FencingToken } from "../../domain/ownership";
+import type { PendingRequestMetadata } from "../../domain/request-types";
 import { eraseRequestPrivateContent } from "./request-repository-shared";
 import { type StoreContext, StoreIntegrityError } from "./store-types";
 
@@ -79,7 +85,7 @@ export function isExactContextEnvelope(
   return (
     bytes.length === byteLength &&
     bytes.length >= 1 &&
-    bytes.length <= 65_536 &&
+    bytes.length <= contextEnvelopeMaximumBytes &&
     createHash("sha256").update(bytes).digest("hex") === sha256
   );
 }
@@ -95,6 +101,40 @@ export function selectContextAdmission(
     )
     .get(workspaceKey, id);
   return row ? hydrateContextAdmission(row) : undefined;
+}
+
+export function insertRequestContextAdmission(
+  context: StoreContext,
+  request: PendingRequestMetadata,
+  input: PrepareRequestContextAdmissionInput,
+): void {
+  if (
+    input.requestId !== request.id ||
+    !validateRequestId(input.requestId).ok ||
+    !isExactContextEnvelope(input.envelopeJson, input.contentByteLength, input.contentSha256)
+  ) {
+    throw new StoreIntegrityError("A request context admission was malformed.");
+  }
+  context.database.run(
+    `INSERT INTO context_admissions(
+      id, kind, workspace_key, source_session_id, target_session_id, request_id, state,
+      payload_json, content_byte_length, content_sha256, created_at_ms, updated_at_ms,
+      awaiting_context_at_ms
+    ) VALUES (?, 'request', ?, ?, ?, ?, 'awaiting_context', ?, ?, ?, ?, ?, ?)`,
+    [
+      request.id,
+      request.workspaceKey,
+      request.sourceSessionId,
+      request.targetSessionId,
+      request.id,
+      input.envelopeJson,
+      input.contentByteLength,
+      input.contentSha256,
+      request.createdAtMs,
+      request.createdAtMs,
+      request.createdAtMs,
+    ],
+  );
 }
 
 export function failContextAdmissionRows(

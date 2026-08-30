@@ -177,6 +177,12 @@ export function publicRequestMetadata(value: ParticipantRequestMetadata): Record
     acknowledgement_applicable:
       value.resolutionState === "answered" || value.resolutionState === "reached",
     ...(value.resolvedAtMs === undefined ? {} : { resolved_at_ms: value.resolvedAtMs }),
+    ...(!("awaitingContextAtMs" in value) || value.awaitingContextAtMs === undefined
+      ? {}
+      : { awaiting_context_at_ms: value.awaitingContextAtMs }),
+    ...(!("contextAdmittedAtMs" in value) || value.contextAdmittedAtMs === undefined
+      ? {}
+      : { context_admitted_at_ms: value.contextAdmittedAtMs }),
     ...(value.submittedAtMs === undefined ? {} : { submitted_at_ms: value.submittedAtMs }),
     ...(value.deliveryUnknownAtMs === undefined
       ? {}

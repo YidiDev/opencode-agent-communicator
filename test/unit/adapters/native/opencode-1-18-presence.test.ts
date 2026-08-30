@@ -1,13 +1,18 @@
 import { expect, test } from "bun:test";
 import {
+  classifyOpenCode118ContextTargetEligibility,
   classifyOpenCode118DirectSessionPresence,
+  createDirectContextTargetEligibilityPort,
   createDirectParticipantPresencePort,
 } from "../../../../src/adapters/native/opencode-1-18-presence";
 import { validateSessionId } from "../../../../src/domain/sessions";
+import { validateWorkspaceKey } from "../../../../src/domain/workspaces";
 
 const validated = validateSessionId("ses_presence");
 if (!validated.ok) throw new Error("invalid fixture");
 const sessionId = validated.value;
+const workspace = validateWorkspaceKey("workspace:presence");
+if (!workspace.ok) throw new Error("invalid workspace fixture");
 
 function response(status: number): Response {
   return new Response(null, { status });
@@ -49,6 +54,62 @@ test("classifies only correlated direct V2 success and exact correlated 404 as p
       sessionId,
     ),
   ).toBe("unknown");
+});
+
+test("admits context only for the exact current root workspace metadata", async () => {
+  const session = {
+    id: sessionId,
+    projectID: "project",
+    directory: "/workspace",
+    time: { created: 1, updated: 2 },
+  };
+  const exact = { data: { data: session }, response: response(200) };
+  const expected = { sessionId, projectId: "project", directory: "/workspace" };
+  expect(classifyOpenCode118ContextTargetEligibility(exact, expected)).toBeTrue();
+  expect(
+    classifyOpenCode118ContextTargetEligibility(
+      {
+        data: { data: { ...session, directory: undefined, location: { directory: "/workspace" } } },
+        response: response(200),
+      },
+      expected,
+    ),
+  ).toBeTrue();
+  for (const ineligible of [
+    { ...session, parentID: "ses_parent" },
+    { ...session, projectID: "other" },
+    { ...session, directory: "/other" },
+    { ...session, location: { directory: "/other" } },
+    { ...session, time: { ...session.time, archived: 3 } },
+  ]) {
+    expect(
+      classifyOpenCode118ContextTargetEligibility(
+        { data: { data: ineligible }, response: response(200) },
+        expected,
+      ),
+    ).toBeFalse();
+  }
+
+  const port = createDirectContextTargetEligibilityPort(
+    { get: async () => exact },
+    { workspaceKey: workspace.value, projectId: "project", directory: "/workspace" },
+  );
+  expect(
+    await port.isEligibleContextTarget({
+      workspaceKey: workspace.value,
+      sessionId,
+      abort: new AbortController().signal,
+    }),
+  ).toBeTrue();
+  const foreign = validateWorkspaceKey("workspace:other");
+  if (!foreign.ok) throw new Error("invalid foreign workspace fixture");
+  expect(
+    await port.isEligibleContextTarget({
+      workspaceKey: foreign.value,
+      sessionId,
+      abort: new AbortController().signal,
+    }),
+  ).toBeFalse();
 });
 
 test("treats every non-404 status and every mixed not-found envelope as unknown", () => {

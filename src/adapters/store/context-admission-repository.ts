@@ -8,7 +8,11 @@ import type {
   PrepareRequestContextAdmissionInput,
 } from "../../application/context-admission-ports";
 import { snapshotDenseArray } from "../../application/strict-port-boundaries";
-import type { ContextAdmissionId, ContextAdmissionMetadata } from "../../domain/context-admissions";
+import {
+  type ContextAdmissionId,
+  type ContextAdmissionMetadata,
+  contextEnvelopeMaximumBytes,
+} from "../../domain/context-admissions";
 import { validateDeliveryId, validateRequestId } from "../../domain/generated-ids";
 import type { FencingToken } from "../../domain/ownership";
 import type { PendingRequestMetadata } from "../../domain/request-types";
@@ -20,11 +24,16 @@ import {
   contextColumns,
   failContextAdmissionRows,
   hydrateContextAdmission,
+  insertRequestContextAdmission,
   isExactContextEnvelope,
   selectContextAdmission,
   settleParticipantContextRows,
   snapshotItem,
 } from "./context-admission-repository-shared";
+import {
+  checkContextMessageCreateQuotas,
+  recordContextMessageRateEvent,
+} from "./context-message-admission";
 import type { OwnershipRepository } from "./ownership-repository";
 import {
   eraseRequestPrivateContent,
@@ -64,6 +73,8 @@ export class ContextAdmissionRepository {
           const nowMs = requestStoreNowMs(this.context);
           if (nowMs < input.createdAtMs)
             return { ok: false as const, code: "state_conflict" as const };
+          const quotaFailure = checkContextMessageCreateQuotas(this.context, input, nowMs);
+          if (quotaFailure) return { ok: false as const, code: quotaFailure };
           this.context.database.run(
             "INSERT OR IGNORE INTO workspaces(workspace_key, created_at_ms) VALUES (?, ?)",
             [input.workspaceKey, input.createdAtMs],
@@ -87,6 +98,7 @@ export class ContextAdmissionRepository {
               nowMs,
             ],
           );
+          recordContextMessageRateEvent(this.context, input, nowMs);
           const admission = this.select(input.workspaceKey, input.id);
           if (!admission) throw new StoreIntegrityError("A context admission was not persisted.");
           return { ok: true as const, admission };
@@ -101,33 +113,7 @@ export class ContextAdmissionRepository {
     request: PendingRequestMetadata,
     input: PrepareRequestContextAdmissionInput,
   ): void {
-    if (
-      input.requestId !== request.id ||
-      !validateRequestId(input.requestId).ok ||
-      !isExactContextEnvelope(input.envelopeJson, input.contentByteLength, input.contentSha256)
-    ) {
-      throw new StoreIntegrityError("A request context admission was malformed.");
-    }
-    this.context.database.run(
-      `INSERT INTO context_admissions(
-        id, kind, workspace_key, source_session_id, target_session_id, request_id, state,
-        payload_json, content_byte_length, content_sha256, created_at_ms, updated_at_ms,
-        awaiting_context_at_ms
-      ) VALUES (?, 'request', ?, ?, ?, ?, 'awaiting_context', ?, ?, ?, ?, ?, ?)`,
-      [
-        request.id,
-        request.workspaceKey,
-        request.sourceSessionId,
-        request.targetSessionId,
-        request.id,
-        input.envelopeJson,
-        input.contentByteLength,
-        input.contentSha256,
-        request.createdAtMs,
-        request.createdAtMs,
-        request.createdAtMs,
-      ],
-    );
+    insertRequestContextAdmission(this.context, request, input);
   }
 
   get(input: Parameters<ContextAdmissionPersistencePort["getContextAdmission"]>[0]) {
@@ -178,7 +164,7 @@ export class ContextAdmissionRepository {
       input.limit > 100 ||
       !Number.isSafeInteger(input.maximumBytes) ||
       input.maximumBytes < 1 ||
-      input.maximumBytes > 65_536
+      input.maximumBytes > contextEnvelopeMaximumBytes
     ) {
       return [];
     }

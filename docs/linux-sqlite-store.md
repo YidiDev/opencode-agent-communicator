@@ -152,16 +152,18 @@ Schema v16 adds `requests.delivery_transport` (`native` or `context`) and the
 `initial` requests must remain native. The context table stores a bounded canonical envelope only
 while its state is `prepared` or `awaiting_context`, caps one envelope at 64 KiB, and uses the
 existing delivery record, byte, and rate ceilings. One provider transform selects at most 32 rows
-and 48 KiB for a visible `busy`/`retry` target, then atomically claims the exact digest-bound set and
+and 64 KiB for a visible `busy`/`retry` target, then atomically claims the exact digest-bound set and
 erases its payload. It may also include at most 20 payload-free available-result reminders and an
 active-lock count. These values are provider-visible, transcript-invisible, and explicitly marked
-as untrusted.
+as untrusted. Bounded 24-hour GC applies only to standalone terminal message admissions; request
+admissions cascade with their parent after request retention.
 
-Migration v16 does not reinterpret uncertain legacy native delivery as context. Pending existing-root
-`steer`/`queue` rows in `prepared`, `submitting`, or `delivery_unknown` have private payload and wait
-edges erased and become `delivery_failed`. At every startup, any context admission left
-`awaiting_context` is likewise failed and erased in bounded batches, because a crash cannot prove
-whether the provider already received the transformed messages. Neither path replays content.
+Migration v16 does not reinterpret legacy native delivery as context. Pending existing-root
+`steer`/`queue` rows still in `prepared` have private payload and wait edges erased and become
+`delivery_failed`. Ambiguous `submitting` and `delivery_unknown` rows retain their state and recovery
+data. At every startup, any context admission left `awaiting_context` is failed and erased in bounded
+batches, because a crash cannot prove whether the provider already received the transformed
+messages. Neither path replays content.
 
 An administrator owner label is diagnostic only. Every store construction creates
 a fresh random process-generation identity. Repeated acquisition by one live

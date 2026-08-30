@@ -7,6 +7,8 @@ import { validateWorkspaceKey, type WorkspaceKey } from "./workspaces";
 export const contextAdmissionKinds = ["message", "request"] as const;
 export type ContextAdmissionKind = (typeof contextAdmissionKinds)[number];
 
+export const contextEnvelopeMaximumBytes = 65_536;
+
 export const contextAdmissionStates = [
   "prepared",
   "awaiting_context",
@@ -67,7 +69,7 @@ function coherentIdentity(item: Record<string, unknown>): boolean {
     item.sourceSessionId === item.targetSessionId ||
     !Number.isSafeInteger(item.contentByteLength) ||
     (item.contentByteLength as number) < 1 ||
-    (item.contentByteLength as number) > 65_536 ||
+    (item.contentByteLength as number) > contextEnvelopeMaximumBytes ||
     typeof item.contentSha256 !== "string" ||
     !/^[0-9a-f]{64}$/.test(item.contentSha256) ||
     !safeTime(item.createdAtMs) ||

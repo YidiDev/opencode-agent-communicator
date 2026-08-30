@@ -1,12 +1,18 @@
-import type {
-  DeliveryStoreFailureCode,
-  PrepareDeliveryInput,
-} from "../../application/delivery-ports";
+import type { DeliveryStoreFailureCode } from "../../application/delivery-ports";
+import type { SessionId } from "../../domain/sessions";
+import type { WorkspaceKey } from "../../domain/workspaces";
 import type { StoreContext } from "./store-types";
 import { StoreIntegrityError } from "./store-types";
 
 interface AggregateRow {
   readonly value: number;
+}
+
+export interface DeliveryQuotaInput {
+  readonly workspaceKey: WorkspaceKey;
+  readonly sourceSessionId: SessionId;
+  readonly targetSessionId: SessionId;
+  readonly nowMs: number;
 }
 
 function aggregate(
@@ -21,21 +27,27 @@ function aggregate(
   return row.value;
 }
 
-function exceedsCountQuotas(context: StoreContext, input: PrepareDeliveryInput): boolean {
+function exceedsCountQuotas(context: StoreContext, input: DeliveryQuotaInput): boolean {
   const dimensions = [
     [
-      "SELECT count(*) AS value FROM deliveries WHERE workspace_key = ?",
-      [input.workspaceKey],
+      `SELECT (SELECT count(*) FROM deliveries WHERE workspace_key = ?) +
+        (SELECT count(*) FROM context_admissions WHERE workspace_key = ? AND kind = 'message')
+        AS value`,
+      [input.workspaceKey, input.workspaceKey],
       context.limits.deliveryRecordsPerWorkspace,
     ],
     [
-      "SELECT count(*) AS value FROM deliveries WHERE workspace_key = ? AND source_session_id = ?",
-      [input.workspaceKey, input.sourceSessionId],
+      `SELECT (SELECT count(*) FROM deliveries WHERE workspace_key = ? AND source_session_id = ?) +
+        (SELECT count(*) FROM context_admissions
+         WHERE workspace_key = ? AND source_session_id = ? AND kind = 'message') AS value`,
+      [input.workspaceKey, input.sourceSessionId, input.workspaceKey, input.sourceSessionId],
       context.limits.deliveryRecordsPerSource,
     ],
     [
-      "SELECT count(*) AS value FROM deliveries WHERE workspace_key = ? AND target_session_id = ?",
-      [input.workspaceKey, input.targetSessionId],
+      `SELECT (SELECT count(*) FROM deliveries WHERE workspace_key = ? AND target_session_id = ?) +
+        (SELECT count(*) FROM context_admissions
+         WHERE workspace_key = ? AND target_session_id = ? AND kind = 'message') AS value`,
+      [input.workspaceKey, input.targetSessionId, input.workspaceKey, input.targetSessionId],
       context.limits.deliveryRecordsPerTarget,
     ],
   ] as const;
@@ -44,26 +56,34 @@ function exceedsCountQuotas(context: StoreContext, input: PrepareDeliveryInput):
 
 function exceedsEnvelopeQuotas(
   context: StoreContext,
-  input: PrepareDeliveryInput,
+  input: DeliveryQuotaInput,
   envelopeBytes: number,
 ): boolean {
   const dimensions = [
     [
-      `SELECT COALESCE(sum(length(CAST(prepared_envelope AS BLOB))), 0) AS value
-       FROM deliveries WHERE workspace_key = ? AND state = 'prepared'`,
-      [input.workspaceKey],
+      `SELECT (SELECT COALESCE(sum(length(CAST(prepared_envelope AS BLOB))), 0)
+        FROM deliveries WHERE workspace_key = ? AND state = 'prepared') +
+       (SELECT COALESCE(sum(content_byte_length), 0) FROM context_admissions
+        WHERE workspace_key = ? AND kind = 'message' AND state = 'awaiting_context') AS value`,
+      [input.workspaceKey, input.workspaceKey],
       context.limits.retainedEnvelopeBytesPerWorkspace,
     ],
     [
-      `SELECT COALESCE(sum(length(CAST(prepared_envelope AS BLOB))), 0) AS value
-       FROM deliveries WHERE workspace_key = ? AND source_session_id = ? AND state = 'prepared'`,
-      [input.workspaceKey, input.sourceSessionId],
+      `SELECT (SELECT COALESCE(sum(length(CAST(prepared_envelope AS BLOB))), 0)
+        FROM deliveries WHERE workspace_key = ? AND source_session_id = ? AND state = 'prepared') +
+       (SELECT COALESCE(sum(content_byte_length), 0) FROM context_admissions
+        WHERE workspace_key = ? AND source_session_id = ? AND kind = 'message'
+          AND state = 'awaiting_context') AS value`,
+      [input.workspaceKey, input.sourceSessionId, input.workspaceKey, input.sourceSessionId],
       context.limits.retainedEnvelopeBytesPerSource,
     ],
     [
-      `SELECT COALESCE(sum(length(CAST(prepared_envelope AS BLOB))), 0) AS value
-       FROM deliveries WHERE workspace_key = ? AND target_session_id = ? AND state = 'prepared'`,
-      [input.workspaceKey, input.targetSessionId],
+      `SELECT (SELECT COALESCE(sum(length(CAST(prepared_envelope AS BLOB))), 0)
+        FROM deliveries WHERE workspace_key = ? AND target_session_id = ? AND state = 'prepared') +
+       (SELECT COALESCE(sum(content_byte_length), 0) FROM context_admissions
+        WHERE workspace_key = ? AND target_session_id = ? AND kind = 'message'
+          AND state = 'awaiting_context') AS value`,
+      [input.workspaceKey, input.targetSessionId, input.workspaceKey, input.targetSessionId],
       context.limits.retainedEnvelopeBytesPerTarget,
     ],
   ] as const;
@@ -72,7 +92,7 @@ function exceedsEnvelopeQuotas(
   );
 }
 
-function exceedsRates(context: StoreContext, input: PrepareDeliveryInput, since: number): boolean {
+function exceedsRates(context: StoreContext, input: DeliveryQuotaInput, since: number): boolean {
   const dimensions = [
     [
       `SELECT count(*) AS value FROM delivery_rate_events
@@ -98,7 +118,7 @@ function exceedsRates(context: StoreContext, input: PrepareDeliveryInput, since:
 
 export function checkDeliveryCreateQuotas(
   context: StoreContext,
-  input: PrepareDeliveryInput,
+  input: DeliveryQuotaInput,
   envelopeBytes: number,
 ): Extract<DeliveryStoreFailureCode, "quota_exceeded" | "rate_limited"> | undefined {
   const since = Math.max(0, input.nowMs - context.limits.rateWindowMs);
@@ -113,4 +133,12 @@ export function checkDeliveryCreateQuotas(
     return "quota_exceeded";
   }
   return exceedsRates(context, input, since) ? "rate_limited" : undefined;
+}
+
+export function recordDeliveryRateEvent(context: StoreContext, input: DeliveryQuotaInput): void {
+  context.database.run(
+    `INSERT INTO delivery_rate_events(workspace_key, source_session_id,
+       target_session_id, occurred_at_ms) VALUES (?, ?, ?, ?)`,
+    [input.workspaceKey, input.sourceSessionId, input.targetSessionId, input.nowMs],
+  );
 }

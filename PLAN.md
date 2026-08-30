@@ -1077,8 +1077,11 @@ Schema v16 adds `requests.delivery_transport` (`native` or `context`) and
 `context_admissions`. Existing-root context requests retain physical `delivery_mode = "steer"` for
 forward migration compatibility but are selected by the transport discriminator; linked `initial`
 requests remain native. One stored context envelope is at most 64 KiB. One provider transform claims
-at most 32 envelopes and 48 KiB, and may append at most 20 payload-free result reminders plus an
-active-lock count. Startup fails and erases uncertain `awaiting_context` rows in bounded batches.
+at most 32 envelopes and 64 KiB, and may append at most 20 payload-free result reminders plus an
+active-lock count. Standalone terminal message admissions have bounded 24-hour GC; request admissions
+remain with their parent through request retention. Startup fails and erases uncertain
+`awaiting_context` rows in bounded batches. Injection requires a direct session read confirming the
+target remains an unarchived root in the configured project and directory.
 
 ### 12.3 Lease Guarantee
 

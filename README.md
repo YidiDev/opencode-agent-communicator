@@ -282,8 +282,14 @@ custom answers were allowed.
 Context delivery appends a fixed, explicitly untrusted communicator block to the latest user text
 only while OpenCode assembles the target's provider request. It does not modify the stored message,
 create a user turn, or appear in `session_export`. One provider transform admits at most 32 envelopes
-and 48 KiB. It may also include up to 20 payload-free result reminders and an active advisory-lock
-count. The durable inbox and `session_lock_list` remain authoritative.
+and 64 KiB. It may also include up to 20 payload-free result reminders and an active advisory-lock
+count. Immediately before injection, an exact session read must confirm that the target is a current,
+unarchived root in the configured project and directory. The durable inbox and `session_lock_list`
+remain authoritative. Request metadata exposes `awaiting_context_at_ms` and
+`context_admitted_at_ms` when those context transitions occurred.
+
+Packed acceptance verifies coexistence with another local message transform. This is generic hook
+composition evidence, not a compatibility claim for any specific third-party context-pruning plugin.
 
 `context_admitted` proves that the transform claimed the envelope, not that the model read, obeyed,
 or answered it. If the target is idle or its status is unknown, the call persists nothing. If the
@@ -570,8 +576,9 @@ discriminator. Existing-root sends default to transcript-invisible `context`; us
 `delivery: "user"` when you need a native user turn or idle wake. Existing-root ask, wait, and
 request-send also use context, while `session_request_start` retains its native initial user turn.
 Stop every backend and back up the complete state directory before upgrading. Migration v16
-terminalizes uncertain unadmitted legacy `steer`/`queue` requests as `delivery_failed` rather than
-replaying them through the new transport. Older plugin code must not open the migrated store.
+terminalizes only legacy `steer`/`queue` requests whose native delivery remained `prepared`.
+Ambiguous `submitting` and `delivery_unknown` requests retain their state and private recovery data;
+none are replayed through the new transport. Older plugin code must not open the migrated store.
 
 ### Upgrade to 0.4.1
 
