@@ -442,7 +442,8 @@ async function runBasicPackedJourneys(invoker: Invoker): Promise<void> {
   });
 }
 
-async function runLockJourney(invoker: Invoker): Promise<void> {
+async function runLockJourney(fixture: PackedFixture, invoker: Invoker): Promise<void> {
+  const target = await activateTarget(fixture, "lock");
   const published = await invoker.begin("session_lock_publish", "production-lock-publish");
   const publishOutput = await published.output();
   expect(publishOutput).toMatchObject({
@@ -455,12 +456,19 @@ async function runLockJourney(invoker: Invoker): Promise<void> {
         instructions: "Coordinate before touching packed acceptance files.",
       },
       notification: {
-        eligible: expect.any(Number),
-        admitted: expect.any(Number),
-        unknown: expect.any(Number),
+        eligible: 1,
+        admitted: 1,
+        unknown: 0,
       },
     },
   });
+  target.gate.release("lock notification admitted");
+  const notificationRequest = await fixture.provider.waitForRequestText(
+    "## Advisory lock published",
+    target.gate.sequence,
+  );
+  expect(JSON.stringify(notificationRequest.body)).toContain("Packed release surface");
+  await withinLiveDeadline(target.complete(), "lock target completion");
   const lockID = Reflect.get(
     Reflect.get(Reflect.get(publishOutput, "value") ?? {}, "lock") ?? {},
     "lock_id",
@@ -676,7 +684,7 @@ test(`runs the exact packed production plugin through OpenCode ${exactOpenCodeVe
     );
     const invoker = createInvoker(fixture.client);
     await runBasicPackedJourneys(invoker);
-    await runLockJourney(invoker);
+    await runLockJourney(fixture, invoker);
     await runStartStopJourney(fixture, invoker, target.id);
     await runAskJourney(fixture, invoker);
     await runWaitJourney(fixture, invoker);
