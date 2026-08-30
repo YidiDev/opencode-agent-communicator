@@ -14,7 +14,12 @@ import {
   requestAdmissionFailure,
   validAdmissionInput,
 } from "./claimed-request-admission-boundaries";
-import type { ClockPort, OperationControl, OwnershipPort } from "./delivery-ports";
+import type {
+  ClockPort,
+  NativeQueueAdmissionPort,
+  OperationControl,
+  OwnershipPort,
+} from "./delivery-ports";
 import type { CommittedRequestNotificationPort } from "./request-notification-port";
 import {
   type NativeSteerAdmission,
@@ -33,6 +38,7 @@ import { operationControlStopped } from "./safe-clock";
 export interface ClaimedSessionRequestAdmissionPorts {
   readonly requests: RequestAdmissionPersistencePort;
   readonly nativeSteer: NativeSteerAdmissionPort;
+  readonly nativeQueue?: NativeQueueAdmissionPort;
   readonly ownership: OwnershipPort;
   readonly notifications: CommittedRequestNotificationPort;
   readonly clock: ClockPort;
@@ -71,15 +77,35 @@ async function performNativeSteer(
   signal: AbortSignal,
 ): Promise<NativeSteerAdmission | undefined> {
   if (signal.aborted) return undefined;
+  const nativeQueue = ports.nativeQueue;
+  if (input.request.deliveryMode === "queue" && !nativeQueue) return undefined;
   try {
-    const settlement = await runUntilAborted(signal, () =>
-      ports.nativeSteer.steerRequest({
-        targetSessionId: input.request.targetSessionId,
-        nativeMessageId: input.request.nativeMessageId,
-        envelope: input.envelope,
-        abort: signal,
-      }),
-    );
+    let submit: () => Promise<NativeSteerAdmission>;
+    if (input.request.deliveryMode === "queue") {
+      if (!nativeQueue) return undefined;
+      submit = () =>
+        nativeQueue
+          .queueMessage({
+            targetSessionId: input.request.targetSessionId,
+            nativeMessageId: input.request.nativeMessageId,
+            envelope: input.envelope,
+            abort: signal,
+          })
+          .then((value) =>
+            value.kind === "public_message"
+              ? { kind: "admitted" as const, admittedSeq: 0, observedAtMs: value.observedAtMs }
+              : value,
+          );
+    } else {
+      submit = () =>
+        ports.nativeSteer.steerRequest({
+          targetSessionId: input.request.targetSessionId,
+          nativeMessageId: input.request.nativeMessageId,
+          envelope: input.envelope,
+          abort: signal,
+        });
+    }
+    const settlement = await runUntilAborted(signal, submit);
     if (settlement.kind === "aborted") return undefined;
     if (settlement.kind === "rejected" && settlement.cause instanceof OwnershipLostFault) {
       return undefined;
@@ -99,6 +125,9 @@ async function admitClaimedSessionRequestInternal(
 ): Promise<DomainResult<ClaimedSessionRequestAdmissionOutcome>> {
   if (!validAdmissionInput(input)) {
     return domainFailure("state_conflict", "Claimed request admission input is malformed.", false);
+  }
+  if (input.request.deliveryMode === "queue" && !ports.nativeQueue) {
+    return failure("storage_unavailable");
   }
   if (input.effectSignal.aborted) return failure("ownership_lost");
   if (stopped(ports, input.control) && input.callerAbortPersistsUnknown !== true)

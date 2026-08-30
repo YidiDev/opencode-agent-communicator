@@ -47,7 +47,9 @@ export type {
   SessionStartPorts,
 } from "./session-start-application";
 
-function validateArguments(args: SessionStartArguments): DomainResult<ValidatedStartArguments> {
+export function validateSessionStartArguments(
+  args: SessionStartArguments,
+): DomainResult<ValidatedStartArguments> {
   const key = validateStartIdempotencyKey(args.idempotency_key);
   if (!key.ok) return domainFailure("invalid_arguments", key.message, false);
   const message = validateStartInitialMessage(args.initial_message);
@@ -70,7 +72,7 @@ function validateArguments(args: SessionStartArguments): DomainResult<ValidatedS
   };
 }
 
-function policyFailure(
+export function sessionStartPolicyFailure(
   policy: SessionStartPolicy,
   input: ValidatedStartArguments,
 ): DomainResult<never> | undefined {
@@ -89,7 +91,7 @@ function policyFailure(
   return undefined;
 }
 
-async function callerVisible(
+export async function sessionStartCallerVisible(
   ports: SessionStartPorts,
   context: SessionStartContext,
 ): Promise<DomainResult<true>> {
@@ -117,7 +119,7 @@ async function callerVisible(
   }
 }
 
-function validControl(ports: SessionStartPorts, context: SessionStartContext) {
+export function validSessionStartControl(ports: SessionStartPorts, context: SessionStartContext) {
   if (!Number.isSafeInteger(context.deadlineMs) || context.deadlineMs < 0) return undefined;
   return createLinkedEffectControl({
     signals: [context.abort],
@@ -126,7 +128,9 @@ function validControl(ports: SessionStartPorts, context: SessionStartContext) {
   });
 }
 
-async function acquireStartToken(ports: SessionStartPorts): Promise<DomainResult<FencingToken>> {
+export async function acquireSessionStartToken(
+  ports: SessionStartPorts,
+): Promise<DomainResult<FencingToken>> {
   try {
     return { ok: true, value: communicatorLifecycleFencingToken(ports.readiness) };
   } catch (cause: unknown) {
@@ -136,7 +140,7 @@ async function acquireStartToken(ports: SessionStartPorts): Promise<DomainResult
   }
 }
 
-async function recursionAllowed(
+export async function sessionStartRecursionAllowed(
   ports: SessionStartPorts,
   context: SessionStartContext,
   token: FencingToken,
@@ -220,7 +224,7 @@ async function prepareStart(
   return { ok: true, value: { operation: prepared.operation, argumentsSha256 } };
 }
 
-async function executeStartEffects(
+export async function executeStartEffects(
   ports: SessionStartPorts,
   context: SessionStartContext,
   token: FencingToken,
@@ -241,11 +245,11 @@ export async function startSession(
   args: SessionStartArguments,
 ): Promise<DomainResult<StartOperation>> {
   assertCommunicatorReady(ports.readiness);
-  const validated = validateArguments(args);
+  const validated = validateSessionStartArguments(args);
   if (!validated.ok) return validated;
-  const denied = policyFailure(ports.policy, validated.value);
+  const denied = sessionStartPolicyFailure(ports.policy, validated.value);
   if (denied) return denied;
-  const control = validControl(ports, context);
+  const control = validSessionStartControl(ports, context);
   if (!control)
     return domainFailure("invalid_arguments", "Session-start deadline control is invalid.", false);
   const linkedContext = { ...context, abort: control.signal };
@@ -256,9 +260,9 @@ export async function startSession(
         "The session-start invocation deadline elapsed.",
         false,
       );
-    const visible = await callerVisible(ports, linkedContext);
+    const visible = await sessionStartCallerVisible(ports, linkedContext);
     if (!visible.ok) return visible;
-    const token = await acquireStartToken(ports);
+    const token = await acquireSessionStartToken(ports);
     if (!token.ok) return token;
     try {
       if ((await ports.ownership.isCurrent(token.value)) !== true) {
@@ -269,7 +273,7 @@ export async function startSession(
       stopCommunicatorForOwnershipLoss(ports.readiness);
       return startStoreFailure("ownership_lost");
     }
-    const recursion = await recursionAllowed(ports, linkedContext, token.value);
+    const recursion = await sessionStartRecursionAllowed(ports, linkedContext, token.value);
     if (!recursion.ok) return recursion;
     const prepared = await prepareStart(ports, linkedContext, token.value, validated.value);
     if (!prepared.ok) return prepared;

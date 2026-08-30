@@ -126,6 +126,8 @@ type SafeRequestMetadataKey =
   | "kind"
   | "resolutionState"
   | "deliveryState"
+  | "deliveryMode"
+  | "linkedStartOperationId"
   | "resultState"
   | "sourceSessionId"
   | "targetSessionId"

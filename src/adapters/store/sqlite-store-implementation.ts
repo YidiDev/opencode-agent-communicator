@@ -32,13 +32,38 @@ import type {
   RequestTerminalPersistencePort,
   RequestTransitionInput,
 } from "../../application/request-ports";
+import type {
+  PrepareSessionRequestStartInput,
+  SessionRequestStartPersistencePort,
+  SessionRequestStartStoreResult,
+} from "../../application/session-start-ports";
 import type { SessionStopPersistencePort } from "../../application/session-stop-ports";
 import type { DeliveryMetadata, DeliveryParticipantRole } from "../../domain/deliveries";
+import { validateRequestId } from "../../domain/generated-ids";
 import type { FencingToken } from "../../domain/ownership";
 import type { SessionId } from "../../domain/sessions";
 import type { WorkspaceKey } from "../../domain/workspaces";
 import { SqliteStoreCore } from "./sqlite-store-core";
+import {
+  hydrateStartOperation,
+  type StartOperationRow,
+  startOperationColumns,
+} from "./start-operation-rows";
 import type { StoreStorageDiagnostics } from "./store-maintenance-repository";
+
+type CompositeFailureCode = Extract<SessionRequestStartStoreResult, { readonly ok: false }>["code"];
+
+class CompositePreparationRejected extends Error {
+  constructor(readonly code: CompositeFailureCode) {
+    super("Composite start/request preparation was rejected.");
+  }
+}
+
+function requestIdForStart(operationId: string) {
+  const requestId = validateRequestId(`req_${operationId.slice(3)}`);
+  if (!requestId.ok) throw new Error("Stored start operation could not bind its linked request.");
+  return requestId.value;
+}
 
 export class LinuxBunSqliteStore
   extends SqliteStoreCore
@@ -56,8 +81,134 @@ export class LinuxBunSqliteStore
     SessionStopPersistencePort,
     ParticipantDeletionPersistencePort,
     DeliveryRetentionPersistencePort,
-    AdvisoryLockPersistencePort
+    AdvisoryLockPersistencePort,
+    SessionRequestStartPersistencePort
 {
+  async readSessionRequestStartByOperation(
+    input: Parameters<
+      NonNullable<SessionRequestStartPersistencePort["readSessionRequestStartByOperation"]>
+    >[0],
+  ): ReturnType<
+    NonNullable<SessionRequestStartPersistencePort["readSessionRequestStartByOperation"]>
+  > {
+    this.assertOpen();
+    return this.access.inspect(() => {
+      this.ownershipRepository.assertOrdinaryWorkAllowed(input.fencingToken);
+      if (input.workspaceKey !== this.context.workspaceKey) return undefined;
+      const row = this.context.database
+        .query<StartOperationRow, [string, string]>(
+          `SELECT ${startOperationColumns} FROM start_operations
+           WHERE workspace_key = ? AND id = ?`,
+        )
+        .get(input.workspaceKey, input.operationId);
+      if (!row) return undefined;
+      const operation = hydrateStartOperation(row);
+      const request = this.requestRepository.getRequestMetadata({
+        fencingToken: input.fencingToken,
+        workspaceKey: input.workspaceKey,
+        requestId: requestIdForStart(operation.id),
+      });
+      return request?.linkedStartOperationId === operation.id ? { operation, request } : undefined;
+    });
+  }
+
+  async readSessionRequestStart(
+    input: Parameters<SessionRequestStartPersistencePort["readSessionRequestStart"]>[0],
+  ): ReturnType<SessionRequestStartPersistencePort["readSessionRequestStart"]> {
+    this.assertOpen();
+    return this.access.inspect(() => {
+      this.ownershipRepository.assertOrdinaryWorkAllowed(input.fencingToken);
+      if (input.workspaceKey !== this.context.workspaceKey) {
+        return { ok: false as const, code: "state_conflict" as const };
+      }
+      const row = this.context.database
+        .query<
+          StartOperationRow & { readonly idempotencyDigest: string },
+          [string, string, string]
+        >(
+          `SELECT ${startOperationColumns},
+             COALESCE(idempotency_arguments_sha256, arguments_sha256) AS idempotencyDigest
+           FROM start_operations
+           WHERE workspace_key = ? AND source_session_id = ? AND idempotency_key = ?`,
+        )
+        .get(input.workspaceKey, input.sourceSessionId, input.idempotencyKey);
+      if (!row) return { ok: true as const, found: false as const };
+      if (row.idempotencyDigest !== input.idempotencyArgumentsSha256) {
+        return { ok: false as const, code: "idempotency_conflict" as const };
+      }
+      const operation = hydrateStartOperation(row);
+      const request = this.requestRepository.getRequestMetadata({
+        fencingToken: input.fencingToken,
+        workspaceKey: input.workspaceKey,
+        requestId: requestIdForStart(operation.id),
+      });
+      return request?.linkedStartOperationId === operation.id
+        ? { ok: true as const, found: true as const, operation, request }
+        : { ok: false as const, code: "state_conflict" as const };
+    });
+  }
+
+  async createOrResumeSessionRequestStart(
+    input: PrepareSessionRequestStartInput,
+  ): Promise<SessionRequestStartStoreResult> {
+    this.assertOpen();
+    return this.access.mutate(() => {
+      if (
+        input.request.creationOperationId !== input.start.operationId ||
+        input.request.deliveryMode !== "initial" ||
+        input.request.linkedStartOperationId !== input.start.operationId ||
+        input.request.request.workspaceKey !== input.start.workspaceKey ||
+        input.request.request.sourceSessionId !== input.start.sourceSessionId ||
+        input.request.request.targetSessionId !== input.start.sessionId ||
+        input.request.request.nativeMessageId !== input.start.nativeMessageId
+      ) {
+        return { ok: false as const, code: "state_conflict" as const };
+      }
+      try {
+        return this.context.database
+          .transaction(() => {
+            const start = this.startRepository.createOrResumeInTransaction(input.start);
+            if (!start.ok) throw new CompositePreparationRejected(start.code);
+
+            // An exact idempotent replay must return the already-linked request rather than
+            // attempting to insert candidate IDs generated by the new invocation.
+            if (start.operation.id !== input.start.operationId) {
+              const request = this.requestRepository.getRequestMetadata({
+                fencingToken: input.start.fencingToken,
+                workspaceKey: input.start.workspaceKey,
+                requestId: requestIdForStart(start.operation.id),
+              });
+              if (!request || request.linkedStartOperationId !== start.operation.id) {
+                throw new CompositePreparationRejected("state_conflict");
+              }
+              return {
+                ok: true as const,
+                operation: start.operation,
+                request,
+                idempotencyArgumentsSha256:
+                  input.start.idempotencyArgumentsSha256 ?? input.start.argumentsSha256,
+              };
+            }
+
+            const request = this.requestRepository.createPreparedInTransaction(input.request);
+            if (!request.ok) throw new CompositePreparationRejected(request.code);
+            return {
+              ok: true as const,
+              operation: start.operation,
+              request: request.request,
+              idempotencyArgumentsSha256:
+                input.start.idempotencyArgumentsSha256 ?? input.start.argumentsSha256,
+            };
+          })
+          .immediate();
+      } catch (cause: unknown) {
+        if (cause instanceof CompositePreparationRejected) {
+          return { ok: false as const, code: cause.code };
+        }
+        throw cause;
+      }
+    });
+  }
   async publish(
     input: Parameters<AdvisoryLockPersistencePort["publish"]>[0],
   ): ReturnType<AdvisoryLockPersistencePort["publish"]> {
@@ -116,6 +267,11 @@ export class LinuxBunSqliteStore
   ): Promise<RequestCreationReconciliation> {
     this.assertOpen();
     return this.access.inspect(() => this.requestRepository.reconcilePreparedCreation(input));
+  }
+
+  async getRequestMetadata(input: RequestTransitionInput) {
+    this.assertOpen();
+    return this.access.inspect(() => this.requestRepository.getRequestMetadata(input));
   }
 
   async cancelPrepared(input: DeliveryTransitionInput): Promise<DeliveryStoreResult> {

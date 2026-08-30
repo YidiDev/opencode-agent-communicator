@@ -61,6 +61,8 @@ describe("packed npm archive", () => {
       "session_request_get",
       "session_request_ack",
       "session_request_cancel",
+      "session_request_send",
+      "session_request_start",
       "session_stop",
       "session_start",
       "session_export",
@@ -91,7 +93,7 @@ describe("packed npm archive", () => {
       cpu: string[];
     };
     expect(metadata).toMatchObject({
-      version: "0.3.0",
+      version: "0.4.0",
       exports: { ".": "./src/index.ts" },
       os: ["linux"],
       cpu: ["x64"],

@@ -1,6 +1,6 @@
 {
   "name": "opencode-agent-communicator",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Durable communication between independent OpenCode agent sessions.",
   "license": "MIT",
   "author": "YidiDev",
@@ -65,6 +65,7 @@
     "test:coverage": "bun test test/unit test/integration test/black-box --coverage --coverage-reporter=lcov",
     "test:coverage:branches": "bun tools/run-branch-coverage.ts",
     "test:live": "bun test test/live",
+    "test:model-eval": "bun test/model-eval/run.ts",
     "verify:package": "node tools/verify-package.mjs",
     "test:black-box": "bun test test/black-box",
     "prepack": "node tools/verify-package.mjs"

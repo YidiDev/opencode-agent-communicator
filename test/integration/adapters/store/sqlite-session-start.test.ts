@@ -4,8 +4,72 @@ import { dirname } from "node:path";
 
 import { LinuxBunSqliteStore } from "../../../../src/adapters/store/sqlite-store";
 import { recoverSessionStarts } from "../../../../src/application/recover-session-starts";
+import { validateRequestId } from "../../../../src/domain/generated-ids";
 import type { Sha256Digest } from "../../../../src/domain/message-payload";
 import { ids, limits, openStore, source, workspace } from "./sqlite-session-start-support";
+
+test("rolls back the entire linked start when request preparation fails", async () => {
+  const store = openStore();
+  try {
+    const fencingToken = await store.acquire();
+    const generated = ids(900);
+    const requestId = validateRequestId(`req_${generated.operationId.slice(3)}`);
+    if (!requestId.ok) throw new Error("invalid fixture request id");
+    const digest = "9".repeat(64) as Sha256Digest;
+    expect(
+      await store.createOrResumeSessionRequestStart({
+        start: {
+          fencingToken,
+          workspaceKey: workspace,
+          sourceSessionId: source,
+          ...generated,
+          argumentsSha256: digest,
+          idempotencyArgumentsSha256: digest,
+          arguments: { idempotencyKey: "composite:rollback", initialMessage: "envelope" },
+          limits,
+          nowMs: 10_000,
+        },
+        request: {
+          fencingToken,
+          creationOperationId: generated.operationId,
+          deliveryMode: "initial",
+          linkedStartOperationId: generated.operationId,
+          request: {
+            id: requestId.value,
+            workspaceKey: workspace,
+            sourceSessionId: source,
+            targetSessionId: generated.sessionId,
+            nativeMessageId: generated.nativeMessageId,
+            deliveryMode: "initial",
+            linkedStartOperationId: generated.operationId,
+            kind: "wait",
+            resolutionState: "pending",
+            deliveryState: "prepared",
+            resultState: "none",
+            payloadByteLength: 2,
+            payloadSha256: digest,
+            createdAtMs: 10_000,
+            updatedAtMs: 10_000,
+            deadlineAtMs: 20_000,
+          },
+          payloadJson: "{}",
+          envelopeJson: "{}",
+        },
+      }),
+    ).toEqual({ ok: false, code: "state_conflict" });
+    expect(
+      await store.readSessionRequestStart({
+        fencingToken,
+        workspaceKey: workspace,
+        sourceSessionId: source,
+        idempotencyKey: "composite:rollback",
+        idempotencyArgumentsSha256: digest,
+      }),
+    ).toEqual({ ok: true, found: false });
+  } finally {
+    store.close();
+  }
+});
 
 test("deletion candidates include only created managed provenance", async () => {
   const store = openStore();

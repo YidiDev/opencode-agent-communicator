@@ -1,0 +1,73 @@
+name: OpenCode free-model evaluation
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Reviewed tokenless free model, or automatic fallback selection
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - nemotron-3.5-lightning-free
+          - mimo-v2.5-free
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-free-model-evaluation
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    name: Packed plugin with tokenless free model
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Bun 1.4.0
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Require certified host and package policy
+        run: |
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+          test "$(bun --version)" = 1.4.0
+          test "$(./node_modules/.bin/opencode --version)" = "$(node -p "require('./package.json').devDependencies['opencode-ai']")"
+          bun run verify:package
+      - name: Select requested model
+        if: ${{ inputs.model != '' && inputs.model != 'auto' }}
+        env:
+          REQUESTED_MODEL: ${{ inputs.model }}
+        run: printf 'OPENCODE_FREE_MODEL=%s\n' "$REQUESTED_MODEL" >> "$GITHUB_ENV"
+      - name: Run packed multi-session evaluation
+        env:
+          MODEL_EVAL_ARTIFACT_DIR: model-eval-artifacts
+        run: bun run test:model-eval
+      - name: Publish evaluation summary
+        if: ${{ always() }}
+        run: |
+          if test -f model-eval-artifacts/summary.md; then
+            printf '\n' >> "$GITHUB_STEP_SUMMARY"
+            while IFS= read -r line; do printf '%s\n' "$line" >> "$GITHUB_STEP_SUMMARY"; done < model-eval-artifacts/summary.md
+          else
+            printf '## OpenCode free-model evaluation\n\nNo summary artifact was produced.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload sanitized evaluation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: free-model-evaluation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: model-eval-artifacts/
+          if-no-files-found: warn
+          retention-days: 14

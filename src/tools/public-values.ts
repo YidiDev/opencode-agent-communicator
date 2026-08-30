@@ -9,7 +9,11 @@ import type {
 } from "../application/request-ports";
 import type { AdvisoryLock } from "../domain/advisory-locks";
 import type { DeliveryMetadata, ParticipantDelivery } from "../domain/deliveries";
-import type { PendingRequestPayload, RetainedRequestResult } from "../domain/request-types";
+import type {
+  PendingRequestPayload,
+  RequestMetadata,
+  RetainedRequestResult,
+} from "../domain/request-types";
 import type { SessionExportSummary } from "../domain/session-export";
 import type { StartOperation } from "../domain/session-start";
 
@@ -132,6 +136,10 @@ export function publicRequestMetadata(value: ParticipantRequestMetadata): Record
     kind: value.kind,
     resolution_state: value.resolutionState,
     delivery_state: value.deliveryState,
+    delivery_mode: value.deliveryMode,
+    ...(value.linkedStartOperationId === undefined
+      ? {}
+      : { linked_start_operation_id: value.linkedStartOperationId }),
     result_state: value.resultState,
     source_session_id: value.sourceSessionId,
     target_session_id: value.targetSessionId,
@@ -161,6 +169,14 @@ export function publicRequestMetadata(value: ParticipantRequestMetadata): Record
       : { result_expired_at_ms: value.resultExpiredAtMs }),
     ...(value.acknowledgedAtMs === undefined ? {} : { acknowledged_at_ms: value.acknowledgedAtMs }),
   };
+}
+
+export function publicCreatedRequest(value: RequestMetadata): Record<string, unknown> {
+  return publicRequestMetadata({
+    requestId: value.id,
+    participantRole: "source",
+    ...value,
+  });
 }
 
 function publicRequestPayload(value: PendingRequestPayload): Record<string, unknown> {

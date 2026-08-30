@@ -4,6 +4,7 @@ import { hasRequestIdentity, snapshotRequestIdentity } from "../domain/request-i
 import { isCoherentRequestMetadata } from "../domain/request-metadata";
 import type { RequestMetadata } from "../domain/request-types";
 import { type DomainResult, domainFailure } from "../domain/results";
+import { isCoherentStartOperation } from "../domain/session-start";
 import { runUntilAborted } from "./abortable-operation";
 import type {
   SessionRequestRecoveryPhaseInput,
@@ -25,6 +26,7 @@ import {
 } from "./session-request-recovery-support";
 import { snapshotDataRecord, snapshotDenseArray } from "./strict-port-boundaries";
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one linear stale-request classifier keeps ownership, linked-start correlation, and the terminal commit auditable.
 async function classifyOneStaleRequest(
   ports: SessionRequestRecoveryPorts,
   input: SessionRequestRecoveryPhaseInput,
@@ -44,14 +46,67 @@ async function classifyOneStaleRequest(
     );
   }
   if (current.value !== true) return requestRecoveryFailure("ownership_lost");
+  const base = {
+    fencingToken: input.fencingToken,
+    workspaceKey: input.workspaceKey,
+    requestId: request.id,
+  };
+  let completionInput:
+    | (typeof base & { readonly outcome: "delivery_unknown" | "delivery_failed" })
+    | (typeof base & {
+        readonly outcome: "admitted";
+        readonly nativeMessageId: RequestMetadata["nativeMessageId"];
+        readonly admittedSeq: number;
+        readonly evidenceObservedAtMs: number;
+      }) = { ...base, outcome: "delivery_unknown" };
+  if (request.deliveryMode === "initial") {
+    const readLinked = ports.requestStarts?.readSessionRequestStartByOperation;
+    const linkedStartOperationId = request.linkedStartOperationId;
+    if (!readLinked || !linkedStartOperationId) {
+      return requestRecoveryFailure("storage_unavailable");
+    }
+    const linkedSettlement = await runUntilAborted(input.effectSignal, () =>
+      readLinked({
+        fencingToken: input.fencingToken,
+        workspaceKey: input.workspaceKey,
+        operationId: linkedStartOperationId,
+      }),
+    );
+    if (linkedSettlement.kind !== "settled" || !linkedSettlement.value) {
+      return requestRecoveryFailure(
+        linkedSettlement.kind === "aborted" ? "ownership_lost" : "storage_unavailable",
+      );
+    }
+    const operation = linkedSettlement.value.operation;
+    if (
+      !isCoherentStartOperation(operation) ||
+      operation.id !== linkedStartOperationId ||
+      operation.workspaceKey !== request.workspaceKey ||
+      operation.sourceSessionId !== request.sourceSessionId ||
+      operation.sessionId !== request.targetSessionId ||
+      operation.nativeMessageId !== request.nativeMessageId
+    ) {
+      return requestRecoveryFailure("storage_unavailable");
+    }
+    if (operation.admissionState === "admitted") {
+      completionInput = {
+        ...base,
+        outcome: "admitted",
+        nativeMessageId: request.nativeMessageId,
+        admittedSeq: 0,
+        evidenceObservedAtMs: ports.clock.nowMs(),
+      };
+    } else if (operation.admissionState === "failed" || operation.creationState === "failed") {
+      completionInput = { ...base, outcome: "delivery_failed" };
+    } else if (operation.admissionState !== "admission_unknown") {
+      return requestRecoveryFailure("storage_unavailable");
+    }
+  }
   let rawCompletion: unknown;
   try {
     const settlement = await runUntilAborted(input.effectSignal, () =>
       ports.requests.completeDelivery({
-        fencingToken: input.fencingToken,
-        workspaceKey: input.workspaceKey,
-        requestId: request.id,
-        outcome: "delivery_unknown",
+        ...completionInput,
       }),
     );
     if (settlement.kind === "aborted") return requestRecoveryFailure("ownership_lost");
@@ -79,7 +134,7 @@ async function classifyOneStaleRequest(
     !committed ||
     !isCoherentRequestMetadata(committed) ||
     !hasRequestIdentity(snapshotRequestIdentity(request), committed) ||
-    committed.deliveryState !== "delivery_unknown"
+    committed.deliveryState !== completionInput.outcome
   ) {
     return requestRecoveryFailure("storage_unavailable");
   }

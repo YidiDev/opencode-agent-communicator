@@ -21,6 +21,10 @@ function constructApprovedProjection<
     targetSessionId: request.targetSessionId,
     resolutionState: request.resolutionState,
     deliveryState: request.deliveryState,
+    ...(request.deliveryMode === undefined ? {} : { deliveryMode: request.deliveryMode }),
+    ...(request.linkedStartOperationId === undefined
+      ? {}
+      : { linkedStartOperationId: request.linkedStartOperationId }),
     resultState: request.resultState,
     createdAtMs: request.createdAtMs,
     updatedAtMs: request.updatedAtMs,

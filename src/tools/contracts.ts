@@ -18,6 +18,7 @@ import {
 } from "../domain/session-start";
 import { validateSessionStopReason } from "../domain/session-stop";
 import { validateSessionId } from "../domain/sessions";
+import { immediateRequestSchema } from "./request-contracts";
 
 export const sessionListArgumentsSchema = z
   .object({
@@ -145,6 +146,11 @@ export const sessionStartArgumentsSchema = z
     model: startField(validateStartModel).optional(),
   })
   .strict();
+export const sessionRequestStartArgumentsSchema = sessionStartArgumentsSchema
+  .extend({
+    request: immediateRequestSchema,
+  })
+  .strict();
 
 export const sessionExportArgumentsSchema = z
   .object({
@@ -173,6 +179,7 @@ export type SessionSendToolArguments = z.infer<typeof sessionSendArgumentsSchema
 export type SessionDeliveryGetToolArguments = z.infer<typeof sessionDeliveryGetArgumentsSchema>;
 export type SessionStopToolArguments = z.infer<typeof sessionStopArgumentsSchema>;
 export type SessionStartToolArguments = z.infer<typeof sessionStartArgumentsSchema>;
+export type SessionRequestStartToolArguments = z.infer<typeof sessionRequestStartArgumentsSchema>;
 export type SessionExportToolArguments = z.infer<typeof sessionExportArgumentsSchema>;
 
 export const sessionListFailureCodes = [

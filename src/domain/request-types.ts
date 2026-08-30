@@ -1,4 +1,4 @@
-import type { NativeMessageId, RequestId } from "./generated-ids";
+import type { NativeMessageId, RequestId, StartOperationId } from "./generated-ids";
 import type { Sha256Digest } from "./message-payload";
 import type { SessionId } from "./sessions";
 import type { WorkspaceKey } from "./workspaces";
@@ -38,6 +38,8 @@ export const requestResultStates = ["none", "available", "expired", "acknowledge
 export type RequestResultState = (typeof requestResultStates)[number];
 export type RequestParticipantRole = "source" | "target";
 export type RequestListRole = "inbox" | "outbox" | "all";
+export const requestDeliveryModes = ["steer", "queue", "initial"] as const;
+export type RequestDeliveryMode = (typeof requestDeliveryModes)[number];
 
 export interface AskQuestion {
   readonly prompt: string;
@@ -197,6 +199,8 @@ export interface RequestMetadataBase {
   readonly sourceSessionId: SessionId;
   readonly targetSessionId: SessionId;
   readonly nativeMessageId: NativeMessageId;
+  readonly deliveryMode?: RequestDeliveryMode;
+  readonly linkedStartOperationId?: StartOperationId;
   readonly payloadByteLength: number;
   readonly createdAtMs: number;
   readonly updatedAtMs: number;

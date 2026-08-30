@@ -9,6 +9,8 @@ const requestMetadataKeys = [
   "sourceSessionId",
   "targetSessionId",
   "nativeMessageId",
+  "deliveryMode",
+  "linkedStartOperationId",
   "kind",
   "resolutionState",
   "deliveryState",
@@ -32,7 +34,21 @@ const requestMetadataKeys = [
   "acknowledgedAtMs",
   "admissionEvidence",
 ] as const;
-const requiredRequestMetadataKeys = requestMetadataKeys.slice(0, 13);
+const requiredRequestMetadataKeys = [
+  "id",
+  "workspaceKey",
+  "sourceSessionId",
+  "targetSessionId",
+  "nativeMessageId",
+  "kind",
+  "resolutionState",
+  "deliveryState",
+  "resultState",
+  "payloadByteLength",
+  "createdAtMs",
+  "updatedAtMs",
+  "deadlineAtMs",
+] as const;
 
 export function inspectRequestMetadata(value: unknown): RequestMetadata | undefined {
   const request = snapshotDataRecord(value, requestMetadataKeys.length);

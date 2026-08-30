@@ -139,14 +139,14 @@ export async function runCommunicatorStartupPhases(
     requests: ports.requests,
     activity: ports.activity,
     nativeSteer: ports.nativeSteer,
+    nativeQueue: ports.nativeQueue,
+    ...(ports.requestStarts ? { requestStarts: ports.requestStarts } : {}),
     ownership: ports.ownership,
     notifications: ports.runtime,
     clock: ports.clock,
   };
   const staleMessages = await classifyStaleMessageDeliveries(messagePorts, phaseInput);
   if (!staleMessages.ok) return staleMessages;
-  const staleRequests = await classifyStaleSessionRequests(requestPorts, phaseInput);
-  if (!staleRequests.ok) return staleRequests;
   let participantDeletions: Awaited<ReturnType<typeof reconcileParticipantDeletions>>;
   try {
     participantDeletions = await reconcileParticipantDeletions(
@@ -172,7 +172,14 @@ export async function runCommunicatorStartupPhases(
     workspaceKey: input.workspaceKey,
     abort: signal,
     nativeStart: ports.nativeStart,
+    ...(ports.requestStarts ? { requestStarts: ports.requestStarts } : {}),
+    requests: ports.requests,
+    membership: ports.membership,
+    ownership: ports.ownership,
+    ...(ports.digest ? { digest: ports.digest } : {}),
   });
+  const staleRequests = await classifyStaleSessionRequests(requestPorts, phaseInput);
+  if (!staleRequests.ok) return staleRequests;
   if (operationControlStopped(ports.clock, signal, input.deadlineMs)) {
     return startupFailure("ownership_lost", "Startup ownership was lost.");
   }

@@ -27,6 +27,11 @@ export interface VerifiedRequestEnvelopeInput {
   readonly createdAtMs: number;
   readonly deadlineAtMs: number;
   readonly payload: PendingRequestPayload;
+  readonly work?: Readonly<{
+    content: string;
+    byteLength: number;
+    sha256: Sha256Digest;
+  }>;
 }
 
 export type CanonicalRequestContentValidation<Value> =
@@ -154,6 +159,7 @@ function envelopeInputRecord(input: unknown): Record<string, unknown> {
   return input;
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: exact envelope identity validation is kept in one canonical serializer.
 export async function serializeVerifiedRequestEnvelope(
   input: unknown,
   digestPort: Sha256DigestPort,
@@ -167,6 +173,7 @@ export async function serializeVerifiedRequestEnvelope(
   const createdAtMs = candidate.createdAtMs;
   const deadlineAtMs = candidate.deadlineAtMs;
   const rawPayload = candidate.payload;
+  const rawWork = candidate.work;
   const requestId = validateRequestId(rawRequestId);
   const nativeMessageId = validateNativeMessageId(rawNativeMessageId);
   const sourceSessionId = validateSessionId(rawSourceSessionId);
@@ -194,6 +201,19 @@ export async function serializeVerifiedRequestEnvelope(
   ) {
     return invalidEnvelope("deadlineAtMs must exactly bind createdAtMs to the canonical timeout.");
   }
+  let work: Record<string, unknown> | undefined;
+  if (rawWork !== undefined) {
+    if (!isEnvelopeInputRecord(rawWork) || typeof rawWork.content !== "string") {
+      return invalidEnvelope("request envelope work must be an object with string content.");
+    }
+    const bytes = new TextEncoder().encode(rawWork.content);
+    const digest = await digestMessageContent(digestPort, bytes);
+    if (rawWork.byteLength !== bytes.length || rawWork.sha256 !== digest) {
+      return invalidEnvelope("request envelope work identity is invalid.");
+    }
+    work = { content: rawWork.content, byte_length: bytes.length, sha256: digest };
+  }
+  const responseTool = payload.value.kind === "ask" ? "session_respond" : "session_signal";
   const envelope = JSON.stringify({
     protocol: requestProtocol,
     operation: payload.value.kind,
@@ -207,6 +227,8 @@ export async function serializeVerifiedRequestEnvelope(
     payload_byte_length: payload.byteLength,
     payload_sha256: payload.sha256,
     payload: payload.value,
+    response: { tool: responseTool, request_id: requestId.value },
+    ...(work === undefined ? {} : { work }),
     trust: verifiedRequestEnvelopeTrust,
   });
   if (new TextEncoder().encode(envelope).length > requestLimits.envelopeBytes) {

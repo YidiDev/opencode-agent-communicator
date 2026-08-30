@@ -1170,6 +1170,48 @@ DROP TRIGGER advisory_locks_ceiling_insert_v13;
 DROP TABLE advisory_locks;
 `,
   },
+  {
+    version: 14,
+    checksum: "sha256:605db48886f6a6f0aca23ad659a804fe8c6f5773c7ea822d81ae8a17c9f0fb6e",
+    sql: `
+ALTER TABLE start_operations ADD COLUMN idempotency_arguments_sha256 TEXT
+  CHECK (idempotency_arguments_sha256 IS NULL OR (
+    length(idempotency_arguments_sha256) = 64 AND
+    idempotency_arguments_sha256 NOT GLOB '*[^0-9a-f]*'
+  ));
+UPDATE start_operations SET idempotency_arguments_sha256 = arguments_sha256;
+ALTER TABLE requests ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'steer'
+  CHECK (delivery_mode IN ('steer','queue','initial'));
+ALTER TABLE requests ADD COLUMN linked_start_operation_id TEXT
+  CHECK (linked_start_operation_id IS NULL OR (
+    length(linked_start_operation_id) = 35 AND
+    substr(linked_start_operation_id, 1, 3) = 'op_' AND
+    substr(linked_start_operation_id, 4) NOT GLOB '*[^0-9a-f]*'
+  ));
+CREATE UNIQUE INDEX requests_linked_start_v14
+  ON requests(workspace_key, linked_start_operation_id)
+  WHERE linked_start_operation_id IS NOT NULL;
+CREATE TRIGGER requests_delivery_mode_insert_v14 BEFORE INSERT ON requests
+WHEN (NEW.delivery_mode = 'initial') <> (NEW.linked_start_operation_id IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'initial request must have exactly one linked start operation');
+END;
+CREATE TRIGGER requests_delivery_mode_update_v14
+BEFORE UPDATE OF delivery_mode, linked_start_operation_id ON requests
+WHEN (NEW.delivery_mode = 'initial') <> (NEW.linked_start_operation_id IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'initial request must have exactly one linked start operation');
+END;
+`,
+    downSql: `
+DROP TRIGGER requests_delivery_mode_update_v14;
+DROP TRIGGER requests_delivery_mode_insert_v14;
+DROP INDEX requests_linked_start_v14;
+ALTER TABLE requests DROP COLUMN linked_start_operation_id;
+ALTER TABLE requests DROP COLUMN delivery_mode;
+ALTER TABLE start_operations DROP COLUMN idempotency_arguments_sha256;
+`,
+  },
 ] as const;
 
 interface VersionRow {

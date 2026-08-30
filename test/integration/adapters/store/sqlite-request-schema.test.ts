@@ -72,7 +72,7 @@ function details(
 }
 
 describe("request migration and query plans", () => {
-  test("fresh migration records exact history and pins v1-v13 checksums", () => {
+  test("fresh migration records exact history and pins v1-v14 checksums", () => {
     const database = migratedDatabase();
     expect(sqliteStoreMigrations.map((migration) => migration.checksum)).toEqual([
       "sha256:929ff898b24a6bfefa276939fee895e41185ed9c58bd59c3f2c3359f4daa8a86",
@@ -88,6 +88,7 @@ describe("request migration and query plans", () => {
       "sha256:ed970b8cd128824271eca05049a889d225a94646c5c0f9a1810bbba788db5cf5",
       "sha256:c8d9d2485e076afb224f734525de4fdd99f5d2c2da72ed1b698275b54648e6fe",
       "sha256:ea22e80d24faff83fc4a280b5b0789ea0e56921056704e63096e1006218d3c89",
+      "sha256:605db48886f6a6f0aca23ad659a804fe8c6f5773c7ea822d81ae8a17c9f0fb6e",
     ]);
     expect(
       database
@@ -99,7 +100,7 @@ describe("request migration and query plans", () => {
     database.close(true);
   });
 
-  test("upgrades every schema prefix through v13 without losing legacy rows", () => {
+  test("upgrades every schema prefix through v14 without losing legacy rows", () => {
     for (const prefix of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) {
       const database = new Database(":memory:", { strict: true });
       database.exec("PRAGMA foreign_keys = ON");
@@ -136,7 +137,7 @@ describe("request migration and query plans", () => {
         database
           .query<{ value: number }, []>("SELECT user_version AS value FROM pragma_user_version")
           .get()?.value,
-      ).toBe(13);
+      ).toBe(14);
       expect(
         database.query<{ count: number }, []>("SELECT count(*) AS count FROM deliveries").get()
           ?.count,
@@ -149,6 +150,39 @@ describe("request migration and query plans", () => {
       }
       database.close(true);
     }
+  });
+
+  test("v14 defaults existing requests to steer delivery", () => {
+    const database = new Database(":memory:", { strict: true });
+    database.exec("PRAGMA foreign_keys = ON");
+    database.exec(`CREATE TABLE schema_migrations (
+      version INTEGER PRIMARY KEY, checksum TEXT NOT NULL,
+      applied_at_ms INTEGER NOT NULL CHECK (applied_at_ms >= 0)
+    ) STRICT;`);
+    for (const migration of sqliteStoreMigrations.slice(0, 13)) {
+      database.exec(migration.sql);
+      database.run(
+        "INSERT INTO schema_migrations(version, checksum, applied_at_ms) VALUES (?, ?, 0)",
+        [migration.version, migration.checksum],
+      );
+      database.exec(`PRAGMA user_version = ${migration.version}`);
+    }
+    database.run("INSERT INTO workspaces(workspace_key, created_at_ms) VALUES ('legacy', 0)");
+    database.run(
+      `INSERT INTO requests(id, workspace_key, source_session_id, target_session_id,
+      native_message_id, kind, resolution_state, delivery_state, result_state, payload_byte_length,
+      created_at_ms, updated_at_ms, deadline_at_ms, resolved_at_ms)
+      VALUES (?, 'legacy', 'ses_source', 'ses_target', ?, 'wait', 'cancelled', 'prepared', 'none',
+      1, 1, 1, 1001, 1)`,
+      [`req_${"a".repeat(32)}`, `msg_${"b".repeat(32)}`],
+    );
+    applyMigrations(database, 10, 0);
+    expect(
+      database
+        .query<{ deliveryMode: string }, []>("SELECT delivery_mode AS deliveryMode FROM requests")
+        .get()?.deliveryMode,
+    ).toBe("steer");
+    database.close(true);
   });
 
   test("binds migrations four through eight and reverses their additive objects", () => {

@@ -28,6 +28,30 @@ function exactEnvelope(
   payload: unknown,
   envelopeJson: string,
 ): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(envelopeJson);
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
+  const candidate = parsed as Record<string, unknown>;
+  let work: Record<string, unknown> | undefined;
+  if (candidate.work !== undefined) {
+    if (
+      typeof candidate.work !== "object" ||
+      candidate.work === null ||
+      Array.isArray(candidate.work)
+    )
+      return false;
+    const raw = candidate.work as Record<string, unknown>;
+    if (typeof raw.content !== "string") return false;
+    const bytes = new TextEncoder().encode(raw.content);
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (raw.byte_length !== bytes.length || raw.sha256 !== digest) return false;
+    work = { content: raw.content, byte_length: bytes.length, sha256: digest };
+  }
+  const responseTool = request.kind === "ask" ? "session_respond" : "session_signal";
   const expected = {
     protocol: requestProtocol,
     operation: request.kind,
@@ -41,6 +65,8 @@ function exactEnvelope(
     payload_byte_length: request.payloadByteLength,
     payload_sha256: request.payloadSha256,
     payload,
+    response: { tool: responseTool, request_id: request.id },
+    ...(work === undefined ? {} : { work }),
     trust: verifiedRequestEnvelopeTrust,
   };
   return JSON.stringify(expected) === envelopeJson;

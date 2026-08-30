@@ -6,6 +6,24 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-28
+
+### Added
+
+- Added immediate-return `session_request_send` and `session_request_start` workflows that persist a
+  recoverable ask or wait before one canonical queue or initial-message effect.
+- Added SQLite schema v14 request delivery modes (`steer`, `queue`, and `initial`) with optional
+  linked start-operation identity; existing requests migrate to `steer`.
+
+### Changed
+
+- Managed request-start authorization now precedes one fenced SQLite transaction for the start and
+  linked request, with complete-argument replay binding and no-replay ambiguity recovery.
+- Canonical request envelopes now name the matching response tool and request ID and may carry
+  digest-bound untrusted work content without implying authorization.
+- Request list/get metadata exposes delivery mode and linked start operation ID. Existing blocking
+  `session_ask` and `session_wait` behavior remains active-only and unchanged.
+
 ## [0.3.0] - 2026-08-28
 
 ### Added
@@ -166,7 +184,8 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.3...v0.2.4

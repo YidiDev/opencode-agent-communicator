@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { parseRequestListCursor } from "../application/request-list-cursor";
 import { validateRequestId } from "../domain/generated-ids";
+import { validateMessageContent } from "../domain/message-payload";
 import { requestLimits } from "../domain/request-constants";
 import {
   validateAskRequestPayload,
@@ -35,6 +36,65 @@ const askQuestionSchema = z
     options: z.array(z.string()).max(requestLimits.maximumOptionsPerQuestion),
     multiple: z.boolean().optional(),
     allow_custom: z.boolean().optional(),
+  })
+  .strict();
+
+export const immediateAskRequestSchema = z
+  .object({
+    kind: z.literal("ask"),
+    questions: z
+      .array(askQuestionSchema)
+      .min(requestLimits.minimumQuestions)
+      .max(requestLimits.maximumQuestions),
+    timeout_seconds: z
+      .number()
+      .int()
+      .min(requestLimits.minimumTimeoutSeconds)
+      .max(requestLimits.maximumTimeoutSeconds),
+  })
+  .strict();
+export const immediateWaitRequestSchema = z
+  .object({
+    kind: z.literal("wait"),
+    milestone: z.string(),
+    timeout_seconds: z
+      .number()
+      .int()
+      .min(requestLimits.minimumTimeoutSeconds)
+      .max(requestLimits.maximumTimeoutSeconds),
+  })
+  .strict();
+export const immediateRequestSchema = z
+  .discriminatedUnion("kind", [immediateAskRequestSchema, immediateWaitRequestSchema])
+  .superRefine((value, context) => {
+    const validation =
+      value.kind === "ask"
+        ? validateAskRequestPayload({
+            kind: "ask",
+            questions: value.questions.map((question) => ({
+              prompt: question.prompt,
+              options: question.options,
+              multiple: question.multiple ?? false,
+              allowCustom: question.allow_custom ?? false,
+            })),
+            timeoutSeconds: value.timeout_seconds,
+          })
+        : validateWaitRequestPayload({
+            kind: "wait",
+            milestone: value.milestone,
+            timeoutSeconds: value.timeout_seconds,
+          });
+    if (!validation.ok) issue(context, validation.message);
+  });
+
+export const sessionRequestSendArgumentsSchema = z
+  .object({
+    session_id: sessionIdSchema(),
+    content: z.string().superRefine((value, context) => {
+      const validation = validateMessageContent(value);
+      if (!validation.ok) issue(context, validation.message);
+    }),
+    request: immediateRequestSchema,
   })
   .strict();
 
@@ -135,6 +195,7 @@ export const sessionRequestAckArgumentsSchema = sessionRequestGetArgumentsSchema
 export const sessionRequestCancelArgumentsSchema = sessionRequestGetArgumentsSchema;
 
 export type SessionAskToolArguments = z.infer<typeof sessionAskArgumentsSchema>;
+export type SessionRequestSendToolArguments = z.infer<typeof sessionRequestSendArgumentsSchema>;
 export type SessionRespondToolArguments = z.infer<typeof sessionRespondArgumentsSchema>;
 export type SessionWaitToolArguments = z.infer<typeof sessionWaitArgumentsSchema>;
 export type SessionSignalToolArguments = z.infer<typeof sessionSignalArgumentsSchema>;
@@ -238,6 +299,7 @@ const requestCancelFailures = [
 
 type RequestToolName =
   | "session_ask"
+  | "session_request_send"
   | "session_respond"
   | "session_wait"
   | "session_signal"
@@ -248,6 +310,7 @@ type RequestToolName =
 
 export const requestToolFailureCodes = {
   session_ask: blockingRequestFailures,
+  session_request_send: blockingRequestFailures,
   session_respond: requestMutationFailures,
   session_wait: blockingRequestFailures,
   session_signal: requestMutationFailures,
@@ -258,6 +321,7 @@ export const requestToolFailureCodes = {
 } as const satisfies Record<RequestToolName, readonly DomainFailureCode[]>;
 
 export const sessionBlockingRequestFailureCodes = requestToolFailureCodes.session_ask;
+export const sessionRequestSendFailureCodes = requestToolFailureCodes.session_request_send;
 export const sessionRespondFailureCodes = requestToolFailureCodes.session_respond;
 export const sessionSignalFailureCodes = requestToolFailureCodes.session_signal;
 export const sessionRequestListFailureCodes = requestToolFailureCodes.session_request_list;

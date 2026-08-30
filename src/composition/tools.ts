@@ -28,6 +28,8 @@ import { createSessionRequestAckTool } from "../tools/session-request-ack";
 import { createSessionRequestCancelTool } from "../tools/session-request-cancel";
 import { createSessionRequestGetTool } from "../tools/session-request-get";
 import { createSessionRequestListTool } from "../tools/session-request-list";
+import { createSessionRequestSendTool } from "../tools/session-request-send";
+import { createSessionRequestStartTool } from "../tools/session-request-start";
 import { createSessionRespondTool } from "../tools/session-respond";
 import { createSessionSendTool } from "../tools/session-send";
 import { createSessionSignalTool } from "../tools/session-signal";
@@ -58,6 +60,8 @@ export const communicatorToolIds = Object.freeze([
   "session_request_get",
   "session_request_ack",
   "session_request_cancel",
+  "session_request_send",
+  "session_request_start",
   "session_stop",
   "session_start",
   "session_export",
@@ -145,6 +149,7 @@ export function constructToolContracts(input: {
     ...mutation,
     activity: native,
     nativeSteer: native,
+    nativeQueue: native,
     ownership: store,
     runtime,
     scheduler: lifecycle.scheduler,
@@ -208,6 +213,41 @@ export function constructToolContracts(input: {
     session_request_get: createSessionRequestGetTool(mutation, requestScope),
     session_request_ack: createSessionRequestAckTool(mutation, requestScope),
     session_request_cancel: createSessionRequestCancelTool(mutation, requestScope),
+    session_request_send: createSessionRequestSendTool(
+      {
+        ...common,
+        requests: store,
+        scheduler: lifecycle.scheduler,
+        nativeQueue: native,
+        ownership: store,
+        clock,
+        ids,
+        digest: productionSha256,
+      },
+      requestScope,
+      {
+        message: policies.message ?? "allow",
+        ask: policies.ask ?? "allow",
+        wait: policies.wait ?? "allow",
+      },
+    ),
+    session_request_start: createSessionRequestStartTool(
+      {
+        ...common,
+        starts: store.starts,
+        requests: store,
+        requestStarts: store,
+        scheduler: lifecycle.scheduler,
+        nativeStart: native,
+        ownership: store,
+        clock,
+        ids,
+        digest: productionSha256,
+        policy: configuredStartPolicy(options),
+      },
+      requestScope,
+      { ask: policies.ask ?? "allow", wait: policies.wait ?? "allow" },
+    ),
     session_stop: createSessionStopTool(
       {
         readiness: lifecycle,

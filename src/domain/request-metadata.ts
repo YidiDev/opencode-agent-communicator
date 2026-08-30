@@ -1,8 +1,13 @@
-import { validateNativeMessageId, validateRequestId } from "./generated-ids";
+import {
+  validateNativeMessageId,
+  validateRequestId,
+  validateStartOperationId,
+} from "./generated-ids";
 import { requestLimits } from "./request-constants";
 import { resolutionAppliesToRequestKind } from "./request-transitions";
 import {
   type RequestMetadata,
+  requestDeliveryModes,
   requestDeliveryStates,
   requestKinds,
   requestResolutionStates,
@@ -52,6 +57,8 @@ const metadataFields = [
   ...deliveryFields,
   ...resolutionFields,
   ...resultFields,
+  "deliveryMode",
+  "linkedStartOperationId",
 ];
 
 function isMetadataCandidate(value: unknown): value is RequestMetadata {
@@ -65,6 +72,7 @@ function validTopLevelShape(value: RequestMetadata): boolean {
     requiredFields.every((field) => keys.includes(field)) &&
     keys.every((key) => (metadataFields as readonly string[]).includes(key)) &&
     requestKinds.includes(value.kind) &&
+    (value.deliveryMode === undefined || requestDeliveryModes.includes(value.deliveryMode)) &&
     requestResolutionStates.includes(value.resolutionState) &&
     requestDeliveryStates.includes(value.deliveryState) &&
     requestResultStates.includes(value.resultState)
@@ -78,7 +86,10 @@ function validIdentities(value: RequestMetadata): boolean {
     validateSessionId(value.sourceSessionId).ok &&
     validateSessionId(value.targetSessionId).ok &&
     value.sourceSessionId !== value.targetSessionId &&
-    validateNativeMessageId(value.nativeMessageId).ok
+    validateNativeMessageId(value.nativeMessageId).ok &&
+    (value.linkedStartOperationId === undefined ||
+      validateStartOperationId(value.linkedStartOperationId).ok) &&
+    ((value.deliveryMode ?? "steer") === "initial") === (value.linkedStartOperationId !== undefined)
   );
 }
 
