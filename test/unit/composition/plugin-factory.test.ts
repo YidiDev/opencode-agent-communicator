@@ -20,13 +20,15 @@ function incompatibleNative(): OpenCodeNativeAdapter {
     }),
     readMessagePage: async () => ({
       messages: [],
+      examinedMessageIds: [],
       examinedMessageCount: 0,
       projectedTextByteCount: 0,
+      rawResponseByteCount: 0,
       examinedPartCount: 0,
       previousCursor: null,
       nextCursor: null,
     }),
-    readMessage: async () => ({ kind: "not_found" }),
+    readMessage: async () => ({ kind: "not_found", rawResponseByteCount: 0 }),
     queueMessage: async () => ({ kind: "unknown" }),
     steerRequest: async () => ({ kind: "unknown" }),
     observeRequestParticipants: async () => ({
@@ -205,7 +207,7 @@ describe("composition factory ordering", () => {
     expect(Object.keys(hooks.tool ?? {})).toHaveLength(21);
     const config: { permission?: unknown; skills?: { paths: string[] } } = {};
     await hooks.config?.(config as never);
-    expect(config.permission).toEqual({ session_stop: "ask" });
+    expect(config.permission).toEqual({ session_stop: "ask", session_read: "ask" });
     expect(config.skills?.paths[0]).toEndWith("/skills");
     await hooks.event?.({
       event: {

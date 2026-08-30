@@ -36,13 +36,15 @@ function ports(): Omit<SessionReadPorts, "approval"> {
             parts: [{ type: "text", itemKey: "part_text", text: "done" }],
           },
         ],
+        examinedMessageIds: ["msg_answer"],
         examinedMessageCount: 1,
         projectedTextByteCount: 4,
+        rawResponseByteCount: 0,
         examinedPartCount: 1,
         previousCursor: null,
         nextCursor: null,
       }),
-      readMessage: async () => ({ kind: "not_found" }),
+      readMessage: async () => ({ kind: "not_found", rawResponseByteCount: 0 }),
     },
     digest: {
       async sha256(input) {
@@ -136,6 +138,27 @@ describe("session_read tool contract", () => {
 });
 
 describe("session_read tool boundaries", () => {
+  test("asserts readiness before inspecting caller or deadline controls", async () => {
+    const configured = ports();
+    configured.readiness.assertReady = () => {
+      throw new Error("not ready");
+    };
+    let deadlineReads = 0;
+    await expect(
+      createSessionReadTool(configured, {
+        workspaceKey,
+        invocationDeadlineMs: () => {
+          deadlineReads += 1;
+          return 0;
+        },
+      }).execute(
+        { session_id: "ses_target", limit: 100 },
+        { sessionID: "invalid", abort: new AbortController().signal },
+      ),
+    ).rejects.toThrow("not ready");
+    expect(deadlineReads).toBe(0);
+  });
+
   test("fails closed for unavailable or invalid invocation deadlines", async () => {
     const context = { sessionID: "ses_source", abort: new AbortController().signal };
     for (const invocationDeadlineMs of [
@@ -215,6 +238,83 @@ describe("session_read tool boundaries", () => {
       cancelled: 1,
       approvals: 1,
     });
+  });
+});
+
+describe("session_read cross-session boundaries", () => {
+  test("fails cross-session visibility loss after approval and before the first read effect", async () => {
+    let observations = 0;
+    let approvals = 0;
+    let reads = 0;
+    const configured = ports();
+    configured.membership.observeSessionReadPresence = async () => {
+      observations += 1;
+      return {
+        sourceVisible: true,
+        targetVisible: observations === 1,
+        targetStatus: "busy",
+        observedAtMs: observations,
+      };
+    };
+    configured.native.readMessagePage = async () => {
+      reads += 1;
+      throw new Error("transcript read must not start");
+    };
+    const output = await createSessionReadTool(configured, {
+      workspaceKey,
+      invocationDeadlineMs: () => 2_000,
+    }).execute(
+      { session_id: "ses_target", limit: 10 },
+      {
+        sessionID: "ses_source",
+        abort: new AbortController().signal,
+        async ask() {
+          approvals += 1;
+        },
+      },
+    );
+    expect(JSON.parse(output)).toMatchObject({
+      ok: false,
+      error: { code: "target_not_visible" },
+    });
+    expect({ observations, approvals, reads }).toEqual({ observations: 2, approvals: 1, reads: 0 });
+  });
+
+  test("requires cross-session caller visibility again at final disclosure", async () => {
+    let observations = 0;
+    let reads = 0;
+    const configured = ports();
+    configured.membership.observeSessionReadPresence = async () => {
+      observations += 1;
+      return {
+        sourceVisible: observations < 4,
+        targetVisible: true,
+        targetStatus: "busy",
+        observedAtMs: observations,
+      };
+    };
+    const readPage = configured.native.readMessagePage;
+    configured.native.readMessagePage = async (request) => {
+      reads += 1;
+      return readPage(request);
+    };
+    const output = await createSessionReadTool(configured, {
+      workspaceKey,
+      invocationDeadlineMs: () => 2_000,
+    }).execute(
+      { session_id: "ses_target", limit: 10 },
+      {
+        sessionID: "ses_source",
+        abort: new AbortController().signal,
+        ask: async () => undefined,
+      },
+    );
+    expect(JSON.parse(output)).toMatchObject({
+      ok: false,
+      error: { code: "caller_not_visible" },
+    });
+    expect(observations).toBe(4);
+    expect(reads).toBe(1);
   });
 
   test("binds one abort-aware cross-session ask without exposing a raw cursor", async () => {

@@ -15,8 +15,12 @@ All notable changes to this project are documented in this file. The format is b
 - Added bounded native page and fixed-anchor reads with immutable 8-message pages, 96 transcript calls, 512 raw
   examined messages including omitted variants, 8 MiB projection-safe assistant-text examination,
   16,384 examined assistant parts, 32,768 rendered lines per invocation, 8,192 rendered lines per
-  message, 4 MiB pre-deserialization response caps, and 512-character native cursors. One shared
+  message, 4 MiB per-response and 32 MiB invocation-wide pre-deserialization response caps, and
+  512-character native cursors. One shared
   budget includes the initial anchor, every page, and the final anchor reread.
+- Added exact structural adapter ceilings of 1,048,576 UTF-16 characters per native text part, 4,096
+  parts per assistant message, and 256 UTF-16 characters per raw tool name; these remain separate from
+  invocation-wide transcript work budgets.
 
 ### Security
 

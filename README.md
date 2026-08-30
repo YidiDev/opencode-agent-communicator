@@ -288,11 +288,17 @@ take a fresh cursorless tail; do not guess the missing continuation.
 Transcript traversal is bounded to 8 messages per page, 96 page/fixed-message calls, 512 raw native messages examined
 (including omitted variants), 8 MiB of projection-safe assistant-text UTF-8 bytes examined, 16,384
 native assistant parts examined, 32,768 rendered lines examined per invocation, 8,192 rendered lines
-per message, 4 MiB before deserialization per transcript response, and 512 characters per native cursor. These
+per message, 4 MiB before deserialization per transcript response, 32 MiB of raw transcript responses
+per invocation, and 512 characters per native cursor. These
 invocation-wide charges include both fixed-anchor reads and the final reread. Exhausting a proof bound returns
 `native_unavailable`; it never starts an unbounded scan or invents a result. `session_read` does not
 prove completion, peer compliance, or advisory-lock compliance. Durable ask/wait requests remain the
 preferred coordination channel.
+
+Distinct from those invocation budgets, exact structural adapter ceilings are 1,048,576 UTF-16
+characters per native text part, 4,096 parts per native assistant message, and 256 UTF-16 characters
+per raw native tool name. Tool names may contain Unicode and controls; the domain projection sanitizes
+their bounded public marker and rejects lone surrogates.
 
 ### Ask question shape
 

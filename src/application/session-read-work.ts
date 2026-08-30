@@ -5,6 +5,7 @@ import { type ProjectionResult, projectSessionMessage } from "../domain/session-
 export interface SessionReadRawWork {
   readonly messages: number;
   readonly projectedTextBytes: number;
+  readonly rawResponseBytes: number;
   readonly parts: number;
 }
 
@@ -13,6 +14,7 @@ export class SessionReadWorkBudget {
   private nativeCalls = 0;
   private messages = 0;
   private projectedTextBytes = 0;
+  private rawResponseBytes = 0;
   private parts = 0;
   private renderedLines = 0;
   private readonly projections = new Map<string, readonly RenderedProjectionLine[]>();
@@ -30,17 +32,24 @@ export class SessionReadWorkBudget {
     return this.messages < sessionReadLimits.maxMessagesExamined;
   }
 
+  remainingRawResponseBytes(): number {
+    return sessionReadLimits.maxNativeResponseBytesExamined - this.rawResponseBytes;
+  }
+
   chargeRaw(work: SessionReadRawWork): boolean {
     if (
       this.messages + work.messages > sessionReadLimits.maxMessagesExamined ||
       this.projectedTextBytes + work.projectedTextBytes >
         sessionReadLimits.maxProjectedTextBytesExamined ||
+      this.rawResponseBytes + work.rawResponseBytes >
+        sessionReadLimits.maxNativeResponseBytesExamined ||
       this.parts + work.parts > sessionReadLimits.maxPartsExamined
     ) {
       return false;
     }
     this.messages += work.messages;
     this.projectedTextBytes += work.projectedTextBytes;
+    this.rawResponseBytes += work.rawResponseBytes;
     this.parts += work.parts;
     return true;
   }

@@ -56,6 +56,17 @@ describe("bounded OpenCode 1.18 transport", () => {
     expect(fixture.cancellations()).toBe(0);
   });
 
+  test("reports measured response bytes to the invocation meter", async () => {
+    const observed: number[] = [];
+    const fixture = streamingResponse([new Uint8Array(2), new Uint8Array(3)], {
+      shouldClose: true,
+    });
+    await createBoundedOpenCode118Fetch(hostFetch(fixture.response), 5, (bytes) => {
+      observed.push(bytes);
+    })(requestUrl);
+    expect(observed).toEqual([5]);
+  });
+
   test.each([
     ["one chunk", [new Uint8Array(5)]],
     ["many chunks", [new Uint8Array(2), new Uint8Array(2), new Uint8Array(1)]],

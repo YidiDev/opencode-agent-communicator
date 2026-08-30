@@ -7,6 +7,7 @@ import type {
 } from "../../application/session-read-ports";
 import {
   type AssistantProjectionState,
+  isSessionReadReservedItemKey,
   type ProjectionSafeAssistantPart,
   type ProjectionSafeMessage,
   sessionReadLimits,
@@ -15,6 +16,7 @@ import {
 import { validateSessionId } from "../../domain/sessions";
 import type { WorkspaceKey } from "../../domain/workspaces";
 import { validateWorkspaceKey } from "../../domain/workspaces";
+import { isAuthoritativeFixedMessageNotFound } from "./opencode-1-18-session-read-not-found";
 import { NativeAdapterFault } from "./opencode-1-18-surface";
 import { createBoundedOpenCode118Fetch } from "./opencode-1-18-transport";
 
@@ -43,12 +45,11 @@ export interface OpenCode118SessionReadSurface {
 interface SessionReadConfiguration {
   readonly workspaceKey: WorkspaceKey;
   readonly hostFetch: typeof globalThis.fetch;
+  readonly serverUrl: URL;
+  readonly directory: string;
 }
 
 const MAX_IDENTIFIER_CHARACTERS = 256;
-const MAX_TOOL_NAME_CHARACTERS = 256;
-const MAX_TEXT_CHARACTERS = 1_048_576;
-const MAX_ASSISTANT_PARTS = 4_096;
 const OMITTED_MESSAGE_TYPES = new Set([
   "agent-switched",
   "model-switched",
@@ -171,6 +172,7 @@ function projectAssistantPart(value: unknown): ProjectedNativePart {
   const part = snapshotRecord(value, "V2 assistant part", 12);
   const type = boundedString(part.type, "V2 assistant part type", 32);
   const itemKey = identifier(part.id, "V2 assistant part identity");
+  if (isSessionReadReservedItemKey(itemKey)) return fault("V2 assistant part identity");
   if (type === "reasoning") return { itemKey };
   if (type === "text") {
     return {
@@ -178,7 +180,13 @@ function projectAssistantPart(value: unknown): ProjectedNativePart {
       part: {
         type: "text",
         itemKey,
-        text: boundedString(part.text, "V2 assistant text", MAX_TEXT_CHARACTERS, undefined, 0),
+        text: boundedString(
+          part.text,
+          "V2 assistant text",
+          sessionReadLimits.maxNativeTextCharacters,
+          undefined,
+          0,
+        ),
       },
     };
   }
@@ -200,8 +208,7 @@ function projectAssistantPart(value: unknown): ProjectedNativePart {
         name: boundedString(
           part.name,
           "V2 assistant tool name",
-          MAX_TOOL_NAME_CHARACTERS,
-          /^[\x20-\x7e]+$/,
+          sessionReadLimits.maxNativeToolNameCharacters,
         ),
         status: status as ToolProjectionStatus,
       },
@@ -232,7 +239,11 @@ function projectMessage(value: unknown, abort?: AbortSignal): ProjectedNativeMes
     };
   if (type !== "assistant") return fault("V2 session message type");
 
-  const values = snapshotDenseArray(message.content, "V2 assistant content", MAX_ASSISTANT_PARTS);
+  const values = snapshotDenseArray(
+    message.content,
+    "V2 assistant content",
+    sessionReadLimits.maxNativeAssistantParts,
+  );
   const seen = new Set<string>();
   const parts: ProjectionSafeAssistantPart[] = [];
   let projectedTextByteCount = 0;
@@ -271,7 +282,11 @@ function responseData(value: unknown, label: string): unknown {
   return envelope.data;
 }
 
-function projectPage(value: unknown, abort: AbortSignal): NativeMessagePage {
+function projectPage(
+  value: unknown,
+  abort: AbortSignal,
+  rawResponseByteCount: number,
+): NativeMessagePage {
   const body = snapshotRecord(
     responseData(value, "V2 session message page"),
     "V2 session message page",
@@ -307,8 +322,10 @@ function projectPage(value: unknown, abort: AbortSignal): NativeMessagePage {
   }
   return {
     messages,
+    examinedMessageIds: [...seen],
     examinedMessageCount: nativeMessages.length,
     projectedTextByteCount,
+    rawResponseByteCount,
     examinedPartCount,
     previousCursor: Object.hasOwn(pagination, "previous")
       ? pagination.previous === null
@@ -344,26 +361,34 @@ function assertRequest(
 function requestOptions(
   abort: AbortSignal,
   hostFetch: typeof globalThis.fetch,
-): SessionReadOptions {
+  maximumResponseBytes: number,
+): { readonly options: SessionReadOptions; readonly measuredBytes: () => number } {
+  let measuredBytes = 0;
   return {
-    signal: abort,
-    throwOnError: false,
-    fetch: createBoundedOpenCode118Fetch(hostFetch, sessionReadLimits.maxNativeResponseBytes),
+    options: {
+      signal: abort,
+      throwOnError: false,
+      fetch: createBoundedOpenCode118Fetch(hostFetch, maximumResponseBytes, (byteLength) => {
+        if (byteLength > maximumResponseBytes - measuredBytes) {
+          throw new NativeAdapterFault("Pinned OpenCode response exceeded its byte ceiling.");
+        }
+        measuredBytes += byteLength;
+      }),
+    },
+    measuredBytes: () => measuredBytes,
   };
 }
 
-function isAuthoritativeNotFound(value: unknown): boolean {
-  const envelope = snapshotRecord(value, "V2 fixed session message", 3);
-  const keys = Object.keys(envelope);
-  return (
-    keys.length === 3 &&
-    keys.includes("error") &&
-    keys.includes("request") &&
-    keys.includes("response") &&
-    envelope.request instanceof Request &&
-    envelope.response instanceof Response &&
-    envelope.response.status === 404
-  );
+function requestResponseByteCeiling(value: number | undefined): number {
+  const maximum = value ?? sessionReadLimits.maxNativeResponseBytes;
+  if (
+    !Number.isSafeInteger(maximum) ||
+    maximum < 1 ||
+    maximum > sessionReadLimits.maxNativeResponseBytes
+  ) {
+    throw new NativeAdapterFault("Session read response byte ceiling is invalid.");
+  }
+  return maximum;
 }
 
 export function createOpenCode118SessionReadPort(
@@ -400,12 +425,14 @@ export function createOpenCode118SessionReadPort(
             order: request.order as "asc" | "desc",
           };
       try {
-        const response = await surface.messages(
-          parameters,
-          requestOptions(request.abort, configuration.hostFetch),
+        const bounded = requestOptions(
+          request.abort,
+          configuration.hostFetch,
+          requestResponseByteCeiling(request.maximumResponseBytes),
         );
+        const response = await surface.messages(parameters, bounded.options);
         if (request.abort.aborted) throw new NativeAdapterFault("Session read was aborted.");
-        return projectPage(response, request.abort);
+        return projectPage(response, request.abort, bounded.measuredBytes());
       } catch (cause: unknown) {
         if (cause instanceof NativeAdapterFault) throw cause;
         throw new NativeAdapterFault("V2 session message page read failed.", cause);
@@ -420,12 +447,24 @@ export function createOpenCode118SessionReadPort(
       );
       identifier(request.messageId, "V2 requested message identity");
       try {
+        const bounded = requestOptions(
+          request.abort,
+          configuration.hostFetch,
+          requestResponseByteCeiling(request.maximumResponseBytes),
+        );
         const response = await surface.message(
           { sessionID: request.sessionId, messageID: request.messageId },
-          requestOptions(request.abort, configuration.hostFetch),
+          bounded.options,
         );
         if (request.abort.aborted) throw new NativeAdapterFault("Session read was aborted.");
-        if (isAuthoritativeNotFound(response)) return { kind: "not_found" };
+        if (
+          isAuthoritativeFixedMessageNotFound(
+            response,
+            { sessionId: request.sessionId, messageId: request.messageId },
+            { serverUrl: configuration.serverUrl, directory: configuration.directory },
+          )
+        )
+          return { kind: "not_found", rawResponseByteCount: bounded.measuredBytes() };
         const body = snapshotRecord(
           responseData(response, "V2 fixed session message"),
           "V2 fixed session message",
@@ -447,6 +486,7 @@ export function createOpenCode118SessionReadPort(
           kind: "found",
           message: projected.message,
           projectedTextByteCount: projected.projectedTextByteCount,
+          rawResponseByteCount: bounded.measuredBytes(),
           examinedPartCount: projected.examinedPartCount,
         };
       } catch (cause: unknown) {

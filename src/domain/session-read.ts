@@ -9,15 +9,33 @@ export const sessionReadLimits = Object.freeze({
   maxNativeCursorCharacters: 512,
   nativePageMessages: 8,
   maxNativeResponseBytes: 4 * 1_024 * 1_024,
+  maxNativeResponseBytesExamined: 32 * 1_024 * 1_024,
   maxNativeCalls: 96,
   maxMessagesExamined: 512,
   maxProjectedTextBytesExamined: 8 * 1_024 * 1_024,
   maxPartsExamined: 16_384,
   maxRenderedLinesExamined: 32_768,
   maxRenderedLinesPerMessage: 8_192,
+  /** Exact per-text-part structural adapter ceiling (UTF-16 code units). */
+  maxNativeTextCharacters: 1_048_576,
+  /** Exact per-assistant-message structural adapter ceiling. */
+  maxNativeAssistantParts: 4_096,
+  /** Exact raw native tool-name ceiling (UTF-16 code units). */
+  maxNativeToolNameCharacters: 256,
 });
 
 export const sessionReadProjectionVersion = 1;
+
+/** Item keys synthesized by the projector and therefore forbidden for native assistant parts. */
+export const sessionReadReservedItemKeys = Object.freeze([
+  "$user",
+  "$assistant",
+  "$assistant-state",
+] as const);
+
+export function isSessionReadReservedItemKey(value: string): boolean {
+  return (sessionReadReservedItemKeys as readonly string[]).includes(value);
+}
 
 export type SessionReadDirection = "before" | "after";
 export type AssistantProjectionState = "active" | "completed" | "error";

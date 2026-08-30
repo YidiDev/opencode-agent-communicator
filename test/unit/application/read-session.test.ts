@@ -54,7 +54,9 @@ function fixture(
       async readMessage(request) {
         events.push("fixed");
         const message = fixed.get(request.messageId);
-        return message ? nativeFoundFixture(message) : { kind: "not_found" };
+        return message
+          ? nativeFoundFixture(message)
+          : { kind: "not_found", rawResponseByteCount: 0 };
       },
     },
     digest: {
@@ -125,6 +127,19 @@ describe("readSession", () => {
     expect(f.events).not.toContain("approval");
     expect(f.events.filter((event) => event === "presence").length).toBeGreaterThanOrEqual(4);
   });
+
+  test.each([100, 500])(
+    "returns exactly the allowed %i-line page with lookahead",
+    async (limit) => {
+      const text = Array.from({ length: 600 }, (_, index) => `line ${index}`).join("\n");
+      const f = fixture({ sourceId: target, messages: [assistant(text)] });
+      const result = await readSession(f.ports, f.context, { sessionId: target, limit });
+      if (!result.ok) throw new Error("fixture read failed");
+      expect(result.value.content.split("\n")).toHaveLength(limit);
+      expect(result.value.hasMoreBefore).toBe(true);
+      expect(result.value.hasMoreAfter).toBe(false);
+    },
+  );
 
   test("uses exact cross-session approval and includes only a cursor digest", async () => {
     const f = fixture({ messages: [assistant("old")] });
@@ -265,6 +280,38 @@ describe("readSession cursor and race handling", () => {
         hasMoreBefore: false,
         hasMoreAfter: true,
       },
+    });
+  });
+
+  test("returns an active in-place append with accurate after flags", async () => {
+    const f = fixture({ sourceId: target, messages: [assistant("one")] });
+    const tail = await readSession(f.ports, f.context, { sessionId: target });
+    if (!tail.ok) throw new Error("fixture read failed");
+    f.setMessages([assistant("one\ntwo\nthree")]);
+    const result = await readSession(f.ports, f.context, {
+      sessionId: target,
+      cursor: tail.value.endCursor,
+      direction: "after",
+      limit: 1,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      value: { content: "two", hasMoreBefore: true, hasMoreAfter: true, isLive: true },
+    });
+  });
+
+  test("does not report a false continuation when an active cursor has no append", async () => {
+    const f = fixture({ sourceId: target, messages: [assistant("unchanged")] });
+    const tail = await readSession(f.ports, f.context, { sessionId: target });
+    if (!tail.ok) throw new Error("fixture read failed");
+    const result = await readSession(f.ports, f.context, {
+      sessionId: target,
+      cursor: tail.value.endCursor,
+      direction: "after",
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      value: { content: "", hasMoreBefore: true, hasMoreAfter: false },
     });
   });
 

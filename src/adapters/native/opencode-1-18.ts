@@ -268,6 +268,8 @@ export function createOpenCode118NativeAdapter(
     {
       workspaceKey: input.workspaceKey,
       hostFetch: dependencies.hostFetch ?? transport?.fetch ?? failClosedFetch,
+      serverUrl: input.serverUrl,
+      directory: input.directory,
     },
   );
   const now = dependencies.now ?? Date.now;

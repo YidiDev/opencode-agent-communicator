@@ -28,6 +28,8 @@ const sourceSessionId = valid(validateSessionId("ses_source"));
 const targetSessionId = valid(validateSessionId("ses_target"));
 const nativeMessageId = valid(validateNativeMessageId(`msg_${"a".repeat(32)}`));
 const signal = new AbortController().signal;
+const serverUrl = new URL("http://127.0.0.1:4321/");
+const directory = "/workspace";
 const inertFetch = Object.assign(async () => new Response("{}"), { preconnect() {} });
 const envelope = (data: unknown) => ({ data });
 const page = (data: unknown, cursor: unknown = {}) => ({ data: { data, cursor } });
@@ -47,7 +49,12 @@ function readPort(input: { readonly page?: unknown; readonly fixed?: unknown } =
     messages: async () => input.page ?? page([]),
     message: async () => input.fixed ?? { data: { data: { id: "msg_fixed", type: "user" } } },
   };
-  return createOpenCode118SessionReadPort(surface, { workspaceKey, hostFetch: inertFetch });
+  return createOpenCode118SessionReadPort(surface, {
+    workspaceKey,
+    hostFetch: inertFetch,
+    serverUrl,
+    directory,
+  });
 }
 
 describe("session read strict reflection and response coverage", () => {
@@ -92,7 +99,7 @@ describe("session read strict reflection and response coverage", () => {
     const malformed = [
       assistant({ time: { created: 1, completed: Number.NaN } }),
       assistant({ content: [Object.assign(new Date(), { id: "part", type: "text", text: "x" })] }),
-      assistant({ content: [{ id: "part", type: "tool", name: "bad\nname", state: [] }] }),
+      assistant({ content: [{ id: "part", type: "tool", name: "valid", state: [] }] }),
       assistant({
         content: [
           { id: "part", type: "tool", name: "x".repeat(257), state: { status: "running" } },
@@ -138,6 +145,8 @@ describe("session read strict reflection and response coverage", () => {
       const port = createOpenCode118SessionReadPort(surface, {
         workspaceKey,
         hostFetch: inertFetch,
+        serverUrl,
+        directory,
       });
       const pending =
         operation === "messages"
@@ -171,6 +180,8 @@ describe("session read strict reflection and response coverage", () => {
       createOpenCode118SessionReadPort(aborting, {
         workspaceKey,
         hostFetch: inertFetch,
+        serverUrl,
+        directory,
       }).readMessagePage({
         workspaceKey,
         sessionId: sourceSessionId,
@@ -191,6 +202,8 @@ describe("session read strict reflection and response coverage", () => {
       createOpenCode118SessionReadPort(fixedAborting, {
         workspaceKey,
         hostFetch: inertFetch,
+        serverUrl,
+        directory,
       }).readMessage({
         workspaceKey,
         sessionId: sourceSessionId,

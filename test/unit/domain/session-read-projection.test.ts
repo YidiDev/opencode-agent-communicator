@@ -122,6 +122,19 @@ describe("session read projection", () => {
     });
   });
 
+  test("never projects native parts into synthesized structural item keys", () => {
+    const result = projectSessionMessage({
+      type: "assistant",
+      messageId: "message",
+      state: "active",
+      parts: [{ type: "text", itemKey: "$assistant-state", text: "collision" }],
+    });
+    expect(result).toEqual({
+      ok: false,
+      message: "Assistant part identity collides with a structural item key.",
+    });
+  });
+
   test("bounds tool names by UTF-8 bytes and substitutes sanitized empty names", () => {
     const result = projectSessionMessage({
       type: "assistant",

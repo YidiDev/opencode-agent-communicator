@@ -1,6 +1,10 @@
 import { digestMessageContent, type Sha256DigestPort } from "../domain/message-payload";
 import { type DomainResult, domainFailure } from "../domain/results";
-import type { ProjectionSafeMessage, RenderedProjectionLine } from "../domain/session-read";
+import {
+  type ProjectionSafeMessage,
+  type RenderedProjectionLine,
+  sessionReadLimits,
+} from "../domain/session-read";
 import type { SessionReadCursorBoundary } from "../domain/session-read-cursor";
 import type { SessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
@@ -38,11 +42,19 @@ export async function readValidatedSessionReadAnchor(input: {
   if (!input.work.chargeNativeCall()) {
     return domainFailure("native_unavailable", "Transcript read exceeds its work budget.", true);
   }
+  const maximumResponseBytes = Math.min(
+    sessionReadLimits.maxNativeResponseBytes,
+    input.work.remainingRawResponseBytes(),
+  );
+  if (maximumResponseBytes < 1) {
+    return domainFailure("native_unavailable", "Transcript read exceeds its work budget.", true);
+  }
   const fixedCall = await input.scope.run(() =>
     input.native.readMessage({
       workspaceKey: input.workspace,
       sessionId: input.target,
       messageId: input.boundary.messageId,
+      maximumResponseBytes,
       abort: input.scope.signal,
     }),
   );
@@ -52,7 +64,11 @@ export async function readValidatedSessionReadAnchor(input: {
   if (fixedCall.kind === "rejected") {
     return domainFailure("native_unavailable", "Transcript read is unavailable.", true);
   }
-  const fixed = snapshotNativeFixedMessage(fixedCall.value, input.boundary.messageId);
+  const fixed = snapshotNativeFixedMessage(
+    fixedCall.value,
+    input.boundary.messageId,
+    maximumResponseBytes,
+  );
   if (!fixed) return domainFailure("native_unavailable", "Transcript read is malformed.", true);
   if (fixed.kind === "not_found") {
     return domainFailure("cursor_stale", "Session read cursor anchor is stale.", false);
@@ -61,6 +77,7 @@ export async function readValidatedSessionReadAnchor(input: {
     !input.work.chargeRaw({
       messages: 1,
       projectedTextBytes: fixed.projectedTextByteCount,
+      rawResponseBytes: fixed.rawResponseByteCount,
       parts: fixed.examinedPartCount,
     })
   ) {

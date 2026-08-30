@@ -130,6 +130,7 @@ async function readBoundedBody(
 export function createBoundedOpenCode118Fetch(
   fetchImplementation: typeof globalThis.fetch,
   maximumResponseBytes: number,
+  observeResponseBytes: (byteLength: number) => void = () => undefined,
 ): typeof globalThis.fetch {
   if (!Number.isSafeInteger(maximumResponseBytes) || maximumResponseBytes < 0) {
     throw new NativeAdapterFault("Pinned OpenCode response byte ceiling is invalid.");
@@ -156,6 +157,7 @@ export function createBoundedOpenCode118Fetch(
       maximumResponseBytes,
       signal,
     );
+    observeResponseBytes(body?.byteLength ?? 0);
     try {
       return new Response(body, {
         status: response.status,

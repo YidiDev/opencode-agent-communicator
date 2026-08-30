@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 
 import { createOpenCode118NativeAdapter } from "../../../../src/adapters/native/opencode-1-18";
 import {
@@ -6,6 +7,7 @@ import {
   type OpenCode118SessionReadSurface,
 } from "../../../../src/adapters/native/opencode-1-18-session-read";
 import { sessionReadLimits } from "../../../../src/domain/session-read";
+import { projectSessionMessage } from "../../../../src/domain/session-read-projection";
 import { validateSessionId } from "../../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../../src/domain/workspaces";
 
@@ -20,6 +22,8 @@ const workspaceKey = valid(validateWorkspaceKey("workspace:read"));
 const foreignWorkspace = valid(validateWorkspaceKey("workspace:foreign"));
 const sessionId = valid(validateSessionId("ses_read"));
 const abort = new AbortController().signal;
+const serverUrl = new URL("http://127.0.0.1:4321/");
+const directory = "/workspace";
 const inertHostFetch: typeof fetch = Object.assign(async () => new Response("{}"), {
   preconnect() {},
 });
@@ -93,7 +97,12 @@ function fixture(input: { readonly page?: unknown; readonly fixed?: unknown } = 
   };
   return {
     calls,
-    port: createOpenCode118SessionReadPort(surface, { workspaceKey, hostFetch: inertHostFetch }),
+    port: createOpenCode118SessionReadPort(surface, {
+      workspaceKey,
+      hostFetch: inertHostFetch,
+      serverUrl,
+      directory,
+    }),
   };
 }
 
@@ -230,8 +239,19 @@ describe("OpenCode 1.18 restricted session message projection", () => {
           ],
         },
       ],
+      examinedMessageIds: [
+        "msg_user",
+        "msg_agent",
+        "msg_model",
+        "msg_synthetic",
+        "msg_system",
+        "msg_shell",
+        "msg_compaction",
+        "msg_assistant",
+      ],
       examinedMessageCount: 8,
       projectedTextByteCount: 13,
+      rawResponseByteCount: 0,
       examinedPartCount: 3,
       previousCursor: null,
       nextCursor: "cursor_next",
@@ -282,6 +302,45 @@ describe("OpenCode 1.18 restricted session message projection", () => {
     ]);
   });
 
+  test("rejects native part identities reserved for synthesized cursor structure", async () => {
+    for (const itemKey of ["$user", "$assistant", "$assistant-state"]) {
+      await expect(
+        fixture({
+          page: page([
+            { ...assistant(), content: [{ id: itemKey, type: "text", text: "collision" }] },
+          ]),
+        }).port.readMessagePage({ workspaceKey, sessionId, order: "desc", abort }),
+      ).rejects.toThrow();
+    }
+  });
+
+  test("retains bounded Unicode and controls in raw tool names for domain sanitization", async () => {
+    const result = await fixture({
+      page: page([
+        {
+          ...assistant(),
+          content: [
+            {
+              id: "prt_tool",
+              type: "tool",
+              name: "réad\u001b[31m界",
+              state: { status: "running" },
+            },
+          ],
+        },
+      ]),
+    }).port.readMessagePage({ workspaceKey, sessionId, order: "desc", abort });
+    expect(result.messages[0]).toMatchObject({
+      parts: [{ name: "réad\u001b[31m界" }],
+    });
+    const retained = result.messages[0];
+    if (!retained) throw new Error("missing projected message");
+    const projected = projectSessionMessage(retained);
+    expect(projected.ok && projected.lines.map((line) => line.text)).toContain(
+      "[tool: réad界 running]",
+    );
+  });
+
   test("maps assistant active and error states and all known tool statuses", async () => {
     const statuses = ["pending", "running", "completed", "error"] as const;
     const messages = statuses.map((status, index) => ({
@@ -302,6 +361,35 @@ describe("OpenCode 1.18 restricted session message projection", () => {
     expect(JSON.stringify(result)).not.toContain("PRIVATE_ERROR");
   });
 
+  test("accepts the exact per-value structural ceilings independently of invocation budgets", async () => {
+    const content = [
+      {
+        id: "prt_text_limit",
+        type: "text",
+        text: "x".repeat(sessionReadLimits.maxNativeTextCharacters),
+      },
+      {
+        id: "prt_tool_limit",
+        type: "tool",
+        name: "n".repeat(sessionReadLimits.maxNativeToolNameCharacters),
+        state: { status: "completed" },
+      },
+      ...Array.from({ length: sessionReadLimits.maxNativeAssistantParts - 2 }, (_, index) => ({
+        id: `prt_reasoning_${index}`,
+        type: "reasoning",
+      })),
+    ];
+    const result = await fixture({
+      page: page([{ ...assistant("msg_structural_limits"), content }]),
+    }).port.readMessagePage({ workspaceKey, sessionId, order: "desc", abort });
+    expect(result).toMatchObject({
+      examinedMessageCount: 1,
+      projectedTextByteCount: sessionReadLimits.maxNativeTextCharacters,
+      examinedPartCount: sessionReadLimits.maxNativeAssistantParts,
+    });
+    expect(result.examinedPartCount).toBeLessThan(sessionReadLimits.maxPartsExamined);
+  });
+
   test("uses native cursor pages without combining cursor and order", async () => {
     const fake = fixture({ page: page([], { next: null }) });
     expect(
@@ -313,7 +401,9 @@ describe("OpenCode 1.18 restricted session message projection", () => {
       cursor: "native_cursor",
     });
   });
+});
 
+describe("OpenCode 1.18 fixed session message 404 classification", () => {
   test("returns a fixed projected message and maps only authoritative 404 to not_found", async () => {
     const found = fixture({ fixed: { data: { data: assistant("msg_fixed") } } });
     expect(
@@ -327,6 +417,8 @@ describe("OpenCode 1.18 restricted session message projection", () => {
     const resolvedForgery = createOpenCode118SessionReadPort(resolvedForgerySurface, {
       workspaceKey,
       hostFetch: inertHostFetch,
+      serverUrl,
+      directory,
     });
     await expect(
       resolvedForgery.readMessage({ workspaceKey, sessionId, messageId: "msg_missing", abort }),
@@ -335,23 +427,55 @@ describe("OpenCode 1.18 restricted session message projection", () => {
     const authoritativeSurface: OpenCode118SessionReadSurface = {
       messages: async () => page([]),
       message: async () => ({
-        error: { name: "NotFoundError" },
-        request: new Request("http://127.0.0.1/session/message"),
-        response: new Response(null, { status: 404 }),
+        error: {
+          _tag: "MessageNotFoundError",
+          sessionID: sessionId,
+          messageID: "msg_missing",
+          message: "must not be read",
+        },
+        request: new Request(
+          `${serverUrl.origin}/api/session/${sessionId}/message/msg_missing?directory=${encodeURIComponent(directory)}`,
+        ),
+        response: Response.json({}, { status: 404 }),
       }),
     };
     expect(
       await createOpenCode118SessionReadPort(authoritativeSurface, {
         workspaceKey,
         hostFetch: inertHostFetch,
+        serverUrl,
+        directory,
       }).readMessage({
         workspaceKey,
         sessionId,
         messageId: "msg_missing",
         abort,
       }),
-    ).toEqual({ kind: "not_found" });
+    ).toEqual({ kind: "not_found", rawResponseByteCount: 0 });
 
+    const exactError = {
+      _tag: "MessageNotFoundError",
+      sessionID: sessionId,
+      messageID: "msg_missing",
+      message: "private",
+    };
+    const exactUrl = `${serverUrl.origin}/api/session/${sessionId}/message/msg_missing`;
+    let messageGetterRead = false;
+    const accessorMessageError = Object.defineProperty(
+      {
+        _tag: "MessageNotFoundError",
+        sessionID: sessionId,
+        messageID: "msg_missing",
+      },
+      "message",
+      {
+        enumerable: true,
+        get() {
+          messageGetterRead = true;
+          return "private";
+        },
+      },
+    );
     for (const failure of [
       new Error("network ambiguity"),
       { response: new Response(null, { status: 500 }) },
@@ -360,12 +484,74 @@ describe("OpenCode 1.18 restricted session message projection", () => {
       { data: { data: user("msg_missing") }, extra: true },
       {
         error: {},
-        request: new Request("http://127.0.0.1/session/message"),
+        request: new Request(`${serverUrl.origin}/api/session/${sessionId}/message/msg_missing`),
         response: new Response(null, { status: 404 }),
         extra: true,
       },
       { error: {}, request: {}, response: new Response(null, { status: 404 }) },
-      { error: {}, request: new Request("http://127.0.0.1/session/message"), response: {} },
+      {
+        error: {},
+        request: new Request(`${serverUrl.origin}/api/session/${sessionId}/message/msg_missing`),
+        response: {},
+      },
+      {
+        error: { ...exactError, _tag: "SessionNotFoundError" },
+        request: new Request(exactUrl),
+        response: Response.json({}, { status: 404 }),
+      },
+      {
+        error: exactError,
+        request: new Request(exactUrl),
+        response: new Response("<html>proxy miss</html>", {
+          status: 404,
+          headers: { "content-type": "text/html" },
+        }),
+      },
+      {
+        error: { ...exactError, sessionID: "ses_other" },
+        request: new Request(exactUrl),
+        response: new Response(null, { status: 404 }),
+      },
+      {
+        error: { ...exactError, messageID: "msg_other" },
+        request: new Request(exactUrl),
+        response: new Response(null, { status: 404 }),
+      },
+      {
+        error: { ...exactError, extra: true },
+        request: new Request(exactUrl),
+        response: new Response(null, { status: 404 }),
+      },
+      {
+        error: { ...exactError, message: undefined },
+        request: new Request(`${exactUrl}?directory=${encodeURIComponent(directory)}`),
+        response: Response.json({}, { status: 404 }),
+      },
+      {
+        error: exactError,
+        request: new Request(exactUrl),
+        response: Response.json({}, { status: 404 }),
+      },
+      {
+        error: exactError,
+        request: new Request(`${serverUrl.origin}/api/session/${sessionId}/message/msg_other`),
+        response: new Response(null, { status: 404 }),
+      },
+      {
+        error: exactError,
+        request: new Request(exactUrl, { method: "POST" }),
+        response: new Response(null, { status: 404 }),
+      },
+      {
+        error: exactError,
+        request: new Request(`${exactUrl}?unexpected=true`),
+        response: new Response(null, { status: 404 }),
+      },
+      {
+        error: accessorMessageError,
+        request: new Request(exactUrl),
+        response: Response.json({}, { status: 404 }),
+      },
     ]) {
       const surface: OpenCode118SessionReadSurface = {
         messages: async () => page([]),
@@ -375,6 +561,8 @@ describe("OpenCode 1.18 restricted session message projection", () => {
         createOpenCode118SessionReadPort(surface, {
           workspaceKey,
           hostFetch: inertHostFetch,
+          serverUrl,
+          directory,
         }).readMessage({
           workspaceKey,
           sessionId,
@@ -383,6 +571,7 @@ describe("OpenCode 1.18 restricted session message projection", () => {
         }),
       ).rejects.toThrow();
     }
+    expect(messageGetterRead).toBe(false);
   });
 });
 
@@ -396,6 +585,51 @@ describe("OpenCode 1.18 generated session-read envelopes", () => {
       },
     }).port.readMessagePage({ workspaceKey, sessionId, order: "desc", abort });
     expect(result.messages).toEqual([{ type: "user", messageId: "msg_user" }]);
+  });
+
+  test("accepts only the generated MessageNotFoundError envelope correlated to the GET URL", async () => {
+    let observedRequest: Request | undefined;
+    const hostFetch: typeof fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        observedRequest = new Request(input, init);
+        return Response.json(
+          {
+            _tag: "MessageNotFoundError",
+            sessionID: sessionId,
+            messageID: "msg_missing",
+            message: "private native detail",
+          },
+          { status: 404 },
+        );
+      },
+      { preconnect() {} },
+    );
+    const client = createOpencodeClient({
+      baseUrl: serverUrl.toString(),
+      directory,
+      fetch: hostFetch,
+    });
+    const port = createOpenCode118SessionReadPort(client.v2.session, {
+      workspaceKey,
+      hostFetch,
+      serverUrl,
+      directory,
+    });
+    const result = await port.readMessage({
+      workspaceKey,
+      sessionId,
+      messageId: "msg_missing",
+      abort,
+    });
+    expect(result).toMatchObject({ kind: "not_found" });
+    expect(result.rawResponseByteCount).toBeGreaterThan(0);
+    expect(observedRequest?.method).toBe("GET");
+    expect(new URL(observedRequest?.url ?? "http://invalid").pathname).toBe(
+      `/api/session/${sessionId}/message/msg_missing`,
+    );
+    expect(new URL(observedRequest?.url ?? "http://invalid").searchParams.get("directory")).toBe(
+      directory,
+    );
   });
 });
 
@@ -514,12 +748,11 @@ describe("OpenCode 1.18 session message fail-closed boundaries", () => {
     expect(fake.calls).toHaveLength(0);
   });
 
-  test("passes exact abort, throw policy, and a response-bounded host transport per call", async () => {
+  test("passes exact abort, throw policy, and the remaining response-byte ceiling", async () => {
     const calls: unknown[] = [];
-    const hostFetch: typeof fetch = Object.assign(
-      async () => new Response("x".repeat(sessionReadLimits.maxNativeResponseBytes + 1)),
-      { preconnect() {} },
-    );
+    const hostFetch: typeof fetch = Object.assign(async () => new Response("xx"), {
+      preconnect() {},
+    });
     const surface: OpenCode118SessionReadSurface = {
       async messages(_parameters, options) {
         calls.push(options);
@@ -529,9 +762,20 @@ describe("OpenCode 1.18 session message fail-closed boundaries", () => {
       },
       message: async () => ({ data: { data: user() } }),
     };
-    const port = createOpenCode118SessionReadPort(surface, { workspaceKey, hostFetch });
+    const port = createOpenCode118SessionReadPort(surface, {
+      workspaceKey,
+      hostFetch,
+      serverUrl,
+      directory,
+    });
     await expect(
-      port.readMessagePage({ workspaceKey, sessionId, order: "desc", abort }),
+      port.readMessagePage({
+        workspaceKey,
+        sessionId,
+        order: "desc",
+        maximumResponseBytes: 1,
+        abort,
+      }),
     ).rejects.toThrow("byte ceiling");
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ signal: abort, throwOnError: false });

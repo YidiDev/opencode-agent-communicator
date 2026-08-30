@@ -94,8 +94,11 @@ workspace quota are immutable compiled safety policies documented in the README.
 its own bounded projection; reading another current visible root always requests exact
 per-invocation approval. Projection version, approval binding, repeated visibility checks, 100/500
 line limits, 4,096-byte rendered-line cap, 65,536-byte content cap, 4,096-character public cursor,
-8-message native pages, 96 transcript page/fixed-message calls, 512 examined messages, 4 MiB transcript-response cap before
-deserialization, and 512-character native cursors are immutable compiled policies. See
+8-message native pages, 96 transcript page/fixed-message calls, 512 examined messages, 4 MiB per
+transcript response and 32 MiB cumulatively before deserialization, 512-character native cursors,
+1,048,576 UTF-16 characters per native text part,
+4,096 parts per native assistant message, and 256 UTF-16 characters per raw native tool name are
+immutable compiled policies. The final three are structural adapter ceilings, not invocation budgets. See
 [Session read security](session-read-security.md).
 
 Start operation count and retained private-payload bytes are hard admission quotas below immutable

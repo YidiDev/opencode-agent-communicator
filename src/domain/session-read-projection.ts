@@ -1,5 +1,6 @@
 import { sanitizeDisplayTitle } from "./sanitize-display";
 import {
+  isSessionReadReservedItemKey,
   type PackedProjectionLines,
   type ProjectionSafeMessage,
   type RenderedLinePosition,
@@ -157,6 +158,9 @@ export function projectSessionMessage(message: ProjectionSafeMessage): Projectio
     structuralLine(message.messageId, "$assistant-state", `[assistant: ${message.state}]`),
   ];
   for (const part of message.parts) {
+    if (isSessionReadReservedItemKey(part.itemKey)) {
+      return { ok: false, message: "Assistant part identity collides with a structural item key." };
+    }
     if (part.type === "text") {
       const remaining = sessionReadLimits.maxRenderedLinesPerMessage - lines.length;
       if (remaining <= 0)

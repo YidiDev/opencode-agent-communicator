@@ -9,6 +9,8 @@ interface NativeSessionReadRequest {
   readonly workspaceKey: WorkspaceKey;
   readonly sessionId: SessionId;
   readonly abort: AbortSignal;
+  /** Remaining invocation allowance; adapters must apply it before deserialization. */
+  readonly maximumResponseBytes?: number;
 }
 
 export type NativeMessagePageRequest = NativeSessionReadRequest &
@@ -29,10 +31,14 @@ export interface NativeFixedMessageRequest extends NativeSessionReadRequest {
 
 export interface NativeMessagePage {
   readonly messages: readonly ProjectionSafeMessage[];
+  /** Every raw native message ID in exact native order, including omitted variants. */
+  readonly examinedMessageIds: readonly string[];
   /** Counts every raw native page entry, including deliberately omitted variants. */
   readonly examinedMessageCount: number;
   /** Exact UTF-8 bytes in projection-safe assistant text retained by this DTO. */
   readonly projectedTextByteCount: number;
+  /** Exact raw response bytes measured before native JSON deserialization. */
+  readonly rawResponseByteCount: number;
   /** Counts every assistant content part examined, including omitted parts. */
   readonly examinedPartCount: number;
   readonly previousCursor: string | null;
@@ -44,9 +50,10 @@ export type NativeFixedMessageResult =
       readonly kind: "found";
       readonly message: ProjectionSafeMessage;
       readonly projectedTextByteCount: number;
+      readonly rawResponseByteCount: number;
       readonly examinedPartCount: number;
     }
-  | { readonly kind: "not_found" };
+  | { readonly kind: "not_found"; readonly rawResponseByteCount: number };
 
 /** Native transcript reads can return only the deliberately restricted projection DTO. */
 export interface NativeSessionReadPort {

@@ -243,7 +243,7 @@ export async function traverseSessionRead(
   let reachedOldest = false;
   let anchorSeen = anchor === undefined;
   const descending: ProjectionSafeMessage[] = [];
-  const ids = new Set<string>();
+  const rawIds = new Set<string>();
   const nativeCursors = new Set<string>();
   const linesFor = (
     messages: readonly ProjectionSafeMessage[],
@@ -254,6 +254,12 @@ export async function traverseSessionRead(
       return unavailable("Transcript traversal could not be proven within bounds.");
     if (!work.chargeNativeCall())
       return unavailable("Transcript traversal could not be proven within bounds.");
+    const maximumResponseBytes = Math.min(
+      sessionReadLimits.maxNativeResponseBytes,
+      work.remainingRawResponseBytes(),
+    );
+    if (maximumResponseBytes < 1)
+      return unavailable("Transcript traversal could not be proven within bounds.");
     const guarded = await effectGuard();
     if (!guarded.ok) return guarded;
     const settled = await scope.run(() =>
@@ -262,12 +268,14 @@ export async function traverseSessionRead(
             workspaceKey: read.workspace,
             sessionId: read.target,
             order: "desc",
+            maximumResponseBytes,
             abort: scope.signal,
           })
         : native.readMessagePage({
             workspaceKey: read.workspace,
             sessionId: read.target,
             cursor,
+            maximumResponseBytes,
             abort: scope.signal,
           }),
     );
@@ -277,21 +285,25 @@ export async function traverseSessionRead(
     const page = snapshotNativeMessagePage(
       settled.value,
       sessionReadLimits.maxProjectedTextBytesExamined,
+      maximumResponseBytes,
     );
     if (
       !page ||
       !work.chargeRaw({
         messages: page.examinedMessageCount,
         projectedTextBytes: page.projectedTextByteCount,
+        rawResponseBytes: page.rawResponseByteCount,
         parts: page.examinedPartCount,
       })
     )
       return unavailable("Transcript pagination is malformed.");
+    for (const messageId of page.examinedMessageIds) {
+      if (rawIds.has(messageId)) return unavailable("Transcript pagination is ambiguous.");
+      rawIds.add(messageId);
+    }
     for (const message of page.messages) {
       if (scope.signal.aborted)
         return domainFailure("deadline_expired", "Session read deadline expired.", false);
-      if (ids.has(message.messageId)) return unavailable("Transcript pagination is ambiguous.");
-      ids.add(message.messageId);
       if (anchor && message.messageId === anchor.messageId) anchorSeen = true;
       const projected = work.project(message);
       if (!projected.ok) return unavailable("Transcript projection is unavailable.");

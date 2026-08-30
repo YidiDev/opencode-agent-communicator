@@ -24,8 +24,10 @@ export function nativePageFixture(
 ) {
   return {
     messages,
+    examinedMessageIds: messages.map((message) => message.messageId),
     examinedMessageCount: messages.length,
     projectedTextByteCount: projectionTextBytes(messages),
+    rawResponseByteCount: 0,
     examinedPartCount: examinedParts(messages),
     previousCursor: null,
     nextCursor,
@@ -37,6 +39,7 @@ export function nativeFoundFixture(message: ProjectionSafeMessage) {
     kind: "found" as const,
     message,
     projectedTextByteCount: projectionTextBytes([message]),
+    rawResponseByteCount: 0,
     examinedPartCount: examinedParts([message]),
   };
 }

@@ -495,8 +495,11 @@ Transcript work is immutable-bounded to 8 messages per page, 96 page/fixed-messa
 reads, 512 raw native messages examined including omitted variants, 8 MiB of projection-safe
 assistant-text UTF-8 bytes examined, 16,384 native assistant parts examined including omitted parts,
 32,768 rendered lines examined across the invocation, 8,192 rendered lines per message, a 4 MiB raw transcript
-response per call before deserialization, and 512 characters per native cursor. One invocation-wide
+response per call and 32 MiB cumulatively before deserialization, and 512 characters per native cursor. One invocation-wide
 internal budget charges the initial fixed anchor, all pages, and the final fixed-anchor reread.
+Separately, the structural native adapter accepts at most 1,048,576 UTF-16 characters in one text
+part, 4,096 parts in one assistant message, and 256 UTF-16 characters in one raw tool name. These are
+exact per-value/per-message adapter ceilings, not invocation budget counters.
 Bounds exhaustion never triggers an unbounded proof attempt or a guessed result.
 It returns `native_unavailable`. Fixed-anchor reads before and after traversal validate cursor
 stability across append races.
@@ -1493,8 +1496,9 @@ support. It contains no remote command or synthetic wake experiments.
   65,536-byte aggregate output.
 - Opaque cursor binding to workspace, session, projection, message, item, UTF-8 boundary, and prefix;
   empty-transcript boundaries; append-only suffix reads; and stale prefix/anchor recovery.
-- Native caps of 8 messages/page, 96 calls, 512 examined messages, 4 MiB before response
-  deserialization, and 512 native-cursor characters, with no unbounded fallback or guessed result.
+- Native caps of 8 messages/page, 96 calls, 512 examined messages, 4 MiB per response and 32 MiB
+  cumulatively before deserialization, and 512 native-cursor characters, with no unbounded fallback
+  or guessed result.
 - Malformed/unknown native variants, excluded fields, prompt-injection-capable assistant text, abort
   propagation, and proof that no transcript content is persisted, logged, exported, or written.
 - Isolated supported-range live acceptance must prove real V2 pagination and fixed-message shapes,

@@ -5,7 +5,7 @@ import {
   traverseSessionRead,
 } from "../../../src/application/session-read-pagination";
 import { SessionReadWorkBudget } from "../../../src/application/session-read-work";
-import type { ProjectionSafeMessage } from "../../../src/domain/session-read";
+import { type ProjectionSafeMessage, sessionReadLimits } from "../../../src/domain/session-read";
 import type { SessionId } from "../../../src/domain/sessions";
 import type { WorkspaceKey } from "../../../src/domain/workspaces";
 
@@ -42,6 +42,20 @@ describe("session read immutable work bounds", () => {
     expect(work.chargeNativeCall()).toBe(false);
   });
 
+  test("charges raw response bytes across the whole invocation", () => {
+    const work = new SessionReadWorkBudget();
+    const half = sessionReadLimits.maxNativeResponseBytesExamined / 2;
+    expect(
+      work.chargeRaw({ messages: 0, projectedTextBytes: 0, rawResponseBytes: half, parts: 0 }),
+    ).toBe(true);
+    expect(
+      work.chargeRaw({ messages: 0, projectedTextBytes: 0, rawResponseBytes: half, parts: 0 }),
+    ).toBe(true);
+    expect(
+      work.chargeRaw({ messages: 0, projectedTextBytes: 0, rawResponseBytes: 1, parts: 0 }),
+    ).toBe(false);
+  });
+
   test("reuses cached projections and charges an explicit replacement", () => {
     const work = new SessionReadWorkBudget();
     const first = work.project(assistant("cached", "first"));
@@ -70,7 +84,9 @@ describe("session read immutable work bounds", () => {
 
   test("fails closed when the charged final fixed anchor would exceed the parts budget", async () => {
     const work = new SessionReadWorkBudget();
-    expect(work.chargeRaw({ messages: 2, projectedTextBytes: 0, parts: 8_192 })).toBe(true);
+    expect(
+      work.chargeRaw({ messages: 2, projectedTextBytes: 0, rawResponseBytes: 0, parts: 8_192 }),
+    ).toBe(true);
     expect(work.project(assistant("anchor", "x")).ok).toBe(true);
     let fixedCalls = 0;
     const result = await readValidatedSessionReadAnchor({
@@ -85,6 +101,7 @@ describe("session read immutable work bounds", () => {
             kind: "found",
             message: assistant("anchor", "x"),
             projectedTextByteCount: 1,
+            rawResponseByteCount: 0,
             examinedPartCount: 8_193,
           } as const;
         },
@@ -132,6 +149,7 @@ describe("session read immutable work bounds", () => {
                 message.type === "assistant" && message.parts[0]?.type === "text"
                   ? new TextEncoder().encode(message.parts[0].text).length
                   : 0,
+              rawResponseByteCount: 0,
               examinedPartCount: message.type === "assistant" ? message.parts.length : 0,
             } as const;
           },
@@ -161,6 +179,73 @@ describe("session read immutable work bounds", () => {
 });
 
 describe("session read traversal work bounds", () => {
+  test("stops before a response would exceed the cumulative raw-byte budget", async () => {
+    let calls = 0;
+    const ceilings: number[] = [];
+    const result = await traverseSessionRead(
+      scope,
+      {
+        async readMessagePage(request) {
+          calls += 1;
+          ceilings.push(request.maximumResponseBytes ?? -1);
+          return {
+            messages: [],
+            examinedMessageIds: [],
+            examinedMessageCount: 0,
+            projectedTextByteCount: 0,
+            rawResponseByteCount: sessionReadLimits.maxNativeResponseBytes,
+            examinedPartCount: 0,
+            previousCursor: null,
+            nextCursor: `raw_${calls}`,
+          };
+        },
+        async readMessage() {
+          throw new Error();
+        },
+      },
+      plan,
+      undefined,
+      [],
+      new SessionReadWorkBudget(),
+      guard,
+    );
+    expect(result).toMatchObject({ ok: false, error: { code: "native_unavailable" } });
+    expect(calls).toBe(8);
+    expect(ceilings).toEqual(Array(8).fill(sessionReadLimits.maxNativeResponseBytes));
+  });
+
+  test("rejects adjacent-page overlap consisting only of omitted raw message IDs", async () => {
+    let calls = 0;
+    const result = await traverseSessionRead(
+      scope,
+      {
+        async readMessagePage() {
+          calls += 1;
+          return {
+            messages: [],
+            examinedMessageIds: ["msg_omitted_overlap"],
+            examinedMessageCount: 1,
+            projectedTextByteCount: 0,
+            rawResponseByteCount: 0,
+            examinedPartCount: 0,
+            previousCursor: null,
+            nextCursor: calls === 1 ? "next" : null,
+          };
+        },
+        async readMessage() {
+          throw new Error();
+        },
+      },
+      plan,
+      undefined,
+      [],
+      new SessionReadWorkBudget(),
+      guard,
+    );
+    expect(result).toMatchObject({ ok: false, error: { code: "native_unavailable" } });
+    expect(calls).toBe(2);
+  });
+
   test("charges omitted raw entries and stops before examining message 513", async () => {
     let calls = 0;
     const result = await traverseSessionRead(
@@ -170,8 +255,13 @@ describe("session read traversal work bounds", () => {
           calls += 1;
           return {
             messages: [],
+            examinedMessageIds: Array.from(
+              { length: 8 },
+              (_, index) => `omitted_${calls}_${index}`,
+            ),
             examinedMessageCount: 8,
             projectedTextByteCount: 0,
+            rawResponseByteCount: 0,
             examinedPartCount: 0,
             previousCursor: null,
             nextCursor: `omitted_${calls}`,
@@ -195,16 +285,20 @@ describe("session read traversal work bounds", () => {
     for (const page of [
       {
         messages: [],
+        examinedMessageIds: Array.from({ length: 9 }, (_, index) => `raw_${index}`),
         examinedMessageCount: 9,
         projectedTextByteCount: 0,
+        rawResponseByteCount: 0,
         examinedPartCount: 0,
         previousCursor: null,
         nextCursor: null,
       },
       {
         messages: [assistant("counted", "x")],
+        examinedMessageIds: ["counted"],
         examinedMessageCount: 0,
         projectedTextByteCount: 1,
+        rawResponseByteCount: 0,
         examinedPartCount: 1,
         previousCursor: null,
         nextCursor: null,
@@ -243,8 +337,10 @@ describe("session read traversal work bounds", () => {
         async readMessagePage() {
           return {
             messages,
+            examinedMessageIds: messages.map((message) => message.messageId),
             examinedMessageCount: 3,
             projectedTextByteCount: 9_000_000,
+            rawResponseByteCount: 0,
             examinedPartCount: 3,
             previousCursor: null,
             nextCursor: "more",

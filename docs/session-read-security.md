@@ -132,13 +132,18 @@ One invocation is immutable-bounded to:
 | Rendered projection lines examined across the invocation | 32,768 |
 | Rendered projection lines per message | 8,192 |
 | Raw bytes per transcript page/fixed-message response | 4 MiB |
+| Raw transcript-response bytes examined per invocation | 32 MiB |
 | Native cursor characters | 512 |
+| Native text characters per text part (structural, UTF-16) | 1,048,576 |
+| Native parts per assistant message (structural) | 4,096 |
+| Raw native tool-name characters (structural, UTF-16) | 256 |
 
 The bounded transcript transport rejects an oversized message response before JSON deserialization. Strict data-only
 snapshots then validate exact generated-SDK envelopes, raw examined-message and assistant-part
 counts, exact retained text-byte count, and the restricted projection. One mutable internal work
 budget charges the initial anchor, every page, and the final anchor reread, including native calls,
-raw messages, parts, retained text bytes, and rendered lines. Exhausting a traversal bound
+raw response bytes, raw messages, parts, retained text bytes, and rendered lines. The remaining raw-byte
+allowance is applied to the transport before each response is deserialized. Exhausting a traversal bound
 without proving the requested page returns `native_unavailable`; the implementation performs no
 unbounded scan, fallback export, inference, or guessed continuation.
 
@@ -147,6 +152,9 @@ visibility observation, plus the initial, post-approval, and final observations.
 requests share the invocation abort/deadline and strict structural validation, but they are not counted
 as transcript calls and do not use the 4 MiB transcript-response transport cap. The call and byte
 ceilings above must not be represented as aggregate limits for all host metadata traffic.
+The text-part, assistant-message-part, and raw tool-name rows are exact structural adapter ceilings,
+not invocation counters. Bounded native tool names may contain Unicode and controls; domain rendering
+sanitizes the structural marker, while a lone surrogate fails closed.
 
 The native adapter is limited to the supported stable OpenCode range `>=1.18.21 <1.19.0`. Isolated
 live acceptance proves the real V2 page/fixed-message shapes, pagination order, append behavior, and

@@ -40,13 +40,15 @@ function nativeFixture(): OpenCodeNativeAdapter {
     }),
     readMessagePage: async () => ({
       messages: [],
+      examinedMessageIds: [],
       examinedMessageCount: 0,
       projectedTextByteCount: 0,
+      rawResponseByteCount: 0,
       examinedPartCount: 0,
       previousCursor: null,
       nextCursor: null,
     }),
-    readMessage: async () => ({ kind: "not_found" }),
+    readMessage: async () => ({ kind: "not_found", rawResponseByteCount: 0 }),
     queueMessage: async () => ({ kind: "unknown" }),
     steerRequest: async () => ({ kind: "unknown" }),
     observeRequestParticipants: async () => ({

@@ -3,6 +3,7 @@ import type { Permission } from "@opencode-ai/sdk";
 type PermissionStatus = { status: "ask" | "deny" | "allow" };
 
 const permissionActions = new Set(["allow", "ask", "deny"]);
+const mandatoryApprovalTypes = ["session_stop", "session_read"] as const;
 const enforcementError = "Mandatory OpenCode permission configuration could not be enforced.";
 const malformedError = "OpenCode permission configuration is malformed.";
 
@@ -97,6 +98,17 @@ function enforceOwnDataProperty(target: object, key: string, value: unknown): vo
   }
 }
 
+function mandatoryRule(rule: unknown): unknown {
+  if (typeof rule === "string") return rule === "allow" ? "ask" : rule;
+
+  const entries = ownDataEntries(rule);
+  const narrowed = Object.fromEntries([
+    ...(entries.some(([pattern]) => pattern === "*") ? [] : [["*", "ask"]]),
+    ...entries.map(([pattern, action]) => [pattern, action === "allow" ? "ask" : action]),
+  ]);
+  return narrowed;
+}
+
 /** Ensure host policy evaluation reaches the ask hook; OpenCode 1.18 skips it for pre-allowed calls. */
 export function enforceMandatoryStopConfiguration(config: object): void {
   let permission: ReturnType<typeof ownDataValue>;
@@ -109,22 +121,35 @@ export function enforceMandatoryStopConfiguration(config: object): void {
   }
   const current = permission.value;
   if (!permission.exists || current === undefined) {
-    enforceOwnDataProperty(config, "permission", { session_stop: "ask" });
+    enforceOwnDataProperty(config, "permission", {
+      session_stop: "ask",
+      session_read: "ask",
+    });
     return;
   }
   if (typeof current === "string") {
     if (!isPermissionAction(current)) failMalformed();
-    enforceOwnDataProperty(config, "permission", { "*": current, session_stop: "ask" });
+    const mandatoryAction = current === "allow" ? "ask" : current;
+    enforceOwnDataProperty(config, "permission", {
+      "*": current,
+      session_stop: mandatoryAction,
+      session_read: mandatoryAction,
+    });
     return;
   }
   validatePermissionObject(current);
-  enforceOwnDataProperty(current, "session_stop", "ask");
+  for (const type of mandatoryApprovalTypes) {
+    const rule = ownDataValue(current, type);
+    enforceOwnDataProperty(current, type, rule.exists ? mandatoryRule(rule.value) : "ask");
+  }
 }
 
-/** Stop is destructive, so inherited allow rules are deliberately narrowed back to ask. */
+/** Mandatory cross-session operations must never inherit an allow decision. */
 export async function enforceMandatoryApproval(
   input: Permission,
   output: PermissionStatus,
 ): Promise<void> {
-  if (input.type === "session_stop" && output.status === "allow") output.status = "ask";
+  if (mandatoryApprovalTypes.some((type) => input.type === type) && output.status === "allow") {
+    output.status = "ask";
+  }
 }

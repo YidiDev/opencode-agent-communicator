@@ -53,7 +53,7 @@ const visible = {
   targetStatus: "busy" as const,
   observedAtMs: 7,
 };
-
+const notFound = { kind: "not_found", rawResponseByteCount: 0 } as const;
 function assistant(id = "msg_a", text = "one\ntwo"): ProjectionSafeMessage {
   return {
     type: "assistant",
@@ -95,7 +95,7 @@ function fixture(messages: ProjectionSafeMessage[] = []) {
       },
       async readMessage({ messageId }) {
         const message = messages.find((entry) => entry.messageId === messageId);
-        return message ? nativeFoundFixture(message) : { kind: "not_found" as const };
+        return message ? nativeFoundFixture(message) : notFound;
       },
     },
     digest: { ...digestPort },
@@ -156,11 +156,10 @@ describe("session read strict snapshots and projection splitting", () => {
     });
     expect(sessionReadVisibilityFailure(visible)).toBeUndefined();
   });
-
   test("rejects malformed fixed messages, prototypes, sparse arrays, and duplicate parts", () => {
     expect(snapshotNativeFixedMessage(poisonGetter("kind"))).toBeUndefined();
-    expect(snapshotNativeFixedMessage({ kind: "not_found" })).toEqual({ kind: "not_found" });
-    expect(snapshotNativeFixedMessage({ kind: "not_found", extra: 1 })).toBeUndefined();
+    expect(snapshotNativeFixedMessage(notFound)).toEqual(notFound);
+    expect(snapshotNativeFixedMessage({ ...notFound, extra: 1 })).toBeUndefined();
     expect(snapshotNativeFixedMessage({ kind: "wrong", message: assistant() })).toBeUndefined();
     expect(
       snapshotNativeFixedMessage({ kind: "found", message: assistant() }, "other"),
@@ -186,6 +185,7 @@ describe("session read strict snapshots and projection splitting", () => {
         kind: "found",
         message: { type: "user", messageId: "msg_u" },
         projectedTextByteCount: 0,
+        rawResponseByteCount: 0,
         examinedPartCount: 0,
       }),
     ).toBeDefined();
@@ -198,11 +198,11 @@ describe("session read strict snapshots and projection splitting", () => {
           parts: [{ type: "tool", itemKey: "tool", name: "n", status: "error" }],
         },
         projectedTextByteCount: 0,
+        rawResponseByteCount: 0,
         examinedPartCount: 1,
       }),
     ).toBeDefined();
   });
-
   test("splits boundaries at starts, ends, wrapped lines, invalid UTF-8 offsets, and mismatches", async () => {
     const message = assistant("msg_a", `${"x".repeat(16_384)}z`);
     const start = { messageId: "msg_a", itemKey: "text", utf8ByteOffset: 0, prefixSha256: hash };
@@ -332,7 +332,7 @@ describe("presence and fixed-anchor fail-closed settlements", () => {
         },
         async readMessage() {
           if (scenario === "malformed") return { bad: true } as never;
-          if (scenario === "missing") return { kind: "not_found" };
+          if (scenario === "missing") return notFound;
           return nativeFoundFixture(message);
         },
       },
@@ -394,6 +394,14 @@ describe("bounded transcript traversal", () => {
         previousCursor: null,
         nextCursor: null,
       },
+      nativePageFixture([
+        {
+          type: "assistant",
+          messageId: "msg_collision",
+          state: "active",
+          parts: [{ type: "text", itemKey: "$assistant", text: "collision" }],
+        },
+      ]),
       { messages: [], previousCursor: " bad", nextCursor: null },
     ];
     for (const page of cases) {
