@@ -143,6 +143,9 @@ class MemoryDeliveries implements DeliveryPersistencePort {
         : input.nowMs;
     this.record = withState(this.record, input.state, transitionAtMs);
     if (input.state === "admitted" || input.state === "promoted") {
+      if (input.state === "admitted" && !("admittedSeq" in input)) {
+        throw new Error("expected V2 admission fixture");
+      }
       const evidence =
         input.state === "admitted"
           ? {

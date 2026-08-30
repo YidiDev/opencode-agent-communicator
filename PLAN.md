@@ -30,12 +30,11 @@ communicator.
 
 Every operation derives its verified source session ID from
 `ToolContext.sessionID`; models cannot supply or override sender identity.
-OpenCode owns durable prompt admission, ordering, promotion, and transcript
-storage. The communicator stores delivery metadata, durable blocking requests,
+OpenCode owns prompt execution and transcript storage. The communicator stores delivery metadata, durable blocking requests,
 retained results, start operations, authorization metadata, quotas, and store
 ownership in SQLite. It does not duplicate the native prompt queue.
 
-Only a normal queued `session_send` message may wake an existing idle session.
+Only a normal asynchronous `session_send` message may wake an existing idle session.
 Structured questions and milestone waits require a target observed as active
 and use native steer admission. They never poll, retry, fall back to a queue, or
 create synthetic wake reminders.
@@ -405,7 +404,7 @@ boolean, updated time, and communicator-managed provenance when applicable.
 
 The result includes enough current state for this explicit workflow:
 
-1. Queue a normal message with `session_send` to wake/resume an idle session.
+1. Submit a normal message with `session_send` to wake/resume an idle session.
 2. Inspect `session_list` until the target is observed `busy` or `retry`.
 3. Invoke `session_ask` or `session_wait`.
 
@@ -422,7 +421,8 @@ type SessionSendArgs = {
 
 The coordinator validates source, target, authorization, size, and quotas;
 creates a delivery record and caller-supplied native message ID; then submits
-the escaped message envelope through V2 `delivery: "queue"`.
+the escaped message envelope once through the public asynchronous prompt surface and reconciles it
+through fixed-message read-back.
 
 The result reports admission evidence only. It never reports that an idle
 target became active. The caller uses `session_list` for a later status
@@ -916,8 +916,8 @@ and truncation are hygiene measures, not secure-erasure claims.
 
 ### 10.1 Messages
 
-Messages always use native queue admission, regardless of observed target
-status. An accepted admission is durable native work but is not proof that an
+Messages use one public asynchronous prompt submission. Exact fixed-message read-back proves public
+transcript admission but is not proof that an
 idle session became active. Payload is not stored in SQLite after confirmed
 admission.
 

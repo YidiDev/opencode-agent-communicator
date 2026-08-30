@@ -253,7 +253,7 @@ function requestedToolResponse(serialized: string): Response {
 }
 
 function shouldGateRequest(
-  options: { readonly gated?: boolean; readonly gateText?: string },
+  options: { readonly gated?: boolean; readonly gateText?: string | readonly string[] },
   body: unknown,
 ): boolean {
   if (options.gated) return true;
@@ -261,7 +261,8 @@ function shouldGateRequest(
     return false;
   }
   const message = body.messages.at(-1);
-  return isRecord(message) && String(message.content).includes(options.gateText);
+  const markers = typeof options.gateText === "string" ? [options.gateText] : options.gateText;
+  return isRecord(message) && markers.some((marker) => String(message.content).includes(marker));
 }
 
 function completedProviderResponse(body: unknown): Response {
@@ -312,7 +313,7 @@ function gatedTextResponse(release: Promise<string>, cancelled: Deferred<void>):
 }
 
 export function launchDeterministicProvider(
-  options: { gated?: boolean; gateText?: string } = {},
+  options: { gated?: boolean; gateText?: string | readonly string[] } = {},
 ): ProviderHarness {
   const requests: unknown[] = [];
   const observations: ProviderRequestObservation[] = [];

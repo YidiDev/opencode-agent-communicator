@@ -60,12 +60,14 @@ export function writeDeliveryCompletion(
   if (input.state === "admitted") {
     changes = context.database.run(
       `UPDATE deliveries SET state = 'admitted', updated_at_ms = ?, admitted_at_ms = ?,
-         admitted_seq = ?, evidence_observed_at_ms = ?, admission_unknown_at_ms = NULL
+         admission_evidence_kind = ?, admitted_seq = ?, evidence_observed_at_ms = ?,
+         admission_unknown_at_ms = NULL
        WHERE workspace_key = ? AND id = ? AND state = ?`,
       [
         transitionAtMs,
         transitionAtMs,
-        input.admittedSeq,
+        input.evidenceKind ?? "v2_queue",
+        input.evidenceKind === "public_message" ? null : input.admittedSeq,
         input.evidenceObservedAtMs,
         input.workspaceKey,
         input.deliveryId,
@@ -80,7 +82,8 @@ export function writeDeliveryCompletion(
        admitted_at_ms = CASE WHEN state = 'admitted' THEN admitted_at_ms ELSE ? END,
        promoted_at_ms = ?,
        admitted_seq = CASE WHEN state = 'admitted' THEN admitted_seq ELSE ? END,
-       promoted_seq = ?, evidence_observed_at_ms = ?, admission_unknown_at_ms = NULL
+       admission_evidence_kind = 'v2_queue', promoted_seq = ?, evidence_observed_at_ms = ?,
+       admission_unknown_at_ms = NULL
      WHERE workspace_key = ? AND id = ? AND state = ?`,
     [
       transitionAtMs,

@@ -632,9 +632,9 @@ async function proveProductionAdapterParsingAndMergedActivity(fixture: LiveFixtu
     envelope: "production-adapter-live-proof",
     abort: new AbortController().signal,
   });
-  expect(admission.kind).toBe("admitted");
-  if (admission.kind !== "admitted") throw new Error("production adapter admission was not proven");
-  expect(admission.admittedSeq).toBeGreaterThanOrEqual(0);
+  expect(admission.kind).toBe("public_message");
+  if (admission.kind !== "public_message")
+    throw new Error("production adapter admission was not proven");
   expect(admission.observedAtMs).toBeGreaterThanOrEqual(0);
 
   const request = await fixture.provider.waitForText("production-adapter-live-proof");
@@ -649,7 +649,7 @@ async function proveProductionAdapterParsingAndMergedActivity(fixture: LiveFixtu
   });
   expect(steer.kind).toBe("admitted");
   if (steer.kind !== "admitted") throw new Error("production adapter steer was not admitted");
-  expect(steer.admittedSeq).toBeGreaterThan(admission.admittedSeq);
+  expect(steer.admittedSeq).toBeGreaterThanOrEqual(0);
   expect(steer.observedAtMs).toBeGreaterThanOrEqual(0);
   const admittedEvent = await waitForPromptEvent(
     fixture,
@@ -665,7 +665,6 @@ async function proveProductionAdapterParsingAndMergedActivity(fixture: LiveFixtu
   });
   expect(admittedEvent.durable?.seq).toBe(steer.admittedSeq);
   request.release();
-  await waitForStepEnd(fixture, sessionID);
   const promptedEvent = await waitForPromptEvent(
     fixture,
     "session.next.prompted",

@@ -23,7 +23,7 @@ export function createSessionSendTool(
 ): InternalToolContract<SessionSendToolArguments> {
   return {
     description:
-      "Queue a message for a visible root session. Admission does not prove activation; inspect session_list until busy or retry before asking or waiting.",
+      "Submit an asynchronous message to a visible root session. Public transcript admission does not prove activation; inspect session_list until busy or retry before asking or waiting.",
     args: sessionSendArgumentsSchema,
     async execute(arguments_, context) {
       const source = validateSessionId(context.sessionID);

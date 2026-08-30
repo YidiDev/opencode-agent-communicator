@@ -6,7 +6,7 @@
 [![OpenCode 1.18 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** `0.2.3` supports Linux x64 and stable OpenCode versions
+**Release status:** `0.2.4` supports Linux x64 and stable OpenCode versions
 `>=1.18.21 <1.19.0`. Bun `1.4.0` is required for development and release verification. Other
 architectures, operating systems, OpenCode versions, and prereleases are unsupported.
 
@@ -53,15 +53,15 @@ OpenCode `1.18.x` does not reliably populate its package cache from a private `g
 Install the immutable release outside OpenCode instead:
 
 ```bash
-install_root="$HOME/.local/share/opencode-agent-communicator/v0.2.3"
+install_root="$HOME/.local/share/opencode-agent-communicator/v0.2.4"
 install -d -m 0700 "$install_root"
 npm install --prefix "$install_root" --save-exact --ignore-scripts \
-  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.2.3"
+  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.2.4"
 test -f "$install_root/node_modules/opencode-agent-communicator/src/index.ts"
 ```
 
 The repository is private, so the account running npm and OpenCode must have working GitHub SSH
-access. Release tags are immutable by project policy; do not replace `v0.2.3` with `main`.
+access. Release tags are immutable by project policy; do not replace `v0.2.4` with `main`.
 
 ### 2. Add the plugin
 
@@ -73,7 +73,7 @@ absolute home directory of the account that performed the installation:
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.2.3/node_modules/opencode-agent-communicator/src/index.ts",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v0.2.4/node_modules/opencode-agent-communicator/src/index.ts",
       {
         "policies": {
           "message": "allow",
@@ -124,7 +124,7 @@ configuration are startup errors.
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.2.3/node_modules/opencode-agent-communicator/src/index.ts",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v0.2.4/node_modules/opencode-agent-communicator/src/index.ts",
       {
         "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
         "startupDeadlineMs": 30000,
@@ -206,7 +206,7 @@ not happen.
 | Tool | Arguments | Who can use it | Result or effect |
 | --- | --- | --- | --- |
 | `session_list` | optional `status`, `include_archived`, `limit` | visible root caller | Current visible roots with sanitized titles and observed status. |
-| `session_send` | `session_id`, `content` | visible source targeting a visible root | Durable delivery ID and queue-admission state. This is the only tool that may wake an idle target. |
+| `session_send` | `session_id`, `content` | visible source targeting a visible root | Durable delivery ID and exact public-message admission state. This is the only tool that may wake an idle target. |
 | `session_delivery_get` | `delivery_id` | delivery source or target | Payload-free delivery metadata. |
 | `session_ask` | `session_id`, 1-10 `questions`, `timeout_seconds` 1-3600 | visible source targeting an observed-active root | Blocks for validated answers or a durable terminal state. Never wakes idle work. |
 | `session_respond` | `request_id`, `answers` | pending ask target | Atomically stores the answer and terminalizes the ask. |
@@ -278,7 +278,7 @@ symlinks, unsafe filesystems, mount transitions, and reserved staging names fail
 
 1. Call `session_list` and choose a visible root.
 2. Call `session_send` with the task or context.
-3. Inspect `session_delivery_get` if queue admission was uncertain.
+3. Inspect `session_delivery_get` if public-message admission was uncertain.
 4. Call `session_list` until the target is `busy` or `retry` before using ask or wait.
 
 ### Ask for a decision
@@ -392,6 +392,15 @@ entire private directory, including SQLite sidecars. Application-level acknowled
 are logical deletion, not secure erasure from old pages, snapshots, or media.
 
 ## Upgrade, migrate, or roll back
+
+### Upgrade to 0.2.4
+
+Release `0.2.4` restores asynchronous `session_start` settlement and routes ordinary `session_send`
+through the same public transcript used by managed sessions. Both tools return after their fixed user
+message is observable, without waiting for assistant completion. SQLite schema v12 distinguishes
+public-message evidence from historical V2 queue evidence without fabricating native sequence
+numbers. Stop every backend, back up the complete private state directory, install tag `v0.2.4` into
+a new private versioned directory, update the plugin entry, restart OpenCode, and verify all 14 tools.
 
 ### Upgrade to 0.2.3
 
@@ -512,7 +521,7 @@ exact ordered 14-tool manifest, and a reviewed
 fingerprint of every path npm will pack. It rejects path-policy drift, symlinks, executable entries,
 secret-like names, and generated/test output. The black-box test creates an archive without
 publishing it, installs it into an isolated Bun project, imports the package by name, and checks
-packaged runtime assets. Release `0.2.3` is distributed through its immutable Git tag and GitHub
+packaged runtime assets. Release `0.2.4` is distributed through its immutable Git tag and GitHub
 Release, not npm. npm remains the reviewed archive format, and the separate npm publication workflow
 can run only through an explicit manual dispatch.
 

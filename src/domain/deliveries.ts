@@ -33,16 +33,24 @@ export function canTransitionDelivery(from: DeliveryState, to: DeliveryState): b
 
 export type DeliveryAdmissionEvidence =
   | {
+      readonly kind?: "v2_queue";
       readonly nativeMessageId: NativeMessageId;
       readonly state: "admitted";
       readonly admittedSeq: number;
       readonly observedAtMs: number;
     }
   | {
+      readonly kind?: "v2_queue";
       readonly nativeMessageId: NativeMessageId;
       readonly state: "promoted";
       readonly admittedSeq: number;
       readonly promotedSeq: number;
+      readonly observedAtMs: number;
+    }
+  | {
+      readonly kind: "public_message";
+      readonly nativeMessageId: NativeMessageId;
+      readonly state: "admitted";
       readonly observedAtMs: number;
     };
 
@@ -118,12 +126,13 @@ function coherentAdmissionMetadata(delivery: DeliveryMetadata): boolean {
     !transitionTime(delivery, evidence.observedAtMs)
   )
     return false;
-  if (!Number.isSafeInteger(evidence.admittedSeq) || evidence.admittedSeq < 0) return false;
   if (evidence.nativeMessageId !== delivery.nativeMessageId) return false;
   if (delivery.state === "admitted") {
     return (
       transitionTime(delivery, delivery.admittedAtMs) &&
-      orderedAfter(delivery.submittedAtMs, delivery.admittedAtMs)
+      orderedAfter(delivery.submittedAtMs, delivery.admittedAtMs) &&
+      (evidence.kind === "public_message" ||
+        (Number.isSafeInteger(evidence.admittedSeq) && evidence.admittedSeq >= 0))
     );
   }
   if (evidence.state !== "promoted") return false;
@@ -132,6 +141,8 @@ function coherentAdmissionMetadata(delivery: DeliveryMetadata): boolean {
     transitionTime(delivery, delivery.promotedAtMs) &&
     orderedAfter(delivery.submittedAtMs, delivery.admittedAtMs) &&
     orderedAfter(delivery.admittedAtMs, delivery.promotedAtMs) &&
+    Number.isSafeInteger(evidence.admittedSeq) &&
+    evidence.admittedSeq >= 0 &&
     Number.isSafeInteger(evidence.promotedSeq) &&
     evidence.promotedSeq > evidence.admittedSeq
   );

@@ -137,6 +137,7 @@ class RecoveryStore implements DeliveryPersistencePort {
         updatedAtMs: transitionAtMs,
       };
     } else if (input.state === "admitted") {
+      if (!("admittedSeq" in input)) throw new Error("expected V2 admission fixture");
       this.delivery = {
         ...this.delivery,
         state: input.state,

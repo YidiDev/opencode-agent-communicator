@@ -963,6 +963,167 @@ DROP TRIGGER managed_sessions_ceiling_update_v11;
 ALTER TABLE start_operations DROP COLUMN managed_session_limit;
 `,
   },
+  {
+    version: 12,
+    checksum: "sha256:c8d9d2485e076afb224f734525de4fdd99f5d2c2da72ed1b698275b54648e6fe",
+    sql: `
+ALTER TABLE deliveries RENAME TO deliveries_v11;
+CREATE TABLE deliveries (
+  id TEXT PRIMARY KEY CHECK (
+    length(id) = 36 AND substr(id, 1, 4) = 'dlv_' AND
+    substr(id, 5) NOT GLOB '*[^0-9a-f]*'
+  ),
+  workspace_key TEXT NOT NULL REFERENCES workspaces(workspace_key) ON DELETE CASCADE CHECK (
+    length(workspace_key) BETWEEN 1 AND 128 AND
+    substr(workspace_key, 1, 1) GLOB '[A-Za-z0-9]' AND
+    workspace_key NOT GLOB '*[^A-Za-z0-9._:-]*'
+  ),
+  source_session_id TEXT NOT NULL CHECK (
+    length(source_session_id) BETWEEN 5 AND 132 AND substr(source_session_id, 1, 4) = 'ses_' AND
+    substr(source_session_id, 5) NOT GLOB '*[^A-Za-z0-9]*'
+  ),
+  target_session_id TEXT NOT NULL CHECK (
+    length(target_session_id) BETWEEN 5 AND 132 AND substr(target_session_id, 1, 4) = 'ses_' AND
+    substr(target_session_id, 5) NOT GLOB '*[^A-Za-z0-9]*'
+  ),
+  native_message_id TEXT NOT NULL CHECK (
+    length(native_message_id) = 36 AND substr(native_message_id, 1, 4) = 'msg_' AND
+    substr(native_message_id, 5) NOT GLOB '*[^0-9a-f]*'
+  ),
+  state TEXT NOT NULL CHECK (state IN ('prepared','submitting','admission_unknown','admitted','promoted','failed','cancelled')),
+  prepared_envelope TEXT CHECK (
+    prepared_envelope IS NULL OR length(CAST(prepared_envelope AS BLOB)) <= 65536
+  ),
+  content_byte_length INTEGER NOT NULL CHECK (content_byte_length BETWEEN 0 AND 32768),
+  content_sha256 TEXT NOT NULL CHECK (
+    length(content_sha256) = 64 AND content_sha256 NOT GLOB '*[^0-9a-f]*'
+  ),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms BETWEEN 0 AND 9007199254740991),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms BETWEEN created_at_ms AND 9007199254740991),
+  submitted_at_ms INTEGER CHECK (
+    submitted_at_ms IS NULL OR submitted_at_ms BETWEEN created_at_ms AND updated_at_ms
+  ),
+  admission_unknown_at_ms INTEGER CHECK (
+    admission_unknown_at_ms IS NULL OR admission_unknown_at_ms BETWEEN submitted_at_ms AND updated_at_ms
+  ),
+  admitted_at_ms INTEGER CHECK (
+    admitted_at_ms IS NULL OR admitted_at_ms BETWEEN submitted_at_ms AND updated_at_ms
+  ),
+  promoted_at_ms INTEGER CHECK (
+    promoted_at_ms IS NULL OR promoted_at_ms BETWEEN admitted_at_ms AND updated_at_ms
+  ),
+  failed_at_ms INTEGER CHECK (
+    failed_at_ms IS NULL OR failed_at_ms BETWEEN submitted_at_ms AND updated_at_ms
+  ),
+  cancelled_at_ms INTEGER CHECK (
+    cancelled_at_ms IS NULL OR cancelled_at_ms BETWEEN created_at_ms AND updated_at_ms
+  ),
+  claimed_fencing_token INTEGER CHECK (
+    claimed_fencing_token IS NULL OR claimed_fencing_token BETWEEN 1 AND 9007199254740991
+  ),
+  admission_evidence_kind TEXT CHECK (
+    admission_evidence_kind IS NULL OR admission_evidence_kind IN ('v2_queue','public_message')
+  ),
+  admitted_seq INTEGER CHECK (admitted_seq IS NULL OR admitted_seq BETWEEN 0 AND 9007199254740991),
+  promoted_seq INTEGER CHECK (promoted_seq IS NULL OR promoted_seq BETWEEN 0 AND 9007199254740991),
+  evidence_observed_at_ms INTEGER CHECK (
+    evidence_observed_at_ms IS NULL OR evidence_observed_at_ms BETWEEN submitted_at_ms AND updated_at_ms
+  ),
+  CHECK ((state = 'prepared') = (prepared_envelope IS NOT NULL)),
+  CHECK ((state IN ('submitting','admission_unknown','admitted','promoted','failed')) = (submitted_at_ms IS NOT NULL)),
+  CHECK ((state = 'admission_unknown') = (admission_unknown_at_ms IS NOT NULL)),
+  CHECK ((state IN ('admitted','promoted')) = (admitted_at_ms IS NOT NULL)),
+  CHECK ((state = 'promoted') = (promoted_at_ms IS NOT NULL)),
+  CHECK ((state = 'failed') = (failed_at_ms IS NOT NULL)),
+  CHECK ((state = 'cancelled') = (cancelled_at_ms IS NOT NULL)),
+  CHECK ((state IN ('submitting','admission_unknown','admitted','promoted','failed')) = (claimed_fencing_token IS NOT NULL)),
+  CHECK ((state IN ('admitted','promoted')) = (admission_evidence_kind IS NOT NULL)),
+  CHECK ((state IN ('admitted','promoted')) = (evidence_observed_at_ms IS NOT NULL)),
+  CHECK (state <> 'promoted' OR admission_evidence_kind = 'v2_queue'),
+  CHECK ((admission_evidence_kind = 'v2_queue') = (admitted_seq IS NOT NULL)),
+  CHECK ((state = 'promoted') = (promoted_seq IS NOT NULL)),
+  CHECK (promoted_seq IS NULL OR promoted_seq > admitted_seq)
+) STRICT, WITHOUT ROWID;
+INSERT INTO deliveries(
+  id, workspace_key, source_session_id, target_session_id, native_message_id, state,
+  prepared_envelope, content_byte_length, content_sha256, created_at_ms, updated_at_ms,
+  submitted_at_ms, admission_unknown_at_ms, admitted_at_ms, promoted_at_ms, failed_at_ms,
+  cancelled_at_ms, claimed_fencing_token, admission_evidence_kind, admitted_seq,
+  promoted_seq, evidence_observed_at_ms
+)
+SELECT id, workspace_key, source_session_id, target_session_id, native_message_id, state,
+  prepared_envelope, content_byte_length, content_sha256, created_at_ms, updated_at_ms,
+  submitted_at_ms, admission_unknown_at_ms, admitted_at_ms, promoted_at_ms, failed_at_ms,
+  cancelled_at_ms, claimed_fencing_token,
+  CASE WHEN state IN ('admitted','promoted') THEN 'v2_queue' END,
+  admitted_seq, promoted_seq, evidence_observed_at_ms
+FROM deliveries_v11;
+DROP TABLE deliveries_v11;
+CREATE INDEX deliveries_workspace_created ON deliveries(workspace_key, created_at_ms);
+CREATE INDEX deliveries_source_created ON deliveries(workspace_key, source_session_id, created_at_ms);
+CREATE INDEX deliveries_target_created ON deliveries(workspace_key, target_session_id, created_at_ms);
+CREATE INDEX deliveries_recovery ON deliveries(workspace_key, state, claimed_fencing_token, created_at_ms);
+CREATE UNIQUE INDEX deliveries_native_message ON deliveries(workspace_key, native_message_id);
+CREATE INDEX deliveries_prepared_startup_v7
+  ON deliveries(workspace_key, created_at_ms, id) WHERE state = 'prepared';
+CREATE INDEX deliveries_submitting_startup_v7
+  ON deliveries(workspace_key, created_at_ms, id, claimed_fencing_token)
+  WHERE state = 'submitting';
+`,
+    downSql: `
+ALTER TABLE deliveries RENAME TO deliveries_v12;
+CREATE TABLE deliveries (
+  id TEXT PRIMARY KEY CHECK (
+    length(id) = 36 AND substr(id, 1, 4) = 'dlv_' AND substr(id, 5) NOT GLOB '*[^0-9a-f]*'
+  ),
+  workspace_key TEXT NOT NULL REFERENCES workspaces(workspace_key) ON DELETE CASCADE,
+  source_session_id TEXT NOT NULL,
+  target_session_id TEXT NOT NULL,
+  native_message_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('prepared','submitting','admission_unknown','admitted','promoted','failed','cancelled')),
+  prepared_envelope TEXT,
+  content_byte_length INTEGER NOT NULL CHECK (content_byte_length BETWEEN 0 AND 32768),
+  content_sha256 TEXT NOT NULL CHECK (length(content_sha256) = 64),
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  submitted_at_ms INTEGER,
+  admission_unknown_at_ms INTEGER,
+  admitted_at_ms INTEGER,
+  promoted_at_ms INTEGER,
+  failed_at_ms INTEGER,
+  cancelled_at_ms INTEGER,
+  claimed_fencing_token INTEGER,
+  admitted_seq INTEGER,
+  promoted_seq INTEGER,
+  evidence_observed_at_ms INTEGER,
+  CHECK ((state = 'prepared') = (prepared_envelope IS NOT NULL)),
+  CHECK ((state IN ('admitted','promoted')) = (admitted_seq IS NOT NULL)),
+  CHECK ((state = 'promoted') = (promoted_seq IS NOT NULL))
+) STRICT, WITHOUT ROWID;
+INSERT INTO deliveries
+SELECT id, workspace_key, source_session_id, target_session_id, native_message_id,
+  CASE WHEN admission_evidence_kind = 'public_message' THEN 'admission_unknown' ELSE state END,
+  prepared_envelope, content_byte_length, content_sha256, created_at_ms, updated_at_ms,
+  submitted_at_ms,
+  CASE WHEN admission_evidence_kind = 'public_message' THEN evidence_observed_at_ms ELSE admission_unknown_at_ms END,
+  CASE WHEN admission_evidence_kind = 'public_message' THEN NULL ELSE admitted_at_ms END,
+  promoted_at_ms, failed_at_ms, cancelled_at_ms, claimed_fencing_token,
+  admitted_seq, promoted_seq,
+  CASE WHEN admission_evidence_kind = 'public_message' THEN NULL ELSE evidence_observed_at_ms END
+FROM deliveries_v12;
+DROP TABLE deliveries_v12;
+CREATE INDEX deliveries_workspace_created ON deliveries(workspace_key, created_at_ms);
+CREATE INDEX deliveries_source_created ON deliveries(workspace_key, source_session_id, created_at_ms);
+CREATE INDEX deliveries_target_created ON deliveries(workspace_key, target_session_id, created_at_ms);
+CREATE INDEX deliveries_recovery ON deliveries(workspace_key, state, claimed_fencing_token, created_at_ms);
+CREATE UNIQUE INDEX deliveries_native_message ON deliveries(workspace_key, native_message_id);
+CREATE INDEX deliveries_prepared_startup_v7
+  ON deliveries(workspace_key, created_at_ms, id) WHERE state = 'prepared';
+CREATE INDEX deliveries_submitting_startup_v7
+  ON deliveries(workspace_key, created_at_ms, id, claimed_fencing_token)
+  WHERE state = 'submitting';
+`,
+  },
 ] as const;
 
 interface VersionRow {

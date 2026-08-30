@@ -178,6 +178,37 @@ async function waitForActiveTarget(
   throw new Error(`${label} target ${sessionID} did not become active`);
 }
 
+async function waitForIdleTarget(client: Client, sessionID: string, label: string): Promise<void> {
+  const deadline = performance.now() + liveDeadlineMs;
+  while (performance.now() < deadline) {
+    const status = successful(await client.session.status(), `${label} target status`)[sessionID];
+    if (status === undefined || status.type === "idle") return;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`${label} target ${sessionID} did not become idle`);
+}
+
+async function waitForPublicTranscript(
+  client: Client,
+  sessionID: string,
+  expectedText: string,
+): Promise<
+  ReturnType<Client["session"]["messages"]> extends Promise<infer Result>
+    ? NonNullable<Result extends { data?: infer Data } ? Data : never>
+    : never
+> {
+  const deadline = performance.now() + liveDeadlineMs;
+  while (performance.now() < deadline) {
+    const transcript = successful(
+      await client.session.messages({ sessionID }),
+      "managed public transcript",
+    );
+    if (JSON.stringify(transcript).includes(expectedText)) return transcript as never;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`managed transcript did not contain ${JSON.stringify(expectedText)}`);
+}
+
 async function assertPinnedCli(cliPath: string, isolation: IsolatedOpenCodeState): Promise<void> {
   expect(
     await runBoundedProcess({
@@ -230,7 +261,13 @@ async function initializeLiveProject(client: Client, baseUrl: string, directory:
 async function launchPackedFixture(): Promise<PackedFixture> {
   const repository = resolve(import.meta.dir, "../..");
   const staging = await mkdtemp(join(tmpdir(), "communicator-packed-live-"));
-  const provider = launchDeterministicProvider({ gateText: "production-target-active" });
+  const provider = launchDeterministicProvider({
+    gateText: [
+      "production-target-active",
+      "Packed managed session ready check",
+      "packed live delivery",
+    ],
+  });
   let isolation: IsolatedOpenCodeState | undefined;
   let serve: ManagedProcess | undefined;
   try {
@@ -377,21 +414,10 @@ async function processTargetRequest(
   return output;
 }
 
-async function runBasicPackedJourneys(invoker: Invoker, targetSessionID: string): Promise<void> {
+async function runBasicPackedJourneys(invoker: Invoker): Promise<void> {
   expect(await invoker.invoke("session_list", "production-session-list")).toMatchObject({
     ok: true,
   });
-  const sent = await invoker.invoke("session_send", `production-session-send:${targetSessionID}`);
-  expect(sent).toMatchObject({ ok: true });
-  const deliveryID = Reflect.get(Reflect.get(sent, "value") ?? {}, "delivery_id");
-  if (typeof deliveryID !== "string") throw new Error("packed send returned no delivery ID");
-  expect(
-    await invoker.invoke(
-      "session_delivery_get",
-      `production-delivery-get:${deliveryID}`,
-      targetSessionID,
-    ),
-  ).toMatchObject({ ok: true });
   expect(await invoker.invoke("session_request_list", "production-request-list")).toMatchObject({
     ok: true,
   });
@@ -452,6 +478,7 @@ async function runStartStopJourney(
   stopTargetSessionID: string,
 ): Promise<void> {
   const start = await invoker.begin("session_start", "production-session-start");
+  const initialGate = await fixture.provider.waitForText("Packed managed session ready check");
   const started = await withinLiveDeadline(start.output(), "session_start completion");
   expect(started).toMatchObject({
     ok: true,
@@ -474,14 +501,61 @@ async function runStartStopJourney(
     id: startedSessionID,
     title: "Packed managed target",
   });
-  await fixture.provider.waitForRequestText("Packed managed session ready check");
-  const transcript = successful(
+  const admittedTranscript = successful(
     await fixture.client.session.messages({ sessionID: startedSessionID }),
-    "managed public transcript",
+    "managed admitted public transcript",
+  );
+  expect(admittedTranscript.some((message) => message.info.role === "user")).toBe(true);
+  expect(JSON.stringify(admittedTranscript)).toContain("Packed managed session ready check");
+  initialGate.release("packed managed initial complete");
+  const transcript = await waitForPublicTranscript(
+    fixture.client,
+    startedSessionID,
+    "packed managed initial complete",
   );
   expect(transcript.some((message) => message.info.role === "user")).toBe(true);
   expect(transcript.some((message) => message.info.role === "assistant")).toBe(true);
   expect(JSON.stringify(transcript)).toContain("Packed managed session ready check");
+  await waitForIdleTarget(fixture.client, startedSessionID, "managed initial");
+
+  const send = await invoker.begin("session_send", `production-session-send:${startedSessionID}`);
+  const sendGate = await fixture.provider.waitForText("packed live delivery", initialGate.sequence);
+  const sent = await withinLiveDeadline(send.output(), "session_send completion");
+  expect(sent).toMatchObject({
+    ok: true,
+    value: {
+      source_session_id: send.sessionID,
+      target_session_id: startedSessionID,
+      state: "admitted",
+      admission_evidence: { kind: "public_message", state: "admitted" },
+    },
+  });
+  const deliveryID = Reflect.get(Reflect.get(sent, "value") ?? {}, "delivery_id");
+  if (typeof deliveryID !== "string") throw new Error("packed send returned no delivery ID");
+  expect(
+    await invoker.invoke(
+      "session_delivery_get",
+      `production-delivery-get:${deliveryID}`,
+      send.sessionID,
+    ),
+  ).toMatchObject({
+    ok: true,
+    value: { role: "source", delivery: { admission_evidence: { kind: "public_message" } } },
+  });
+  expect(
+    JSON.stringify(
+      successful(
+        await fixture.client.session.messages({ sessionID: startedSessionID }),
+        "managed sent public transcript",
+      ),
+    ),
+  ).toContain("packed live delivery");
+  sendGate.release("packed managed follow-up complete");
+  await waitForPublicTranscript(
+    fixture.client,
+    startedSessionID,
+    "packed managed follow-up complete",
+  );
   const exported = await runBoundedProcess({
     command: fixture.cliPath,
     arguments: ["export", startedSessionID],
@@ -498,8 +572,10 @@ async function runStartStopJourney(
     id: startedSessionID,
     title: "Packed managed target",
   });
-  expect(exportDocument.messages?.length).toBeGreaterThanOrEqual(2);
+  expect(exportDocument.messages?.length).toBeGreaterThanOrEqual(4);
   expect(exported.stdout).toContain("Packed managed session ready check");
+  expect(exported.stdout).toContain("packed live delivery");
+  expect(exported.stdout).toContain("packed managed follow-up complete");
   const stop = await invoker.begin(
     "session_stop",
     `production-session-stop:${stopTargetSessionID}`,
@@ -536,7 +612,7 @@ test(`runs the exact packed production plugin through OpenCode ${exactOpenCodeVe
       "target",
     );
     const invoker = createInvoker(fixture.client);
-    await runBasicPackedJourneys(invoker, target.id);
+    await runBasicPackedJourneys(invoker);
     await runStartStopJourney(fixture, invoker, target.id);
     await runAskJourney(fixture, invoker);
     await runWaitJourney(fixture, invoker);

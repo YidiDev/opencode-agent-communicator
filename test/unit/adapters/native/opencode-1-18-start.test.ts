@@ -395,21 +395,30 @@ test("title updates distinguish authoritative rejection while preserving ambiguo
   ).toBe("unknown");
 });
 
-test("admits the initial message through a correlated public transcript response", async () => {
+test("admits the initial message after async scheduling and exact public read-back", async () => {
   const calls: unknown[] = [];
   const result = await admitLegacyInitialMessage(
     {
-      async prompt(input) {
+      async promptAsync(input) {
         calls.push(input);
         return {
+          data: {},
+          response: new Response(null, { status: 204 }),
+        };
+      },
+      async message() {
+        return {
           data: {
-            info: {
-              id: "msg_assistant",
-              sessionID: sessionId(),
-              parentID: messageId(),
-              role: "assistant",
-            },
-            parts: [],
+            info: { id: messageId(), sessionID: sessionId(), role: "user" },
+            parts: [
+              {
+                id: "prt_1",
+                sessionID: sessionId(),
+                messageID: messageId(),
+                type: "text",
+                text: "Visible prompt",
+              },
+            ],
           },
           response: new Response(null, { status: 200 }),
         };
@@ -424,6 +433,7 @@ test("admits the initial message through a correlated public transcript response
       model: "openai/gpt-5",
       abort: new AbortController().signal,
     },
+    { now: () => 500 },
   );
   expect(result).toBe("admitted");
   expect(calls).toEqual([
@@ -438,58 +448,52 @@ test("admits the initial message through a correlated public transcript response
   ]);
 });
 
-test("fails closed for uncorrelated or malformed public prompt responses", async () => {
+test("fails closed for uncorrelated or malformed public message evidence", async () => {
   const input = {
     sessionId: sessionId(),
     nativeMessageId: messageId(),
     message: "Visible prompt",
     abort: new AbortController().signal,
   };
-  for (const response of [
+  for (const data of [
     {
-      data: {
-        info: { sessionID: "ses_other", parentID: messageId(), role: "assistant" },
-        parts: [],
-      },
+      info: { id: messageId(), sessionID: "ses_other", role: "user" },
+      parts: [],
     },
     {
-      data: {
-        info: { sessionID: sessionId(), parentID: "msg_other", role: "assistant" },
-        parts: [],
-      },
-    },
-    { data: { info: { sessionID: sessionId(), parentID: messageId(), role: "user" }, parts: [] } },
-    {
-      data: {
-        info: { sessionID: sessionId(), parentID: messageId(), role: "assistant" },
-        parts: {},
-      },
+      info: { id: "msg_other", sessionID: sessionId(), role: "user" },
+      parts: [],
     },
     {
-      data: {
-        info: { sessionID: sessionId(), parentID: messageId(), role: "assistant" },
-        parts: [],
-      },
-      response: Object.create(Response.prototype),
+      info: { id: messageId(), sessionID: sessionId(), role: "assistant" },
+      parts: [],
     },
     {
-      data: {
-        info: { sessionID: sessionId(), parentID: messageId(), role: "assistant" },
-        parts: [],
-      },
-      request: Object.create(Request.prototype),
+      info: { id: messageId(), sessionID: sessionId(), role: "user" },
+      parts: {},
     },
-    new Proxy(
-      {},
-      {
-        ownKeys() {
-          throw new Error("hostile envelope");
+    {
+      info: { id: messageId(), sessionID: sessionId(), role: "user" },
+      parts: [
+        {
+          sessionID: sessionId(),
+          messageID: messageId(),
+          type: "text",
+          text: "wrong",
         },
-      },
-    ),
+      ],
+    },
   ]) {
     expect(
-      await admitLegacyInitialMessage({ prompt: async () => response }, "/workspace", input),
+      await admitLegacyInitialMessage(
+        {
+          promptAsync: async () => ({ data: {}, response: new Response(null, { status: 204 }) }),
+          message: async () => ({ data, response: new Response(null, { status: 200 }) }),
+        },
+        "/workspace",
+        input,
+        { maximumObservations: 1, wait: async () => {} },
+      ),
     ).toBe("unknown");
   }
 });
@@ -504,61 +508,61 @@ test("classifies public prompt rejection, malformed model, cancellation, and tra
   expect(
     await admitLegacyInitialMessage(
       {
-        prompt: async () => ({
+        promptAsync: async () => ({
           error: { _tag: "InvalidRequestError", message: "rejected" },
           request: new Request("http://opencode.internal/session"),
           response: new Response(null, { status: 400 }),
         }),
+        message: async () => undefined,
       },
       "/workspace",
       base,
     ),
   ).toBe("definitive_rejection");
   expect(
-    await admitLegacyInitialMessage({ prompt: async () => undefined }, "/workspace", {
-      ...base,
-      model: "malformed",
-    }),
+    await admitLegacyInitialMessage(
+      { promptAsync: async () => undefined, message: async () => undefined },
+      "/workspace",
+      { ...base, model: "malformed" },
+      { maximumObservations: 1, wait: async () => {} },
+    ),
   ).toBe("definitive_rejection");
   const aborted = new AbortController();
   aborted.abort();
   expect(
-    await admitLegacyInitialMessage({ prompt: async () => undefined }, "/workspace", {
-      ...base,
-      abort: aborted.signal,
-    }),
+    await admitLegacyInitialMessage(
+      { promptAsync: async () => undefined, message: async () => undefined },
+      "/workspace",
+      { ...base, abort: aborted.signal },
+      { maximumObservations: 1, wait: async () => {} },
+    ),
   ).toBe("unknown");
   const raced = new AbortController();
   expect(
     await admitLegacyInitialMessage(
       {
-        prompt: async () => {
+        promptAsync: async () => {
           raced.abort();
-          return {
-            data: {
-              info: {
-                sessionID: sessionId(),
-                parentID: messageId(),
-                role: "assistant",
-              },
-              parts: [],
-            },
-          };
+          return { data: {}, response: new Response(null, { status: 204 }) };
         },
+        message: async () => undefined,
       },
       "/workspace",
       { ...base, abort: raced.signal },
+      { maximumObservations: 1, wait: async () => {} },
     ),
   ).toBe("unknown");
   expect(
     await admitLegacyInitialMessage(
       {
-        prompt: async () => {
+        promptAsync: async () => {
           throw new Error("transport failed");
         },
+        message: async () => undefined,
       },
       "/workspace",
       base,
+      { maximumObservations: 1, wait: async () => {} },
     ),
   ).toBe("unknown");
 });

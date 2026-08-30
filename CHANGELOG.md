@@ -6,6 +6,23 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-08-28
+
+### Fixed
+
+- Restored asynchronous `session_start` settlement by submitting the public initial prompt once and
+  returning after exact fixed-message transcript read-back instead of waiting for assistant completion.
+- Routed ordinary `session_send` through the same public transcript execution plane so managed agents
+  retain conversation context and sent turns remain visible in the TUI and `opencode export`.
+- Strengthened the packed production journey to prove start and send return while provider responses
+  remain gated, followed by eventual assistant completion and export visibility.
+
+### Changed
+
+- Added SQLite schema v12 to distinguish public-message admission evidence from historical V2 queue
+  evidence without fabricating admission or promotion sequence numbers.
+- Increased the reviewed runtime archive policy to 251 paths for the public-message adapter.
+
 ## [0.2.3] - 2026-08-28
 
 ### Fixed
@@ -113,7 +130,8 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.2.0...v0.2.1

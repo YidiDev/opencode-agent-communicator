@@ -27,6 +27,7 @@ export interface DeliveryRow {
   readonly failedAtMs: unknown;
   readonly cancelledAtMs: unknown;
   readonly admittedSeq: unknown;
+  readonly admissionEvidenceKind?: unknown;
   readonly promotedSeq: unknown;
   readonly evidenceObservedAtMs: unknown;
 }
@@ -49,6 +50,7 @@ promoted_at_ms AS promotedAtMs,
 failed_at_ms AS failedAtMs,
 cancelled_at_ms AS cancelledAtMs,
 admitted_seq AS admittedSeq,
+admission_evidence_kind AS admissionEvidenceKind,
 promoted_seq AS promotedSeq,
 evidence_observed_at_ms AS evidenceObservedAtMs`;
 
@@ -66,12 +68,18 @@ function admissionEvidence(
   nativeMessageId: DeliveryMetadata["nativeMessageId"],
 ): DeliveryAdmissionEvidence | undefined {
   if (row.state !== "admitted" && row.state !== "promoted") return undefined;
-  const admittedSeq = requiredNumber(row.admittedSeq);
   const observedAtMs = requiredNumber(row.evidenceObservedAtMs);
+  if (row.admissionEvidenceKind === "public_message" && row.state === "admitted") {
+    if (row.admittedSeq !== null || row.promotedSeq !== null) throw invalidRow();
+    return { kind: "public_message", nativeMessageId, state: "admitted", observedAtMs };
+  }
+  if (row.admissionEvidenceKind !== "v2_queue") throw invalidRow();
+  const admittedSeq = requiredNumber(row.admittedSeq);
   if (row.state === "admitted") {
-    return { nativeMessageId, state: "admitted", admittedSeq, observedAtMs };
+    return { kind: "v2_queue", nativeMessageId, state: "admitted", admittedSeq, observedAtMs };
   }
   return {
+    kind: "v2_queue",
     nativeMessageId,
     state: "promoted",
     admittedSeq,

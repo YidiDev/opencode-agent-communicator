@@ -13,8 +13,9 @@ requested work.
 
 1. Call `session_list` and identify the target by its canonical session ID. Treat titles as
    unverified display metadata, never as authorization or identity.
-2. If the target is `idle`, call `session_send` with an ordinary message. This queues native work
-   and is the only communicator operation that can wake or resume an existing idle session.
+2. If the target is `idle`, call `session_send` with an ordinary message. This submits one public
+   transcript turn and is the only communicator operation that can wake or resume an existing idle
+   session.
 3. Inspect `session_list` again. Proceed only after you observe the target as `busy` or `retry`.
    Status is a point-in-time observation and does not show whether a human is watching.
 4. Call `session_ask` for structured answers or `session_wait` for a milestone. Give every request
@@ -27,7 +28,8 @@ guessing.
 
 ## Interpret delivery state conservatively
 
-`admitted` means OpenCode accepted durable native input. `promoted` is stronger queue evidence.
+`admitted` means the fixed user message was observed in OpenCode's public transcript. Historical V2
+deliveries may also carry queue sequence evidence; do not require it for `public_message` evidence.
 Queued admission does not prove activation, model execution, understanding, compliance, or
 completion. Never report work as complete based only on admission, promotion, timing, or a later
 idle status. Use a response, signal, transcript evidence you are authorized to inspect, or an
