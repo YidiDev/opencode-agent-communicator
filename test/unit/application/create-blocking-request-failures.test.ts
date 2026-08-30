@@ -5,6 +5,10 @@ import {
   RequestRuntimeShutdownFault,
   type SessionBlockingRequestPorts,
 } from "../../../src/application/create-blocking-session-request";
+import {
+  ParticipantOperationAbortedFault,
+  ParticipantOperationCapacityFault,
+} from "../../../src/application/participant-operation-gate";
 import { OwnershipLostFault } from "../../../src/domain/ownership";
 import { blockingRequestFixture } from "../../support/blocking-request-fixture";
 import { cleanupRequestStoreRoots } from "../../support/request-store";
@@ -15,6 +19,31 @@ const args = (target: string) => ({
   session_id: target,
   milestone: "ready",
   timeout_seconds: 30,
+});
+
+test("creation maps participant gate cancellation, capacity, and infrastructure faults", async () => {
+  const setup = await blockingRequestFixture(async () => ({ kind: "unknown" }));
+  for (const [cause, code] of [
+    [new ParticipantOperationAbortedFault("aborted"), "request_cancelled"],
+    [new ParticipantOperationCapacityFault("capacity"), "quota_exceeded"],
+    [new Error("gate unavailable"), "storage_unavailable"],
+  ] as const) {
+    const result = await createBlockingSessionRequest(
+      {
+        ...setup.ports,
+        participantOperations: {
+          run: async () => {
+            throw cause;
+          },
+        },
+      },
+      setup.context,
+      "wait",
+      args(setup.target),
+    );
+    expect(result).toMatchObject({ ok: false, error: { code } });
+  }
+  setup.store.close();
 });
 
 test("creation rejects malformed invocation deadline, clock, and timer ports", async () => {

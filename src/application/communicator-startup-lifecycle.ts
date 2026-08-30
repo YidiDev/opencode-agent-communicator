@@ -56,6 +56,10 @@ export class CommunicatorStartupRecoveryLifecycle implements CommunicatorReadine
     return this.faultValue ?? this.scheduler.fault;
   }
 
+  get effectSignal(): AbortSignal {
+    return this.runtime.effectSignal;
+  }
+
   get status(): "starting" | "ready" | "stopped" {
     if (this.reasonValue !== undefined) return "stopped";
     return this.readyValue ? "ready" : "starting";

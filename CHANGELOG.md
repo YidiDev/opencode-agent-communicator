@@ -6,6 +6,12 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+
+- Blocking `session_ask` and `session_wait` calls now reconcile promptly to `target_stopped` or
+  `source_stopped` after an approved stop or an authoritatively revalidated native idle event,
+  including missed-event anti-entropy and request-creation race protection.
+
 ## [0.4.1] - 2026-08-29
 
 ### Changed

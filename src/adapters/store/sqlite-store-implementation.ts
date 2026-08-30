@@ -14,6 +14,7 @@ import type {
   DeleteAbsentParticipantRequestsInput,
   ParticipantDeletionPersistencePort,
 } from "../../application/participant-deletion-ports";
+import type { ParticipantStopPersistencePort } from "../../application/participant-stop-ports";
 import type {
   CompleteRequestDeliveryInput,
   ExpireDueRequestsResult,
@@ -54,6 +55,7 @@ export class LinuxBunSqliteStore
     RequestResultRetentionPersistencePort,
     RequestParticipantQueryPort,
     SessionStopPersistencePort,
+    ParticipantStopPersistencePort,
     ParticipantDeletionPersistencePort,
     DeliveryRetentionPersistencePort,
     AdvisoryLockPersistencePort
@@ -231,6 +233,22 @@ export class LinuxBunSqliteStore
   ): ReturnType<SessionStopPersistencePort["stopPendingRequests"]> {
     this.assertOpen();
     return this.access.mutate(() => this.requestStopRepository.stopPendingRequests(input));
+  }
+
+  async stopPendingBlockingRequests(
+    input: Parameters<ParticipantStopPersistencePort["stopPendingBlockingRequests"]>[0],
+  ): ReturnType<ParticipantStopPersistencePort["stopPendingBlockingRequests"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.requestStopRepository.stopPendingBlockingRequests(input));
+  }
+
+  async listParticipantStopCandidates(
+    input: Parameters<ParticipantStopPersistencePort["listParticipantStopCandidates"]>[0],
+  ): ReturnType<ParticipantStopPersistencePort["listParticipantStopCandidates"]> {
+    this.assertOpen();
+    return this.access.inspect(() =>
+      this.requestStopRepository.listParticipantStopCandidates(input),
+    );
   }
 
   async deleteParticipantRequests(

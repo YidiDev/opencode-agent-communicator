@@ -32,6 +32,10 @@ import {
   RequestRuntimeShutdownFault,
 } from "./blocking-session-request-wait";
 import { assertCommunicatorReady } from "./communicator-readiness-port";
+import {
+  ParticipantOperationAbortedFault,
+  ParticipantOperationCapacityFault,
+} from "./participant-operation-gate";
 import type { RequestRuntimeRegistration } from "./request-runtime";
 
 export type {
@@ -128,22 +132,6 @@ async function createInternal(
   if (envelopeSettlement.kind !== "settled") return storageFailure();
   const approved = await authorize(ports, context, prepared, payload.value.timeoutSeconds);
   if (!approved.ok) return approved;
-  // This is intentionally the sole target observation and the final active-eligibility check.
-  const persistenceActivity = await observeActive(ports, context, validated.value.targetSessionId);
-  if (!persistenceActivity.ok) return persistenceActivity;
-  const current = await currentOwnership(ports, context);
-  if (!current.ok) return current;
-  let provisional: RequestRuntimeRegistration;
-  try {
-    provisional = ports.runtime.attachProvisional({
-      requestId,
-      expectedKind: operation,
-      sourceSessionId: context.sourceSessionId,
-      workspaceKey: context.workspaceKey,
-    });
-  } catch {
-    return domainFailure("quota_exceeded", "Blocking request waiter capacity is exhausted.", false);
-  }
   const prepareInput = {
     fencingToken: context.fencingToken,
     creationOperationId,
@@ -152,18 +140,62 @@ async function createInternal(
     payloadJson: payload.serialized,
     envelopeJson: envelopeSettlement.value,
   } as const;
-  const settlement = await persistPreparedBlockingRequest(ports, context, prepareInput);
-  if (!settlement.ok) {
-    provisional.detach();
-    return settlement;
+  let gated: DomainResult<{
+    readonly provisional: RequestRuntimeRegistration;
+    readonly settled: PendingRequestMetadata | import("../domain/request-types").RequestMetadata;
+  }>;
+  try {
+    gated = await ports.participantOperations.run(
+      [context.sourceSessionId, validated.value.targetSessionId],
+      context.abort,
+      async () => {
+        // This is the sole target observation and remains serialized through durable creation.
+        const persistenceActivity = await observeActive(
+          ports,
+          context,
+          validated.value.targetSessionId,
+        );
+        if (!persistenceActivity.ok) return persistenceActivity;
+        const current = await currentOwnership(ports, context);
+        if (!current.ok) return current;
+        let provisional: RequestRuntimeRegistration;
+        try {
+          provisional = ports.runtime.attachProvisional({
+            requestId,
+            expectedKind: operation,
+            sourceSessionId: context.sourceSessionId,
+            workspaceKey: context.workspaceKey,
+          });
+        } catch {
+          return domainFailure(
+            "quota_exceeded",
+            "Blocking request waiter capacity is exhausted.",
+            false,
+          );
+        }
+        const settlement = await persistPreparedBlockingRequest(ports, context, prepareInput);
+        if (!settlement.ok) {
+          provisional.detach();
+          return settlement;
+        }
+        return { ok: true, value: { provisional, settled: settlement.value } };
+      },
+    );
+  } catch (cause: unknown) {
+    if (cause instanceof ParticipantOperationAbortedFault) return cancelledFailure();
+    if (cause instanceof ParticipantOperationCapacityFault) {
+      return domainFailure("quota_exceeded", "Participant operation capacity is exhausted.", false);
+    }
+    return storageFailure();
   }
+  if (!gated.ok) return gated;
+  const { provisional, settled } = gated.value;
   wakeScheduler(ports.scheduler);
   const admissionController = linkedAdmissionController(context.abort, ports.runtime.effectSignal);
   const admissionStarted =
-    (settlement.value.deliveryState === "prepared" ||
-      settlement.value.deliveryState === "submitting") &&
-    settlement.value.resolutionState === "pending"
-      ? await claimAndAdmitBlockingRequest(ports, context, settlement.value, admissionController)
+    (settled.deliveryState === "prepared" || settled.deliveryState === "submitting") &&
+    settled.resolutionState === "pending"
+      ? await claimAndAdmitBlockingRequest(ports, context, settled, admissionController)
       : { ok: true as const, value: undefined };
   if (!admissionStarted.ok) {
     // Creation is durable. Do not abandon it because admission startup was ambiguous.

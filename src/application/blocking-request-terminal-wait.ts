@@ -9,6 +9,7 @@ import type {
   SessionBlockingRequestPorts,
 } from "./blocking-session-request-boundaries";
 import { observeNativePromiseRejection } from "./native-promise-observation";
+import type { CommittedRequestTerminalEvent } from "./request-notification-port";
 import type { RequestRuntimeRegistration } from "./request-runtime";
 import { snapshotDataRecord } from "./strict-port-boundaries";
 
@@ -120,7 +121,13 @@ async function readForegroundAuthoritative(
   request: PendingRequestMetadata,
   approvedPayload: PendingRequestPayload,
   localWake: AbortSignal,
-): Promise<DomainResult<"pending" | BlockingSessionRequestSuccess>> {
+): Promise<
+  | {
+      readonly kind: "settled";
+      readonly value: DomainResult<"pending" | BlockingSessionRequestSuccess>;
+    }
+  | { readonly kind: "aborted" }
+> {
   const controller = new AbortController();
   const interrupt = (signal: AbortSignal): void => controller.abort(signal.reason);
   const callerInterrupt = (): void => interrupt(context.abort);
@@ -130,10 +137,40 @@ async function readForegroundAuthoritative(
     localWake.addEventListener("abort", localInterrupt, { once: true });
     if (context.abort.aborted) callerInterrupt();
     if (localWake.aborted) localInterrupt();
-    return await readAuthoritative(ports, context, request, approvedPayload, controller.signal);
+    const settlement = await runUntilAborted(controller.signal, () =>
+      readAuthoritative(ports, context, request, approvedPayload, controller.signal),
+    );
+    return settlement.kind === "settled"
+      ? { kind: "settled", value: settlement.value }
+      : settlement.kind === "aborted"
+        ? { kind: "aborted" }
+        : { kind: "settled", value: _storageFailure() };
   } finally {
     context.abort.removeEventListener("abort", callerInterrupt);
     localWake.removeEventListener("abort", localInterrupt);
+  }
+}
+
+async function readFinalAuthoritative(
+  ports: SessionBlockingRequestPorts,
+  context: SessionBlockingRequestContext,
+  request: PendingRequestMetadata,
+  approvedPayload: PendingRequestPayload,
+): Promise<DomainResult<"pending" | BlockingSessionRequestSuccess>> {
+  const controller = new AbortController();
+  let timer: { cancel(): void } | undefined;
+  try {
+    timer = ports.deadlineTimer.arm(cleanupTimeoutMs, () =>
+      controller.abort("request_final_reconciliation_deadline"),
+    );
+    const settlement = await runUntilAborted(controller.signal, () =>
+      readAuthoritative(ports, context, request, approvedPayload, controller.signal),
+    );
+    return settlement.kind === "settled" ? settlement.value : cleanupStorageFailure(request.id);
+  } catch {
+    return cleanupStorageFailure(request.id);
+  } finally {
+    timer?.cancel();
   }
 }
 
@@ -146,12 +183,24 @@ export async function blockUntilRequestTerminal(
   approvedPayload: PendingRequestPayload,
   admissionController: AbortController,
 ): Promise<DomainResult<BlockingSessionRequestSuccess>> {
+  const notified = new Set<string>();
+  const workflowPorts: SessionBlockingRequestPorts = {
+    ...ports,
+    notifications: {
+      notifyTerminal(event: CommittedRequestTerminalEvent): undefined {
+        const key = `${event.requestId}:${event.resolutionState}:${event.resolvedAtMs}`;
+        if (notified.has(key)) return undefined;
+        notified.add(key);
+        return ports.notifications.notifyTerminal(event);
+      },
+    },
+  };
   let registration = provisional;
   let queryController = new AbortController();
   let cancelTask: Promise<DomainResult<BlockingSessionRequestSuccess>> | undefined;
   const onAbort = (): void => {
     queryController.abort("explicit_request_cancellation");
-    cancelTask ??= cancelAfterAbort(ports, context, request, approvedPayload);
+    cancelTask ??= cancelAfterAbort(workflowPorts, context, request, approvedPayload);
     observeNativePromiseRejection(cancelTask);
   };
   context.abort.addEventListener("abort", onAbort, { once: true });
@@ -189,37 +238,45 @@ export async function blockUntilRequestTerminal(
     while (true) {
       if (cancelTask) return await cancelTask;
       queryController = new AbortController();
-      const durable = await readForegroundAuthoritative(
-        ports,
+      const durableTask = readForegroundAuthoritative(
+        workflowPorts,
         context,
         request,
         approvedPayload,
         queryController.signal,
       );
-      if (!durable.ok) {
-        if (cancelTask) return await cancelTask;
-        if (durable.error.code !== "storage_unavailable") return durable;
-        return durable;
-      } else if (durable.value !== "pending") {
-        return { ok: true, value: durable.value };
-      }
-      const activeCancellation = cancelTask as
-        | Promise<DomainResult<BlockingSessionRequestSuccess>>
-        | undefined;
-      const winner = activeCancellation
-        ? await Promise.race([
-            registration.outcome.then((outcome) => ({ type: "runtime" as const, outcome })),
-            activeCancellation.then((result) => ({ type: "cancel" as const, result })),
-          ])
-        : { type: "runtime" as const, outcome: await registration.outcome };
-      if (winner.type === "cancel") return winner.result;
-      if (winner.type === "runtime") {
-        if (winner.outcome.outcome === "shutdown") throw new RequestRuntimeShutdownFault();
-        if (winner.outcome.outcome === "ownership_lost") {
-          return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+      let first = await Promise.race([
+        durableTask.then((durable) => ({ type: "durable" as const, durable })),
+        registration.outcome.then((outcome) => ({ type: "runtime" as const, outcome })),
+      ]);
+      if (first.type === "runtime") {
+        queryController.abort("runtime_reconciliation_wake");
+      } else {
+        if (first.durable.kind === "aborted") {
+          if (cancelTask) return await cancelTask;
+          continue;
         }
-        // Runtime events are wake hints only. The fenced participant projection decides the winner.
+        const durable = first.durable.value;
+        if (!durable.ok) {
+          if (cancelTask) return await cancelTask;
+          return durable;
+        }
+        if (durable.value !== "pending") return { ok: true, value: durable.value };
+        first = { type: "runtime", outcome: await registration.outcome };
       }
+      if (first.outcome.outcome === "shutdown" || first.outcome.outcome === "ownership_lost") {
+        const final = await readFinalAuthoritative(
+          workflowPorts,
+          context,
+          request,
+          approvedPayload,
+        );
+        if (final.ok && final.value !== "pending") return { ok: true, value: final.value };
+        if (!final.ok && final.error.code !== "storage_unavailable") return final;
+        if (first.outcome.outcome === "shutdown") throw new RequestRuntimeShutdownFault();
+        return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+      }
+      // Runtime events are wake hints only. The fenced participant projection decides the winner.
       registration.detach();
       try {
         registration = ports.runtime.attach({
@@ -230,25 +287,27 @@ export async function blockUntilRequestTerminal(
         });
       } catch {
         const afterCapacityRace = await readForegroundAuthoritative(
-          ports,
+          workflowPorts,
           context,
           request,
           approvedPayload,
           new AbortController().signal,
         );
-        if (!afterCapacityRace.ok || afterCapacityRace.value === "pending") {
-          return afterCapacityRace.ok
-            ? domainFailure(
+        if (
+          afterCapacityRace.kind !== "settled" ||
+          !afterCapacityRace.value.ok ||
+          afterCapacityRace.value.value === "pending"
+        ) {
+          return afterCapacityRace.kind === "settled" && !afterCapacityRace.value.ok
+            ? afterCapacityRace.value
+            : domainFailure(
                 "storage_unavailable",
                 "Request waiter capacity is unavailable.",
                 true,
-                {
-                  request_id: request.id,
-                },
-              )
-            : afterCapacityRace;
+                { request_id: request.id },
+              );
         }
-        return { ok: true, value: afterCapacityRace.value };
+        return { ok: true, value: afterCapacityRace.value.value };
       }
     }
   } finally {
