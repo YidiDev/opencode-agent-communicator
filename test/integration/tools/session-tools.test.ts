@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 
 import type { DeliveryPersistencePort } from "../../../src/application/delivery-ports";
 import type { SessionSendPorts } from "../../../src/application/send-session-message";
+import type { SessionReadPorts } from "../../../src/application/session-read-ports";
 import { validateSessionId } from "../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 import { createSessionDeliveryGetTool } from "../../../src/tools/session-delivery-get";
 import { createSessionListTool } from "../../../src/tools/session-list";
+import { createSessionReadTool } from "../../../src/tools/session-read";
 import { createSessionSendTool } from "../../../src/tools/session-send";
 
 function valid<Value>(
@@ -113,6 +116,87 @@ describe("internal session tools call application boundaries", () => {
       ok: false,
       error: { code: "not_found_or_unauthorized", retryable: false },
     });
+  });
+
+  test("read emits only the bounded public projection in exact snake_case JSON", async () => {
+    const ports: Omit<SessionReadPorts, "approval"> = {
+      readiness: { assertReady: () => undefined },
+      membership: {
+        async observeSessionReadPresence() {
+          return {
+            sourceVisible: true,
+            targetVisible: true,
+            targetStatus: "busy",
+            observedAtMs: 7,
+          };
+        },
+      },
+      native: {
+        async readMessagePage() {
+          return {
+            messages: [
+              {
+                type: "assistant",
+                messageId: "msg_progress",
+                state: "active",
+                parts: [{ type: "text", itemKey: "prt_text", text: "safe progress" }],
+              },
+            ],
+            examinedMessageIds: ["msg_progress"],
+            examinedMessageCount: 1,
+            projectedTextByteCount: 13,
+            rawResponseByteCount: 0,
+            examinedPartCount: 1,
+            previousCursor: null,
+            nextCursor: null,
+          };
+        },
+        async readMessage() {
+          throw new Error("not used");
+        },
+      },
+      digest: {
+        async sha256(input) {
+          return new Uint8Array(createHash("sha256").update(input).digest());
+        },
+      },
+      clock: { nowMs: () => 1_000 },
+      timer: { arm: () => ({ cancel: () => undefined }) },
+    };
+    const tool = createSessionReadTool(ports, {
+      workspaceKey,
+      invocationDeadlineMs: () => 2_000,
+    });
+    const output = JSON.parse(
+      await tool.execute(
+        { session_id: sourceSessionId, limit: 100 },
+        { sessionID: sourceSessionId, abort },
+      ),
+    );
+    expect(output).toMatchObject({
+      ok: true,
+      value: {
+        session_id: sourceSessionId,
+        content: "[assistant]\n[assistant: active]\nsafe progress",
+        has_more_before: false,
+        has_more_after: false,
+        observed_at_ms: 7,
+        is_live: true,
+      },
+    });
+    expect(Object.keys(output.value).sort()).toEqual(
+      [
+        "session_id",
+        "content",
+        "start_cursor",
+        "end_cursor",
+        "has_more_before",
+        "has_more_after",
+        "observed_at_ms",
+        "is_live",
+      ].sort(),
+    );
+    expect(JSON.stringify(output)).not.toContain("reasoning");
   });
 
   test("send validates structural context and returns expected domain failure without throwing", async () => {

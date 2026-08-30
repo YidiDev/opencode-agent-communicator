@@ -6,7 +6,7 @@ import type {
 } from "../application/advisory-lock-use-cases";
 import type { RequestDeadlineTimerPort } from "../application/blocking-session-request-boundaries";
 import type { CommunicatorStartupRecoveryLifecycle } from "../application/communicator-startup-lifecycle";
-import type { ClockPort } from "../application/delivery-ports";
+import type { ClockPort, SessionReadPresencePort } from "../application/delivery-ports";
 import type { ParticipantOperationPort } from "../application/participant-operation-gate";
 import type { RequestRuntime } from "../application/request-runtime";
 import { sessionExportPolicyPort } from "../application/session-export-policy";
@@ -25,6 +25,7 @@ import {
   createSessionLockReleaseTool,
   createSessionLockRenewTool,
 } from "../tools/session-locks";
+import { createSessionReadTool } from "../tools/session-read";
 import { createSessionRequestAckTool } from "../tools/session-request-ack";
 import { createSessionRequestCancelTool } from "../tools/session-request-cancel";
 import { createSessionRequestGetTool } from "../tools/session-request-get";
@@ -38,35 +39,15 @@ import { createSessionStartTool } from "../tools/session-start";
 import { createSessionStopTool } from "../tools/session-stop";
 import { createSessionWaitTool } from "../tools/session-wait";
 import type { CommunicatorOptions } from "./config";
+
+export { communicatorToolIds } from "./tool-ids";
+
 import {
   productionBlockingTimers,
   productionClock,
   productionEntropy,
   productionSha256,
 } from "./primitives";
-
-export const communicatorToolIds = Object.freeze([
-  "session_list",
-  "session_lock_list",
-  "session_lock_publish",
-  "session_lock_release",
-  "session_lock_renew",
-  "session_send",
-  "session_delivery_get",
-  "session_ask",
-  "session_respond",
-  "session_wait",
-  "session_signal",
-  "session_request_list",
-  "session_request_get",
-  "session_request_ack",
-  "session_request_cancel",
-  "session_request_send",
-  "session_request_start",
-  "session_stop",
-  "session_start",
-  "session_export",
-] as const);
 
 function configuredUnresolvedProvenanceLimit(value: number | undefined) {
   return value === undefined ? {} : { unresolvedProvenancePerWorkspace: value };
@@ -109,6 +90,17 @@ export function configuredStartPolicy(options: CommunicatorOptions) {
           },
         }),
   });
+}
+
+function sessionReadPresence(native: OpenCodeNativeAdapter): SessionReadPresencePort {
+  return {
+    observeSessionReadPresence(workspace, source, target, abort) {
+      if (!native.observeSessionReadPresence) {
+        throw new Error("Session read presence observation is unavailable.");
+      }
+      return native.observeSessionReadPresence(workspace, source, target, abort);
+    },
+  };
 }
 
 export function constructToolContracts(input: {
@@ -178,6 +170,17 @@ export function constructToolContracts(input: {
       { ...common, sessions: native },
       workspaceKey,
       invocationDeadlineMs,
+    ),
+    session_read: createSessionReadTool(
+      {
+        ...common,
+        membership: sessionReadPresence(native),
+        native,
+        digest: productionSha256,
+        clock,
+        timer: blockingTimers,
+      },
+      { workspaceKey, invocationDeadlineMs },
     ),
     session_lock_list: createSessionLockListTool(advisoryLocks, identityScope),
     session_lock_publish: createSessionLockPublishTool(advisoryLocks, identityScope),

@@ -34,6 +34,7 @@ export const domainFailureCodes = [
   "unsafe_path",
   "destination_exists",
   "export_limit_exceeded",
+  "cursor_stale",
 ] as const;
 
 export type DomainFailureCode = (typeof domainFailureCodes)[number];

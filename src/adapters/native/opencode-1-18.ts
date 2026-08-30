@@ -2,6 +2,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 import type {
   CurrentWorkspaceMembershipPort,
   NativeQueueAdmissionPort,
+  SessionReadPresencePort,
 } from "../../application/delivery-ports";
 import type { NativeParticipantPresencePort } from "../../application/participant-deletion-ports";
 import type { NativeParticipantStopActivityPort } from "../../application/participant-stop-ports";
@@ -9,6 +10,7 @@ import type {
   NativeSteerAdmissionPort,
   RequestParticipantActivityPort,
 } from "../../application/request-ports";
+import type { NativeSessionReadPort } from "../../application/session-read-ports";
 import type { NativeSessionStartPort } from "../../application/session-start-ports";
 import type { NativeSessionInterruptPort } from "../../application/session-stop-ports";
 import type { HostHealthPort } from "../../domain/host";
@@ -18,6 +20,7 @@ import { validateWorkspaceKey } from "../../domain/workspaces";
 import { createAdmissionOperations, createObservationOperations } from "./opencode-1-18-operations";
 import { createDirectParticipantPresencePort } from "./opencode-1-18-presence";
 import { admitPublicMessage, type PublicMessageSurface } from "./opencode-1-18-public-message";
+import { createOpenCode118SessionReadPort } from "./opencode-1-18-session-read";
 import {
   admitLegacyInitialMessage,
   createDeterministicRootSession,
@@ -67,6 +70,27 @@ interface V2ClientSurface {
         parameters: { readonly sessionID: string },
         options: { readonly signal: AbortSignal },
       ): Promise<unknown>;
+      message?(
+        parameters: { readonly sessionID: string; readonly messageID: string },
+        options: {
+          readonly signal: AbortSignal;
+          readonly fetch?: typeof globalThis.fetch;
+          readonly throwOnError: false;
+        },
+      ): Promise<unknown>;
+      messages?(
+        parameters: {
+          readonly sessionID: string;
+          readonly limit: number;
+          readonly order?: "asc" | "desc";
+          readonly cursor?: string;
+        },
+        options: {
+          readonly signal: AbortSignal;
+          readonly fetch?: typeof globalThis.fetch;
+          readonly throwOnError: false;
+        },
+      ): Promise<unknown>;
       list(parameters: {
         readonly directory: string;
         readonly limit: number;
@@ -106,6 +130,7 @@ export interface OpenCodeNativeAdapterDependencies {
     readonly baseUrl: string;
     readonly directory: string;
   }) => V2ClientSurface;
+  readonly hostFetch?: typeof globalThis.fetch | undefined;
   readonly now?: () => number;
 }
 
@@ -122,8 +147,10 @@ export type OpenCodeNativeAdapter = HostHealthPort &
   NativeSteerAdmissionPort &
   RequestParticipantActivityPort &
   CurrentWorkspaceMembershipPort &
+  Partial<SessionReadPresencePort> &
   NativeSessionInterruptPort &
   NativeSessionStartPort &
+  NativeSessionReadPort &
   NativeParticipantPresencePort &
   NativeParticipantStopActivityPort;
 
@@ -175,9 +202,18 @@ export function createOpenCode118NativeAdapter(
   dependencies: OpenCodeNativeAdapterDependencies = {},
 ): OpenCodeNativeAdapter {
   const configuration = { baseUrl: input.serverUrl.toString(), directory: input.directory };
+  const transport = dependencies.createV2Client
+    ? undefined
+    : readOpenCode118Transport(input.client);
+  const failClosedFetch: typeof globalThis.fetch = Object.assign(
+    async () => {
+      throw new NativeAdapterFault("Injected V2 session read transport is unavailable.");
+    },
+    { preconnect() {} },
+  );
   const v2 = dependencies.createV2Client
     ? dependencies.createV2Client(configuration)
-    : createOpencodeClient({ ...configuration, ...readOpenCode118Transport(input.client) });
+    : createOpencodeClient({ ...configuration, ...transport });
   const legacy = legacySurface(input.client);
   const listArchivedRoots = (
     parameters: { readonly roots: true; readonly archived: boolean; readonly directory: string },
@@ -220,6 +256,22 @@ export function createOpenCode118NativeAdapter(
     ) => method(v2.session, "message", "Public session message read-back")(parameters, options),
   };
   const participantPresence = createDirectParticipantPresencePort(startSession);
+  const sessionRead = createOpenCode118SessionReadPort(
+    {
+      async message(parameters, options) {
+        return method(v2.v2.session, "message", "V2 fixed session message")(parameters, options);
+      },
+      async messages(parameters, options) {
+        return method(v2.v2.session, "messages", "V2 session message page")(parameters, options);
+      },
+    },
+    {
+      workspaceKey: input.workspaceKey,
+      hostFetch: dependencies.hostFetch ?? transport?.fetch ?? failClosedFetch,
+      serverUrl: input.serverUrl,
+      directory: input.directory,
+    },
+  );
   const now = dependencies.now ?? Date.now;
   const configuredWorkspace = validateWorkspaceKey(input.workspaceKey);
   if (!configuredWorkspace.ok) throw new NativeAdapterFault(configuredWorkspace.message);
@@ -245,6 +297,7 @@ export function createOpenCode118NativeAdapter(
     ...observations,
     ...admissions,
     ...participantPresence,
+    ...sessionRead,
     async queueMessage(request) {
       const result = await admitPublicMessage(
         publicStartSession,

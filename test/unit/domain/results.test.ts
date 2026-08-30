@@ -42,6 +42,7 @@ const expectedCodes = [
   "unsafe_path",
   "destination_exists",
   "export_limit_exceeded",
+  "cursor_stale",
 ] as const satisfies readonly DomainFailureCode[];
 
 const expectedCodesAreExhaustive: Exclude<

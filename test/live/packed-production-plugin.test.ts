@@ -28,6 +28,7 @@ import {
   type ProviderRequestGate,
 } from "./harness/provider";
 import { runImmediateRequestJourneys } from "./packed-immediate-request-journeys";
+import { runPackedSessionReadJourney } from "./packed-session-read-journey";
 
 setDefaultTimeout(liveDeadlineMs * 8);
 
@@ -60,6 +61,7 @@ interface ActiveTarget {
 
 const toolIds = [
   "session_list",
+  "session_read",
   "session_lock_list",
   "session_lock_publish",
   "session_lock_release",
@@ -684,6 +686,10 @@ test(`runs the exact packed production plugin through OpenCode ${exactOpenCodeVe
     );
     const invoker = createInvoker(fixture.client);
     await runBasicPackedJourneys(invoker);
+    await runPackedSessionReadJourney({
+      client: fixture.client,
+      invoke: (marker, callerSessionID) => invoker.invoke("session_read", marker, callerSessionID),
+    });
     await runLockJourney(fixture, invoker);
     await runStartStopJourney(fixture, invoker, target.id);
     await runAskJourney(fixture, invoker);
