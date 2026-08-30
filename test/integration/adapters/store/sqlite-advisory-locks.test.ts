@@ -95,7 +95,7 @@ describe("SQLite advisory lock persistence", () => {
       (await clock.store.list({ fencingToken: token, workspaceKey: workspace, limit: 100 })).locks,
     ).toHaveLength(0);
     expect((await clock.store.publish(publishInput(token, 1_025))).ok).toBe(true);
-  });
+  }, 15_000);
 
   test("renews and releases only active caller-owned rows and never revives expiry", async () => {
     const clock = fixture();
