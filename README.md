@@ -6,7 +6,7 @@
 [![OpenCode 1.18 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** `0.4.1` supports Linux x64 and stable OpenCode versions
+**Release status:** `0.5.0` supports Linux x64 and stable OpenCode versions
 `>=1.18.21 <1.19.0`. Bun `1.4.0` is required for development and release verification. Other
 architectures, operating systems, OpenCode versions, and prereleases are unsupported.
 
@@ -58,15 +58,15 @@ OpenCode `1.18.x` does not reliably populate its package cache from a private `g
 Install the immutable release outside OpenCode instead:
 
 ```bash
-install_root="$HOME/.local/share/opencode-agent-communicator/v0.4.1"
+install_root="$HOME/.local/share/opencode-agent-communicator/v0.5.0"
 install -d -m 0700 "$install_root"
 npm install --prefix "$install_root" --save-exact --ignore-scripts \
-  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.4.1"
+  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.5.0"
 test -f "$install_root/node_modules/opencode-agent-communicator/src/index.ts"
 ```
 
 The repository is private, so the account running npm and OpenCode must have working GitHub SSH
-access. Release tags are immutable by project policy; do not replace `v0.4.1` with `main`.
+access. Release tags are immutable by project policy; do not replace `v0.5.0` with `main`.
 
 ### 2. Add the plugin
 
@@ -78,7 +78,7 @@ absolute home directory of the account that performed the installation:
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.4.1/node_modules/opencode-agent-communicator/src/index.ts",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v0.5.0/node_modules/opencode-agent-communicator/src/index.ts",
       {
         "policies": {
           "message": "allow",
@@ -129,7 +129,7 @@ configuration are startup errors.
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.4.1/node_modules/opencode-agent-communicator/src/index.ts",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v0.5.0/node_modules/opencode-agent-communicator/src/index.ts",
       {
         "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
         "startupDeadlineMs": 30000,
@@ -532,6 +532,13 @@ are logical deletion, not secure erasure from old pages, snapshots, or media.
 
 ## Upgrade, migrate, or roll back
 
+### Upgrade to 0.5.0
+
+Release `0.5.0` makes blocked asks and waits reconcile promptly when either participant stops,
+including authoritatively revalidated idle events and missed-event recovery. It does not change the
+SQLite schema. Install tag `v0.5.0` into a new private versioned directory, update the plugin entry,
+restart OpenCode, and verify all 20 tools before removing the previous installation.
+
 ### Upgrade to 0.4.1
 
 Release `0.4.1` clarifies the nested `session_respond` answer shape for model tool use. It does not
@@ -689,7 +696,7 @@ exact ordered 20-tool manifest, all three bundled skills, and a reviewed
 fingerprint of every path npm will pack. It rejects path-policy drift, symlinks, executable entries,
 secret-like names, and generated/test output. The black-box test creates an archive without
 publishing it, installs it into an isolated Bun project, imports the package by name, and checks
-packaged runtime assets. Release `0.4.1` is distributed through its immutable Git tag and npm. The
+packaged runtime assets. Release `0.5.0` is distributed through its immutable Git tag and npm. The
 separate trusted-publication workflow accepts only an explicit manual dispatch from the exact release
 tag and publishes the previously verified archive with provenance.
 
