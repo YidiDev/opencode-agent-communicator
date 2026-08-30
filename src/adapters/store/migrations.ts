@@ -1212,6 +1212,42 @@ ALTER TABLE requests DROP COLUMN delivery_mode;
 ALTER TABLE start_operations DROP COLUMN idempotency_arguments_sha256;
 `,
   },
+  {
+    version: 15,
+    checksum: "sha256:f4ab984ddfa044ca0b203bbb0d9b35cbc63b8a2cc004d2402bdf723c33047c09",
+    sql: `
+ALTER TABLE start_operations ADD COLUMN terminal_reason TEXT
+  CHECK (terminal_reason IS NULL OR terminal_reason = 'request_terminal');
+CREATE TRIGGER start_operations_terminal_reason_insert_v15
+BEFORE INSERT ON start_operations
+WHEN NEW.terminal_reason = 'request_terminal' AND NEW.creation_state <> 'failed'
+BEGIN
+  SELECT RAISE(ABORT, 'terminal linked request requires a failed compatibility state');
+END;
+CREATE TRIGGER start_operations_terminal_reason_update_v15
+BEFORE UPDATE OF terminal_reason, creation_state ON start_operations
+WHEN (NEW.terminal_reason = 'request_terminal' AND NEW.creation_state <> 'failed') OR
+  (OLD.terminal_reason = 'request_terminal' AND NEW.terminal_reason IS NOT OLD.terminal_reason)
+BEGIN
+  SELECT RAISE(ABORT, 'terminal linked request reason is immutable and requires a failed compatibility state');
+END;
+CREATE TRIGGER start_operations_terminal_private_guard_v15
+BEFORE UPDATE OF terminal_reason ON start_operations
+WHEN NEW.terminal_reason = 'request_terminal' AND OLD.terminal_reason IS NULL AND (
+  EXISTS (SELECT 1 FROM start_operation_payloads WHERE operation_id = OLD.id) OR
+  EXISTS (SELECT 1 FROM managed_sessions WHERE operation_id = OLD.id)
+)
+BEGIN
+  SELECT RAISE(ABORT, 'terminal linked request private state must be erased first');
+END;
+`,
+    downSql: `
+DROP TRIGGER start_operations_terminal_private_guard_v15;
+DROP TRIGGER start_operations_terminal_reason_update_v15;
+DROP TRIGGER start_operations_terminal_reason_insert_v15;
+ALTER TABLE start_operations DROP COLUMN terminal_reason;
+`,
+  },
 ] as const;
 
 interface VersionRow {

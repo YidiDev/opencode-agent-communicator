@@ -6,7 +6,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-08-28
+## [0.4.0] - 2026-08-29
 
 ### Added
 
@@ -14,6 +14,8 @@ All notable changes to this project are documented in this file. The format is b
   recoverable ask or wait before one canonical queue or initial-message effect.
 - Added SQLite schema v14 request delivery modes (`steer`, `queue`, and `initial`) with optional
   linked start-operation identity; existing requests migrate to `steer`.
+- Added SQLite schema v15 terminal linked-request correlation so an unstarted managed-session
+  reservation is released without being misreported as an approval rejection.
 
 ### Changed
 

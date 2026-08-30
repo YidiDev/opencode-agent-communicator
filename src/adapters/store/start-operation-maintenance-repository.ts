@@ -38,7 +38,8 @@ export class StartOperationMaintenanceRepository {
       `DELETE FROM start_operations WHERE id IN (
          SELECT o.id FROM start_operations AS o
          WHERE o.workspace_key = ? AND o.updated_at_ms < ?
-           AND o.creation_state IN ('failed','policy_denied','approval_rejected')
+           AND (o.creation_state IN ('failed','policy_denied','approval_rejected') OR
+             o.terminal_reason = 'request_terminal')
            AND NOT EXISTS (SELECT 1 FROM managed_sessions AS m WHERE m.operation_id = o.id)
          ORDER BY o.updated_at_ms, o.id LIMIT 1000
        )`,
@@ -102,7 +103,8 @@ export class StartOperationMaintenanceRepository {
           `DELETE FROM start_operations WHERE id IN (
                SELECT o.id FROM start_operations AS o
                WHERE o.workspace_key = ? AND o.updated_at_ms < ?
-                 AND o.creation_state IN ('failed','policy_denied','approval_rejected')
+                 AND (o.creation_state IN ('failed','policy_denied','approval_rejected') OR
+                   o.terminal_reason = 'request_terminal')
                  AND NOT EXISTS (SELECT 1 FROM managed_sessions AS m WHERE m.operation_id = o.id)
                ORDER BY o.updated_at_ms, o.id LIMIT ?
              )`,

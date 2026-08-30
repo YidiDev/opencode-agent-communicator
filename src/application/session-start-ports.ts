@@ -158,7 +158,7 @@ export interface StartOperationPersistencePort {
   ): Promise<StartStoreResult>;
   completeCreation(
     input: StartTransitionInput & {
-      readonly state: Exclude<StartCreationState, "prepared" | "submitting">;
+      readonly state: Exclude<StartCreationState, "prepared" | "submitting" | "request_terminal">;
     },
   ): Promise<StartStoreResult>;
   completeTitle(

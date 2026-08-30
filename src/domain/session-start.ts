@@ -17,7 +17,8 @@ export type StartCreationState =
   | "failed"
   | "policy_denied"
   | "approval_rejected"
-  | "outcome_unknown";
+  | "outcome_unknown"
+  | "request_terminal";
 export type StartTitleState =
   | "not_started"
   | "prepared"
@@ -159,6 +160,7 @@ export function isCoherentStartOperation(value: unknown): value is StartOperatio
       "policy_denied",
       "approval_rejected",
       "outcome_unknown",
+      "request_terminal",
     ].includes(candidate.creationState) &&
     typeof candidate.titleState === "string" &&
     [

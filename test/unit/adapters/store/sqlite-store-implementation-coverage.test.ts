@@ -32,7 +32,7 @@ function operationRow(id = operationId) {
 }
 
 function linkedRequest(id = operationId) {
-  return { id: `req_${id.slice(3)}`, linkedStartOperationId: id };
+  return { id: `req_${id.slice(3)}`, linkedStartOperationId: id, resolutionState: "pending" };
 }
 
 type HarnessOptions = {
@@ -86,9 +86,11 @@ function harness(options: HarnessOptions = {}) {
     },
     ownershipRepository: {
       assertOrdinaryWorkAllowed: (input: unknown) => ownershipInputs.push(input),
+      assertCurrent: (input: unknown) => ownershipInputs.push(input),
     },
     requestRepository: {
       getRequestMetadata: () => options.request,
+      getRequestMetadataForRecovery: () => options.request,
       createPreparedInTransaction: () => preparedRequestResult,
     },
     startRepository: {
@@ -161,7 +163,7 @@ describe("SQLite store composite start/request coverage", () => {
         operationId,
       } as never)) as unknown,
     ).toEqual({ operation: operation(), request: linkedRequest() });
-    expect(linked.accessCalls).toEqual(["inspect"]);
+    expect(linked.accessCalls).toEqual(["mutate"]);
     expect(linked.ownershipInputs).toEqual([10]);
     expect(linked.queryArguments).toEqual([[workspaceKey, operationId]]);
   });

@@ -70,7 +70,7 @@ export class RequestDeliveryRepository {
           };
         }
         const classifyingStaleSubmission = this.context.startupBlockedToken === input.fencingToken;
-        if (classifyingStaleSubmission) this.assertStaleUnknown(input);
+        if (classifyingStaleSubmission) this.assertStaleClassification(input);
         if (before.resolutionState !== "pending") validateStoredResultState(this.context, before);
         this.writeCompletion(input, before, storeNowMs);
         const request = selectRequest(this.context, input.workspaceKey, input.requestId);
@@ -98,17 +98,42 @@ export class RequestDeliveryRepository {
     }
   }
 
-  private assertStaleUnknown(input: CompleteRequestDeliveryInput): void {
-    if (input.outcome !== "delivery_unknown") {
-      throw new OwnershipLostFault("Startup recovery permits only stale request classification.");
-    }
+  private assertStaleClassification(input: CompleteRequestDeliveryInput): void {
     const row = this.context.database
-      .query<{ readonly token: number | null }, [string, string]>(
-        "SELECT claimed_fencing_token AS token FROM requests WHERE workspace_key = ? AND id = ?",
+      .query<
+        {
+          readonly token: number | null;
+          readonly authoritative: number;
+        },
+        [string, string, string]
+      >(
+        `SELECT request.claimed_fencing_token AS token,
+           CASE
+             WHEN ?3 = 'delivery_unknown' THEN 1
+             WHEN request.delivery_mode <> 'initial' OR operation.id IS NULL THEN 0
+             WHEN ?3 = 'admitted' AND operation.admission_state = 'admitted' THEN 1
+             WHEN ?3 = 'delivery_failed' AND (
+               operation.creation_state = 'failed' OR operation.admission_state = 'failed' OR
+               operation.terminal_reason = 'request_terminal' OR
+               (operation.creation_state = 'created' AND
+                 operation.admission_state = 'payload_unavailable')
+             ) THEN 1
+             ELSE 0
+           END AS authoritative
+         FROM requests AS request
+         LEFT JOIN start_operations AS operation
+           ON operation.workspace_key = request.workspace_key
+          AND operation.id = request.linked_start_operation_id
+         WHERE request.workspace_key = ?1 AND request.id = ?2`,
       )
-      .get(input.workspaceKey, input.requestId);
+      .get(input.workspaceKey, input.requestId, input.outcome);
     if (!row || row.token === null || row.token === input.fencingToken) {
       throw new OwnershipLostFault("Only a stale-token request may cross the startup barrier.");
+    }
+    if (row.authoritative !== 1) {
+      throw new OwnershipLostFault(
+        "Definitive stale classification requires authoritative linked-start state.",
+      );
     }
   }
 

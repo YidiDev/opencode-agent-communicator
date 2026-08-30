@@ -127,6 +127,36 @@ test("appends managed-session reconciliation quota enforcement without rewriting
   database.close(true);
 });
 
+test("appends checked terminal-linked start provenance without rewriting start state history", () => {
+  const migration = sqliteStoreMigrations[14];
+  expect(migration).toMatchObject({
+    version: 15,
+    checksum: "sha256:f4ab984ddfa044ca0b203bbb0d9b35cbc63b8a2cc004d2402bdf723c33047c09",
+  });
+  const database = new Database(":memory:", { strict: true });
+  applyMigrations(database, 1, 0);
+  expect(
+    database
+      .query<{ name: string }, []>(
+        `SELECT name FROM pragma_table_info('start_operations') WHERE name = 'terminal_reason'`,
+      )
+      .get()?.name,
+  ).toBe("terminal_reason");
+  const triggers = database
+    .query<{ name: string }, []>(
+      `SELECT name FROM sqlite_schema WHERE type = 'trigger'
+       AND name LIKE 'start_operations_terminal_%_v15' ORDER BY name`,
+    )
+    .all()
+    .map((row) => row.name);
+  expect(triggers).toEqual([
+    "start_operations_terminal_private_guard_v15",
+    "start_operations_terminal_reason_insert_v15",
+    "start_operations_terminal_reason_update_v15",
+  ]);
+  database.close(true);
+});
+
 test("v11 safely assigns the hard ceiling to preexisting v10 operations", () => {
   const database = new Database(":memory:", { strict: true });
   database.exec("PRAGMA foreign_keys = ON");
@@ -163,7 +193,7 @@ test("v11 safely assigns the hard ceiling to preexisting v10 operations", () => 
     database
       .query<{ version: number }, []>("SELECT user_version AS version FROM pragma_user_version")
       .get()?.version,
-  ).toBe(14);
+  ).toBe(15);
   database.close(true);
 });
 

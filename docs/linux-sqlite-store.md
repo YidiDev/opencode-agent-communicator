@@ -138,6 +138,14 @@ composite start path then inserts or resumes the start operation and its linked 
 one fenced `BEGIN IMMEDIATE` transaction. Recovery follows the persisted mode and link rather than
 inferring which native effect to use from transient process state.
 
+Schema v15 adds an immutable `request_terminal` reason for a linked start whose native creation
+provably never began. Correlation atomically erases its private start payload, releases only the
+reserved managed-session row, and exposes the operation as `request_terminal` rather than an
+approval or policy rejection. If native creation may have begun, recovery reconciles it first. A
+matching or created root keeps managed provenance while any not-yet-started title or initial
+admission becomes `payload_unavailable`; submitting or known admission outcomes are preserved and
+never replayed.
+
 An administrator owner label is diagnostic only. Every store construction creates
 a fresh random process-generation identity. Repeated acquisition by one live
 generation returns its existing token, while every valid new-generation takeover

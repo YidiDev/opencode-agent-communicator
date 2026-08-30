@@ -127,6 +127,61 @@ test("request-send records queue ambiguity without replay", async () => {
   });
 });
 
+test("request-send never reads activity, so a busy-to-idle transition cannot race creation", async () => {
+  let activityReads = 0;
+  let queueCalls = 0;
+  const setup = await blockingRequestFixture(async () => ({ kind: "unknown" }));
+  const ports = {
+    readiness: { ...setup.ports.readiness, fencingToken: setup.token },
+    membership: setup.ports.membership,
+    requests: setup.store,
+    scheduler: setup.ports.scheduler,
+    nativeQueue: {
+      queueMessage: async () => {
+        queueCalls += 1;
+        return { kind: "public_message" as const, observedAtMs: 25_000 };
+      },
+    },
+    ownership: setup.store,
+    clock: setup.ports.clock,
+    ids: setup.ports.ids,
+    digest: requestDigestPort,
+    activity: {
+      observeRequestParticipants: async () => {
+        activityReads += 1;
+        throw new Error("activity changed from busy to idle");
+      },
+    },
+  };
+  const tool = createSessionRequestSendTool(
+    ports,
+    {
+      workspaceKey: requestTestWorkspace(),
+      fencingToken: setup.token,
+      invocationDeadlineMs: () => 90_000,
+    },
+    { message: "allow", ask: "allow", wait: "allow" },
+  );
+
+  const result = JSON.parse(
+    await tool.execute(
+      {
+        session_id: setup.target,
+        content: "Build it even if the target becomes idle.",
+        request: { kind: "wait", milestone: "built", timeout_seconds: 30 },
+      },
+      { sessionID: setup.source, abort: new AbortController().signal },
+    ),
+  );
+
+  expect(result).toMatchObject({
+    ok: true,
+    value: { delivery_mode: "queue", delivery_state: "admitted" },
+  });
+  expect(queueCalls).toBe(1);
+  expect(activityReads).toBe(0);
+});
+
 test("request-start sends one canonical initial envelope linked to the idempotent start", async () => {
   const setup = await blockingRequestFixture(async () => ({ kind: "unknown" }));
   let approvals = 0;
