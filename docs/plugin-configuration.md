@@ -5,7 +5,7 @@ configuration, and values above compiled safety ceilings stop startup before the
 
 ```json
 [
-  "file:///home/operator/.local/share/opencode-agent-communicator/v0.2.4/node_modules/opencode-agent-communicator/src/index.ts",
+  "file:///home/operator/.local/share/opencode-agent-communicator/v0.2.5/node_modules/opencode-agent-communicator/src/index.ts",
   {
     "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
     "startupDeadlineMs": 30000,
@@ -57,7 +57,7 @@ configuration, and values above compiled safety ceilings stop startup before the
 `XDG_STATE_HOME` or `HOME/.local/state`, outside the workspace; the store verifies ownership,
 permissions, no-follow traversal, and filesystem support. This implementation fails closed on any
 runtime other than Linux x64 before it opens the state store. Linux ARM64 and all other CPU
-architectures are outside the certified `0.2.4` package scope; package metadata also restricts
+architectures are outside the certified `0.2.5` package scope; package metadata also restricts
 installation to x64. Install the immutable private Git release externally with npm, then configure
 its absolute `file://` source entry; OpenCode `1.18.x` does not reliably populate its cache directly
 from a private `git+ssh` spec. Bun `1.4.0` remains the exact development and verification target.
@@ -80,6 +80,11 @@ Stop has no configurable bypass and is always narrowed to `ask` by the mandatory
 Explicit start agent/model overrides remain subject to exact allowlists even when start policy is
 `allow`.
 
+The established `allowManagedSessionRecursion` and `managedSessionsPerWorkspace` names refer to
+sessions created and tracked through `session_start`. This provenance supports idempotency, quotas,
+recovery, and chained-start policy; it does not make one session the supervisor of another. Started
+sessions remain independent roots with their own instructions, permissions, and judgment.
+
 Start operation count and retained private-payload bytes are hard admission quotas below immutable
 compiled ceilings. Denied and approval-rejected starts keep only payload-free idempotency metadata
 for `terminalRetentionMs`; fenced startup and recurring maintenance then collect it in bounded
@@ -87,7 +92,7 @@ batches. Start rate events are collected after `rateWindowMs`. A same-source ret
 and arguments is deterministic while its terminal metadata remains retained.
 
 Ambiguous creates use a separate `unresolvedProvenancePerWorkspace` quota (default 16, immutable
-ceiling 128), not the ordinary active managed-session quota. Reaching it returns
+ceiling 128), not the ordinary active communicator-started session quota. Reaching it returns
 `unresolved_provenance_quota_exceeded` so an operator can investigate native state. Startup and
 same-key retries only read the fixed native session ID: an exact root match confirms provenance,
 proven stable absence or an identity collision releases the reservation, and an uncertain read

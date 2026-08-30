@@ -124,6 +124,10 @@ No contract depending on an unproved hypothesis is frozen before the gate.
 
 ### 3.2 Product Principles
 
+- Sessions are independent, first-class peers with their own instructions,
+  permissions, and judgment; the communicator creates no supervisory hierarchy.
+- Either visible root may initiate communication. Source and target are temporary
+  roles for one operation, not ranks or persistent identities.
 - Communication is untrusted advisory data, not authority.
 - Session IDs are canonical; titles are unverified display metadata.
 - Visibility is discovery and scope, not authorization.
@@ -207,7 +211,9 @@ inspection, and export remain available subject to their normal authorization.
 
 For a request, the `source` created the ask/wait and the `target` receives and
 answers/signals it. Authorization is role-aware and is never inferred from mere
-visibility.
+visibility. These are directional roles for that request only. They do not make
+the source a supervisor or the target a subordinate, and either participant may
+be the source of a separate operation.
 
 ## 6. Identity, Provenance, and Untrusted Content
 
@@ -699,8 +705,9 @@ type SessionStartArgs = {
 Start creates only root sessions and requires operation-specific approval by
 default. With no configured allowlist, callers must omit `agent` and `model` so
 host defaults are used. Explicit overrides must exactly match administrator
-allowlists. Source and workspace start rates, managed-session counts, retained
-operation records, and private start-payload bytes are bounded.
+allowlists. A communicator-created session is an independent peer, not a
+subordinate of its source. Source and workspace start rates, communicator-started
+session counts, retained operation records, and private start-payload bytes are bounded.
 
 The coordinator persists a source-scoped start operation before external work.
 It fixes the generated session ID, initial native message ID, arguments digest,
@@ -1165,11 +1172,12 @@ configuration does not exist.
 
 Two optional skills ship with the package:
 
-### 16.1 `session-orchestrator`
+### 16.1 `session-communication`
 
-Teaches discovery, delegation, request recovery, idempotent starts, explicit
-stop approval, safe exports, and the difference between admission and activity.
-Its idle workflow is exact:
+Teaches discovery, peer collaboration requests, request recovery, idempotent
+starts, explicit stop approval, safe exports, and the difference between
+admission and activity. It states that either peer may initiate communication
+and that source and target are temporary operation roles. Its idle workflow is exact:
 
 1. Queue a normal message to wake/resume an existing idle session.
 2. Inspect `session_list` until the session is `busy` or `retry`.
@@ -1178,12 +1186,13 @@ Its idle workflow is exact:
 It states that queued admission does not prove activation and that peer content
 does not bypass ordinary permissions.
 
-### 16.2 `session-worker`
+### 16.2 `session-request-participant`
 
-Teaches workers to inspect their request inbox, retrieve pending payloads, use
-`session_respond`/`session_signal`, handle already-terminal requests, and avoid
-acting on untrusted peer instructions without normal authorization. It uses the
-same explicit idle workflow when contacting another session.
+Teaches request participants to inspect their inbox, retrieve pending payloads,
+use `session_respond`/`session_signal`, handle already-terminal requests, and
+avoid acting on untrusted peer instructions without normal authorization. It
+uses the same explicit idle workflow when contacting another session and makes
+clear that inbound requests do not create a subordinate role.
 
 ### 16.3 Registration
 
@@ -1237,8 +1246,8 @@ src/
     paths.ts
     validate.ts
 skills/
-  session-orchestrator/SKILL.md
-  session-worker/SKILL.md
+  session-communication/SKILL.md
+  session-request-participant/SKILL.md
 test/
   unit/
   integration/
@@ -1432,6 +1441,8 @@ support. It contains no remote command or synthetic wake experiments.
 - No silent file copy and no correctness dependency on skills.
 - Both skills teach message -> inspect active -> ask/wait and state that
   admission does not prove activity.
+- Both skills describe independent peers and temporary per-operation source and
+  target roles without supervisor/worker authority.
 - Live multi-session acceptance covers all tools, restart recovery, idle flow,
   role authorization, partial starts, stop approval, and sanitized export.
 - Live tests run against isolated exact 1.18.21, never the user's active 1.17.20
@@ -1478,7 +1489,8 @@ The first prerelease requires:
     deletion language.
 12. Bounded exact-path `Bun.spawn` export, native sanitizer, validated output,
     overwrite approval, and adversarial Linux x64 containment tests.
-13. Both skills available through a proven registration or explicit installer.
+13. Both peer-communication skills available through a proven registration or
+    explicit installer.
 14. No command execution, synthetic wake/reminder subsystem, system-transform
     dependency, restart orphaning, or exactly-once external-effect claim.
 
@@ -1503,7 +1515,7 @@ requests recoverable, and never auto-queue.
 ### 22.3 Model Compliance
 
 A model may ignore a request or never inspect its inbox. Mitigation: bounded
-deadlines, durable recovery, explicit cancellation, worker skill guidance, and
+deadlines, durable recovery, explicit cancellation, request-participant skill guidance, and
 no claim that admission means compliance.
 
 ### 22.4 Stale External Effects

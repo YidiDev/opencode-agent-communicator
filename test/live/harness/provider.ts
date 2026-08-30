@@ -161,8 +161,8 @@ function productionToolResponse(serialized: string): Response | undefined {
       "session_start",
       JSON.stringify({
         idempotency_key: "packed-live-start",
-        initial_message: "Packed managed session ready check",
-        title: "Packed managed target",
+        initial_message: "Packed peer session ready check",
+        title: "Packed peer target",
       }),
     );
   }

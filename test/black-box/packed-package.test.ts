@@ -87,14 +87,17 @@ describe("packed npm archive", () => {
       cpu: string[];
     };
     expect(metadata).toMatchObject({
-      version: "0.2.4",
+      version: "0.2.5",
       exports: { ".": "./src/index.ts" },
       os: ["linux"],
       cpu: ["x64"],
     });
     expect(
-      await readFile(join(installedRoot, "skills/session-orchestrator/SKILL.md"), "utf8"),
+      await readFile(join(installedRoot, "skills/session-communication/SKILL.md"), "utf8"),
     ).toContain("session_start");
+    expect(
+      await readFile(join(installedRoot, "skills/session-request-participant/SKILL.md"), "utf8"),
+    ).toContain("session_respond");
     expect(await readFile(join(installedRoot, "docs/plugin-configuration.md"), "utf8")).toContain(
       ">=1.18.21 <1.19.0",
     );

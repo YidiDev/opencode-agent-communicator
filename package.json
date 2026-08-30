@@ -1,7 +1,7 @@
 {
   "name": "opencode-agent-communicator",
-  "version": "0.2.4",
-  "description": "Durable, workspace-scoped session communication tools for OpenCode 1.18.",
+  "version": "0.2.5",
+  "description": "Durable communication between independent OpenCode agent sessions.",
   "license": "MIT",
   "author": "YidiDev",
   "homepage": "https://github.com/YidiDev/opencode-agent-communicator#readme",
@@ -16,7 +16,9 @@
     "opencode",
     "opencode-plugin",
     "agent",
+    "agent-communication",
     "multi-agent",
+    "peer-to-peer",
     "session"
   ],
   "type": "module",

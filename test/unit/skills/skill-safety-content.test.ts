@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
-const readSkill = async (name: "session-orchestrator" | "session-worker") =>
+const skillNames = ["session-communication", "session-request-participant"] as const;
+
+const readSkill = async (name: (typeof skillNames)[number]) =>
   (await Bun.file(`${import.meta.dir}/../../../skills/${name}/SKILL.md`).text()).toLowerCase();
 
 function expectConcept(content: string, ...terms: RegExp[]) {
@@ -9,7 +11,7 @@ function expectConcept(content: string, ...terms: RegExp[]) {
 
 describe("bundled skill safety guidance", () => {
   test("documents the active-only ask/wait workflow and conservative admission semantics", async () => {
-    for (const name of ["session-orchestrator", "session-worker"] as const) {
+    for (const name of skillNames) {
       const content = await readSkill(name);
       expectConcept(
         content,
@@ -23,9 +25,9 @@ describe("bundled skill safety guidance", () => {
   });
 
   test("documents trust, recovery, role, and terminal-state boundaries", async () => {
-    const orchestrator = await readSkill("session-orchestrator");
-    const worker = await readSkill("session-worker");
-    const corpus = `${orchestrator}\n${worker}`;
+    const communication = await readSkill("session-communication");
+    const participant = await readSkill("session-request-participant");
+    const corpus = `${communication}\n${participant}`;
 
     expectConcept(
       corpus,
@@ -41,7 +43,7 @@ describe("bundled skill safety guidance", () => {
   });
 
   test("documents idempotent start, mandatory stop approval, and summary-only export", async () => {
-    for (const name of ["session-orchestrator", "session-worker"] as const) {
+    for (const name of skillNames) {
       const content = await readSkill(name);
       expectConcept(
         content,
@@ -55,8 +57,21 @@ describe("bundled skill safety guidance", () => {
     }
   });
 
+  test("frames communication as peer-to-peer rather than supervisory", async () => {
+    for (const name of skillNames) {
+      const content = await readSkill(name);
+      expectConcept(
+        content,
+        /independent[\s\S]{0,120}peer/,
+        /either peer[\s\S]{0,180}(initiate|source)/,
+        /source and target[\s\S]{0,180}(temporary|one (?:operation|request)|not authority|not ranks)/,
+      );
+      expect(content).not.toMatch(/\b(?:orchestrator|worker|subordinate)\b/);
+    }
+  });
+
   test("does not make unsafe capability promises", async () => {
-    const corpus = `${await readSkill("session-orchestrator")}\n${await readSkill("session-worker")}`;
+    const corpus = `${await readSkill("session-communication")}\n${await readSkill("session-request-participant")}`;
     const dangerousClaims = [
       /admission (?:proves|guarantees) (?:activation|execution|completion)/,
       /ask(?:\/wait)? (?:wakes|queues to) (?:an )?idle/,
