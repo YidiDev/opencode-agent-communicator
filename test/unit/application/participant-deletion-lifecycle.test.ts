@@ -9,6 +9,7 @@ import type {
   ParticipantDeletionCandidatesResult,
   ParticipantPresence,
 } from "../../../src/application/participant-deletion-ports";
+import { ParticipantOperationGate } from "../../../src/application/participant-operation-gate";
 import { validateNativeMessageId, validateRequestId } from "../../../src/domain/generated-ids";
 import { validateFencingToken } from "../../../src/domain/ownership";
 import type { RequestMetadata } from "../../../src/domain/request-types";
@@ -92,17 +93,23 @@ function fixture(timers?: {
   const presence: NativeParticipantPresencePort = {
     readParticipantPresence: async (): Promise<ParticipantPresence> => "absent",
   };
+  const operations = new ParticipantOperationGate();
   const handler = new ParticipantDeletionLifecycle({
     requests,
     presence,
     notifications: { notifyTerminal: () => undefined },
+    contexts: {
+      settlePendingContextForParticipant: async () => [],
+    },
+    contextNotifications: { notifyContextSettled: () => undefined },
+    operations,
     lifecycle: lifecycle as never,
     workspaceKey: workspace,
     directory: "/workspace",
     projectId: "project",
     ...(timers ? { timers } : {}),
   });
-  return { calls, lifecycle, requests, presence, handler };
+  return { calls, lifecycle, requests, presence, operations, handler };
 }
 
 describe("participant deletion application lifecycle", () => {
@@ -217,6 +224,33 @@ describe("participant deletion application lifecycle", () => {
     expect(value.calls).toEqual(["persist", "committed"]);
   });
 
+  test("does not misclassify an in-flight failure after disposal aborts the hint", async () => {
+    const value = fixture();
+    let reject!: (cause: unknown) => void;
+    value.requests.deleteParticipantRequests = () =>
+      new Promise((_, rejectPromise) => {
+        reject = rejectPromise;
+      });
+    const handling = value.handler.handle(event());
+    while (!reject) await Promise.resolve();
+    const disposal = value.handler.dispose();
+    reject(new Error("late persistence failure"));
+    await Promise.all([handling, disposal]);
+    expect(value.calls).toEqual([]);
+  });
+
+  test("fails closed when the participant operation boundary rejects unexpectedly", async () => {
+    const value = fixture();
+    value.operations.run = async () => {
+      throw new Error("operation gate unavailable");
+    };
+    await expect(value.handler.handle(event())).rejects.toThrow("failed closed");
+    expect(value.calls).toEqual(["stop:shutdown"]);
+    await value.handler.dispose();
+  });
+});
+
+describe("participant deletion periodic reconciliation lifecycle", () => {
   test("owns bounded periodic anti-entropy that closes the startup-to-hook deletion race", async () => {
     let callback: (() => void) | undefined;
     let cleared = 0;
@@ -264,6 +298,28 @@ describe("participant deletion application lifecycle", () => {
     callback?.();
     while (!started) await Promise.resolve();
     await value.handler.dispose();
+    expect(value.calls).toEqual([]);
+  });
+
+  test("suppresses a periodic candidate failure released after disposal", async () => {
+    let callback: (() => void) | undefined;
+    const value = fixture({
+      set(_delay, wake) {
+        callback = wake;
+        return 1;
+      },
+      clear() {},
+    });
+    let reject!: (cause: unknown) => void;
+    value.requests.listParticipantDeletionCandidates = () =>
+      new Promise((_, rejectPromise) => {
+        reject = rejectPromise;
+      });
+    callback?.();
+    while (!reject) await Promise.resolve();
+    const disposal = value.handler.dispose();
+    reject(new Error("late candidate failure"));
+    await disposal;
     expect(value.calls).toEqual([]);
   });
 
@@ -574,6 +630,7 @@ describe("participant deletion fault, concurrency, and deduplication boundaries"
             requests: value.requests,
             presence: { readParticipantPresence: async () => "present" as const },
             notifications: { notifyTerminal: () => undefined },
+            operations: new ParticipantOperationGate(),
             lifecycle: value.lifecycle as never,
             workspaceKey: workspace,
             directory: "/workspace",

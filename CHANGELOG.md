@@ -6,6 +6,33 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- Added SQLite schema v16 with bounded store-backed context admissions and an explicit request
+  delivery transport discriminator.
+
+### Changed
+
+- `session_send` now defaults to `delivery: "context"`, which injects peer-originated content into a
+  `busy`/`retry` target's next provider request without creating a transcript turn. Explicit
+  `delivery: "user"` retains native transcript-visible delivery and is the only existing-root mode
+  that may wake idle work.
+- Existing-root `session_ask`, `session_wait`, and `session_request_send` now use provider context;
+  `session_request_start` retains its native initial user turn. Idle or unknown targets persist no
+  context delivery or request.
+- Advisory-lock mutations no longer fan out native steer turns. Active provider requests receive a
+  bounded lock-presence reminder and continue to use `session_lock_list` as authority.
+- Context messages share native delivery record, retained-byte, and rate quotas. Standalone terminal
+  message admissions expire independently, while request admissions remain through parent retention.
+- Context injection now revalidates exact root, archive, project, and directory metadata immediately
+  before provider mutation, and request projections expose context transition timestamps.
+
+### Security
+
+- Provider context is bounded and explicitly labels all peer fields as untrusted. It is not stored
+  in the OpenCode transcript or included in transcript export.
+- Startup fails context admissions whose prior injection is uncertain and never replays them.
+
 ## [0.6.0] - 2026-08-30
 
 ### Added

@@ -67,7 +67,7 @@ describe("atomic communicator tool construction", () => {
     ).rejects.toThrow("overflowed");
   });
 
-  test("stops the owning lifecycle when composed request cleanup reports a workflow fault", async () => {
+  test("fails closed on ambiguous context creation without manufacturing a native workflow fault", async () => {
     const setup = await blockingRequestFixture(async () => ({ kind: "unknown" }));
     const store = openRequestStore({
       workspaceKey: setup.context.workspaceKey,
@@ -76,42 +76,18 @@ describe("atomic communicator tool construction", () => {
     });
     const fencingToken = await store.acquire();
     const events: string[] = [];
-    let created: Parameters<typeof store.createPrepared>[0] | undefined;
     const requests = new Proxy(store, {
       get(target, property) {
         if (property === "createPrepared") {
-          return async (input: Parameters<typeof store.createPrepared>[0]) => {
-            events.push("create");
-            created = input;
-            return target.createPrepared(input);
-          };
-        }
-        if (property === "claimPrepared") {
           return async () => {
-            events.push("claim");
+            events.push("create");
             return Promise.reject(new Error("ambiguous"));
           };
         }
-        if (property === "reconcilePreparedClaim") {
+        if (property === "reconcilePreparedCreation") {
           return async () => {
             events.push("reconcile");
-            if (!created) throw new Error("Request was not prepared.");
-            return {
-              outcome: "current_claim",
-              request: {
-                ...created.request,
-                deliveryState: "submitting",
-                submittedAtMs: created.request.createdAtMs + 1,
-                updatedAtMs: created.request.createdAtMs + 1,
-              },
-              envelopeJson: created.envelopeJson,
-            };
-          };
-        }
-        if (property === "completeDelivery") {
-          return async () => {
-            events.push("complete");
-            return Promise.reject(new Error("completion unavailable"));
+            return { outcome: "absent" };
           };
         }
         const value: unknown = Reflect.get(target, property, target);
@@ -119,13 +95,11 @@ describe("atomic communicator tool construction", () => {
       },
     });
     let stopCalls = 0;
-    const abort = new AbortController();
     const lifecycle = {
       fencingToken,
       assertReady: () => undefined,
       stop: () => {
         stopCalls += 1;
-        abort.abort("lifecycle_stopped");
       },
       scheduler: { wake: () => undefined, drain: async () => undefined },
     };
@@ -144,6 +118,7 @@ describe("atomic communicator tool construction", () => {
       native: native as never,
       store: requests,
       runtime: setup.runtime,
+      contextRuntime: setup.contextRuntime,
       lifecycle: lifecycle as never,
       participantOperations: setup.ports.participantOperations,
       exporter: { writeExport: async () => ({ ok: false, code: "export_unavailable" }) },
@@ -154,13 +129,15 @@ describe("atomic communicator tool construction", () => {
         questions: [{ prompt: "Proceed?", options: ["yes"] }],
         timeout_seconds: 30,
       },
-      { sessionID: setup.source, abort: abort.signal },
+      { sessionID: setup.source, abort: new AbortController().signal },
     );
     const result = await execution;
-    expect(events).toEqual(["create", "claim", "reconcile", "complete", "reconcile"]);
-    abort.abort("test_complete");
-    expect(JSON.parse(result)).toMatchObject({ ok: false });
-    expect(stopCalls).toBe(1);
+    expect(events).toEqual(["create", "reconcile", "create", "reconcile"]);
+    expect(JSON.parse(result)).toMatchObject({
+      ok: false,
+      error: { code: "storage_unavailable" },
+    });
+    expect(stopCalls).toBe(0);
     store.close();
     setup.store.close();
   });

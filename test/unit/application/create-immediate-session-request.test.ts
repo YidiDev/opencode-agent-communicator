@@ -1,21 +1,22 @@
 import { describe, expect, test } from "bun:test";
+import { ContextAdmissionRuntime } from "../../../src/application/context-admission-runtime";
 import {
   createImmediateSessionRequest,
   type ImmediateSessionRequestPorts,
 } from "../../../src/application/create-immediate-session-request";
+import { ParticipantOperationAbortedFault } from "../../../src/application/participant-operation-gate";
 import type {
-  CompleteRequestDeliveryInput,
   PrepareRequestInput,
-  RequestClaimResult,
   RequestStoreResult,
 } from "../../../src/application/request-ports";
+import type { ContextAdmissionMetadata } from "../../../src/domain/context-admissions";
 import {
   validateNativeMessageId,
   validateRequestId,
   validateStartOperationId,
 } from "../../../src/domain/generated-ids";
 import { validateFencingToken } from "../../../src/domain/ownership";
-import type { PendingRequestMetadata, RequestMetadata } from "../../../src/domain/request-types";
+import type { RequestMetadata } from "../../../src/domain/request-types";
 import { validateSessionId } from "../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 
@@ -38,77 +39,23 @@ const nativeMessageId = value(validateNativeMessageId(`msg_${"2".repeat(32)}`));
 const creationOperationId = value(validateStartOperationId(`op_${"3".repeat(32)}`));
 const waitRequest = { kind: "wait" as const, milestone: "ready", timeoutSeconds: 30 };
 
-function submitting(
-  request: PendingRequestMetadata,
-): RequestMetadata & { deliveryState: "submitting" } {
-  return {
-    ...request,
-    deliveryState: "submitting",
-    submittedAtMs: 10_001,
-  } as RequestMetadata & { deliveryState: "submitting" };
-}
-
-function completeMetadata(
-  request: RequestMetadata,
-  input: CompleteRequestDeliveryInput,
-): RequestMetadata {
-  if (input.outcome === "delivery_unknown") {
-    return {
-      ...request,
-      deliveryState: "delivery_unknown",
-      deliveryUnknownAtMs: 10_002,
-    } as RequestMetadata;
-  }
-  if (input.outcome === "delivery_failed") {
-    return {
-      ...request,
-      deliveryState: "delivery_failed",
-      resolutionState: "delivery_failed",
-      deliveryFailedAtMs: 10_002,
-      resolvedAtMs: 10_002,
-      payloadSha256: undefined,
-    } as unknown as RequestMetadata;
-  }
-  const evidence =
-    input.outcome === "promoted"
-      ? {
-          state: "promoted" as const,
-          nativeMessageId: input.nativeMessageId,
-          admittedSeq: input.admittedSeq,
-          promotedSeq: input.promotedSeq,
-          observedAtMs: input.evidenceObservedAtMs,
-        }
-      : {
-          state: "admitted" as const,
-          nativeMessageId: input.nativeMessageId,
-          admittedSeq: input.admittedSeq,
-          observedAtMs: input.evidenceObservedAtMs,
-        };
-  return {
-    ...request,
-    deliveryState: input.outcome,
-    admittedAtMs: 10_002,
-    ...(input.outcome === "promoted" ? { promotedAtMs: 10_002 } : {}),
-    admissionEvidence: evidence,
-  } as RequestMetadata;
-}
-
 interface Fixture {
   ports: ImmediateSessionRequestPorts;
   messageDecision: "allow" | "deny" | "approval_rejected";
   requestDecision: "allow" | "deny" | "approval_rejected";
   memberships: Array<{ sourceVisible: boolean; targetVisible: boolean }>;
   owner: boolean;
-  nativeOutcome: Awaited<ReturnType<ImmediateSessionRequestPorts["nativeQueue"]["queueMessage"]>>;
-  nativeThrows: boolean;
-  abortAfterClaim?: () => void;
+  targetStatus: "busy" | "retry" | "idle" | "unknown";
+  admissionState: "context_admitted" | "failed" | "cancelled";
+  attachThrows: boolean;
+  abortAfterCreate?: () => void;
   createResult?: RequestStoreResult;
-  claimResult?: RequestClaimResult;
+  contextReadThrows: boolean;
+  requestMetadataMissing: boolean;
   readonly events: string[];
   readonly prepared: PrepareRequestInput[];
-  readonly completions: CompleteRequestDeliveryInput[];
   readonly controls: Array<{ abort: AbortSignal; deadlineMs?: number }>;
-  readonly envelopes: string[];
+  readonly nativeCalls: string[];
 }
 
 function fixture(): Fixture {
@@ -120,14 +67,38 @@ function fixture(): Fixture {
       { sourceVisible: true, targetVisible: true },
     ],
     owner: true,
-    nativeOutcome: { kind: "admitted" as const, admittedSeq: 7, observedAtMs: 10_003 },
-    nativeThrows: false,
+    targetStatus: "busy" as const,
+    admissionState: "context_admitted" as const,
+    attachThrows: false,
+    contextReadThrows: false,
+    requestMetadataMissing: false,
     events: [] as string[],
     prepared: [] as PrepareRequestInput[],
-    completions: [] as CompleteRequestDeliveryInput[],
     controls: [] as Array<{ abort: AbortSignal; deadlineMs?: number }>,
-    envelopes: [] as string[],
+    nativeCalls: [] as string[],
   } as Fixture;
+  const admission = (): ContextAdmissionMetadata => {
+    const prepared = required(result.prepared[0]);
+    const state = result.admissionState;
+    return {
+      id: prepared.request.id,
+      kind: "request",
+      workspaceKey,
+      sourceSessionId,
+      targetSessionId,
+      state,
+      contentByteLength: required(prepared.contextAdmission).contentByteLength,
+      contentSha256: "ab".repeat(32),
+      createdAtMs: 10_000,
+      updatedAtMs: 10_002,
+      awaitingContextAtMs: 10_001,
+      ...(state === "context_admitted"
+        ? { contextAdmittedAtMs: 10_002, claimedFencingToken: token }
+        : {}),
+      ...(state === "failed" ? { failedAtMs: 10_002 } : {}),
+      ...(state === "cancelled" ? { cancelledAtMs: 10_002 } : {}),
+    };
+  };
   result.ports = {
     readiness: { fencingToken: token, assertReady() {} },
     membership: {
@@ -156,23 +127,31 @@ function fixture(): Fixture {
       async createPrepared(input: PrepareRequestInput) {
         result.events.push("prepared");
         result.prepared.push(input);
+        result.abortAfterCreate?.();
         return result.createResult ?? { ok: true, request: input.request };
       },
-      async claimPrepared() {
-        result.events.push("claimed");
-        result.abortAfterClaim?.();
-        if (result.claimResult) return result.claimResult;
-        const prepared = required(result.prepared[0]);
-        const request = submitting(prepared.request);
-        return { ok: true, request, envelopeJson: prepared.envelopeJson };
-      },
-      async completeDelivery(input: CompleteRequestDeliveryInput) {
-        result.events.push(`completed:${input.outcome}`);
-        result.completions.push(input);
-        const current = result.claimResult?.ok
-          ? result.claimResult.request
-          : submitting(required(result.prepared[0]).request);
-        return { ok: true, request: completeMetadata(current, input) };
+      async getRequestMetadata() {
+        result.events.push("request-read");
+        if (result.requestMetadataMissing) return undefined;
+        const request = required(result.prepared[0]).request;
+        if (result.admissionState !== "context_admitted") {
+          const { payloadSha256: _payloadSha256, ...terminal } = request;
+          return {
+            ...terminal,
+            deliveryState: "delivery_failed",
+            resolutionState: result.admissionState === "failed" ? "delivery_failed" : "cancelled",
+            updatedAtMs: 10_002,
+            awaitingContextAtMs: 10_001,
+            deliveryFailedAtMs: 10_002,
+            resolvedAtMs: 10_002,
+          } as RequestMetadata;
+        }
+        return {
+          ...request,
+          deliveryState: "context_admitted",
+          updatedAtMs: 10_002,
+          contextAdmittedAtMs: 10_002,
+        } as RequestMetadata;
       },
     } as unknown as ImmediateSessionRequestPorts["requests"],
     scheduler: {
@@ -182,10 +161,58 @@ function fixture(): Fixture {
     },
     nativeQueue: {
       async queueMessage(input) {
-        result.events.push("native");
-        result.envelopes.push(input.envelope);
-        if (result.nativeThrows) throw new Error("write may have happened");
-        return result.nativeOutcome;
+        result.nativeCalls.push(input.envelope);
+        return { kind: "unknown" };
+      },
+    },
+    contexts: {
+      async getContextAdmission() {
+        result.events.push("context-read");
+        if (result.contextReadThrows) throw new Error("context store unavailable");
+        return admission();
+      },
+      async cancelContextAdmission() {
+        result.events.push("context-cancel");
+        result.admissionState = "cancelled";
+        return { ok: true, admission: admission() };
+      },
+    } as unknown as NonNullable<ImmediateSessionRequestPorts["contexts"]>,
+    contextRuntime: {
+      effectSignal: new AbortController().signal,
+      attach() {
+        result.events.push("context-attach");
+        if (result.attachThrows) throw new RangeError("waiter capacity");
+        let attached = true;
+        return {
+          outcome: Promise.resolve({
+            outcome: "settled" as const,
+            event: { id: requestId, kind: "request" as const, state: result.admissionState },
+          }),
+          detach() {
+            if (!attached) return;
+            attached = false;
+            result.events.push("context-detach");
+          },
+        };
+      },
+      notifyContextSettled() {
+        return undefined;
+      },
+    },
+    activity: {
+      async observeRequestParticipants() {
+        result.events.push("activity");
+        return {
+          sourceVisible: result.memberships[1]?.sourceVisible ?? true,
+          targetVisible: result.memberships[1]?.targetVisible ?? true,
+          targetStatus: result.targetStatus,
+        };
+      },
+    },
+    participantOperations: {
+      async run(_participants, _abort, operation) {
+        result.events.push("participant-gate");
+        return operation();
       },
     },
     ownership: { acquire: async () => token, isCurrent: async () => result.owner },
@@ -255,7 +282,7 @@ describe("createImmediateSessionRequest authorization and visibility", () => {
         error: { code },
       });
       expect(current.prepared).toEqual([]);
-      expect(current.envelopes).toEqual([]);
+      expect(current.nativeCalls).toEqual([]);
       expect(current.controls).toEqual(
         Array.from({ length: port === "message" ? 1 : 2 }, () => ({
           abort: invocation.abort,
@@ -295,7 +322,7 @@ describe("createImmediateSessionRequest authorization and visibility", () => {
 });
 
 describe("createImmediateSessionRequest durable admission", () => {
-  test("persists and claims one linked envelope before one successful queue call", async () => {
+  test("persists one linked envelope and returns after durable context admission", async () => {
     const current = fixture();
     const result = await createImmediateSessionRequest(current.ports, context(), args);
     expect(result).toMatchObject({
@@ -303,8 +330,8 @@ describe("createImmediateSessionRequest durable admission", () => {
       value: {
         id: requestId,
         nativeMessageId,
-        deliveryMode: "queue",
-        deliveryState: "admitted",
+        deliveryMode: "context",
+        deliveryState: "context_admitted",
       },
     });
     expect(current.events).toEqual([
@@ -312,89 +339,54 @@ describe("createImmediateSessionRequest durable admission", () => {
       "message-authorization",
       "request-authorization",
       "visibility",
+      "context-attach",
+      "participant-gate",
+      "activity",
       "prepared",
       "scheduler-wake",
-      "claimed",
-      "native",
-      "completed:admitted",
+      "context-read",
+      "context-read",
+      "context-detach",
+      "request-read",
     ]);
     expect(current.prepared[0]).toMatchObject({
       creationOperationId,
-      deliveryMode: "queue",
+      deliveryMode: "context",
       request: { id: requestId, deadlineAtMs: 40_000 },
+      contextAdmission: { requestId },
     });
-    const envelope = JSON.parse(required(current.envelopes[0]));
+    const envelope = JSON.parse(required(current.prepared[0]).envelopeJson);
     expect(envelope).toMatchObject({
       request_id: requestId,
       source_session_id: sourceSessionId,
       target_session_id: targetSessionId,
       work: { content: args.content },
     });
-    expect(current.completions).toEqual([
-      {
-        fencingToken: token,
-        workspaceKey,
-        requestId,
-        outcome: "admitted",
-        nativeMessageId,
-        admittedSeq: 7,
-        evidenceObservedAtMs: 10_003,
-      },
-    ]);
+    expect(current.nativeCalls).toEqual([]);
   });
 
   test.each([
-    [{ kind: "unknown" }, "delivery_unknown"],
-    [{ kind: "definitive_rejection" }, "delivery_failed"],
-  ] as const)("records native %s as recovery-relevant %s", async (native, state) => {
+    ["failed", "delivery_failed"],
+    ["cancelled", "request_cancelled"],
+  ] as const)("maps durable context state %s to %s", async (state, code) => {
     const current = fixture();
-    current.nativeOutcome = native;
+    current.admissionState = state;
     expect(await createImmediateSessionRequest(current.ports, context(), args)).toMatchObject({
-      ok: true,
-      value: { id: requestId, deliveryState: state },
+      ok: false,
+      error: { code },
     });
-    expect(current.envelopes).toHaveLength(1);
+    expect(current.nativeCalls).toEqual([]);
   });
 
-  test("records a thrown queue outcome as ambiguous and never retries", async () => {
+  test("rejects bounded context waiter exhaustion before persistence", async () => {
     const current = fixture();
-    current.nativeThrows = true;
+    current.attachThrows = true;
     expect(await createImmediateSessionRequest(current.ports, context(), args)).toMatchObject({
-      ok: true,
-      value: { deliveryState: "delivery_unknown" },
+      ok: false,
+      error: { code: "quota_exceeded" },
     });
-    expect(current.envelopes).toHaveLength(1);
-    expect(current.completions[0]?.outcome).toBe("delivery_unknown");
-  });
-
-  test("returns an already-settled claim without replaying native work", async () => {
-    const current = fixture();
-    const settled = {
-      id: requestId,
-      workspaceKey,
-      sourceSessionId,
-      targetSessionId,
-      nativeMessageId,
-      deliveryMode: "queue" as const,
-      kind: "wait" as const,
-      resolutionState: "delivery_failed" as const,
-      deliveryState: "delivery_failed" as const,
-      resultState: "none" as const,
-      payloadByteLength: 50,
-      createdAtMs: 10_000,
-      updatedAtMs: 10_001,
-      deadlineAtMs: 40_000,
-      submittedAtMs: 10_001,
-      deliveryFailedAtMs: 10_001,
-      resolvedAtMs: 10_001,
-    };
-    current.claimResult = { ok: true, request: settled };
-    expect(await createImmediateSessionRequest(current.ports, context(), args)).toEqual({
-      ok: true,
-      value: settled,
-    });
-    expect(current.envelopes).toEqual([]);
-    expect(current.completions).toEqual([]);
+    expect(current.prepared).toEqual([]);
+    expect(current.nativeCalls).toEqual([]);
   });
 
   test("fails before persistence when aborted or ownership is stale", async () => {
@@ -413,10 +405,10 @@ describe("createImmediateSessionRequest durable admission", () => {
       error: { code: "ownership_lost" },
     });
     expect(stale.prepared).toEqual([]);
-    expect(stale.envelopes).toEqual([]);
+    expect(stale.nativeCalls).toEqual([]);
   });
 
-  test("an already-expired invocation deadline never persists or calls native", async () => {
+  test("an already-expired invocation deadline never persists or admits context", async () => {
     const current = fixture();
     expect(
       await createImmediateSessionRequest(
@@ -426,21 +418,7 @@ describe("createImmediateSessionRequest durable admission", () => {
       ),
     ).toMatchObject({ ok: false, error: { code: "deadline_expired" } });
     expect(current.prepared).toEqual([]);
-    expect(current.envelopes).toEqual([]);
-  });
-
-  test("an interruption after claim commits ambiguity without calling native", async () => {
-    const current = fixture();
-    const controller = new AbortController();
-    current.abortAfterClaim = () => controller.abort();
-    expect(
-      await createImmediateSessionRequest(current.ports, context(controller), args),
-    ).toMatchObject({
-      ok: true,
-      value: { deliveryState: "delivery_unknown" },
-    });
-    expect(current.events).not.toContain("native");
-    expect(current.completions[0]?.outcome).toBe("delivery_unknown");
+    expect(current.nativeCalls).toEqual([]);
   });
 
   test("rejects a combined envelope overflow before persistence", async () => {
@@ -470,16 +448,19 @@ describe("createImmediateSessionRequest durable admission", () => {
     ["quota_exceeded", "quota_exceeded", false],
     ["rate_limited", "rate_limited", true],
     ["storage_unavailable", "storage_unavailable", true],
-  ] as const)("maps prepare failure %s without claiming", async (stored, code, retryable) => {
-    const current = fixture();
-    current.createResult = { ok: false, code: stored };
-    expect(await createImmediateSessionRequest(current.ports, context(), args)).toMatchObject({
-      ok: false,
-      error: { code, retryable },
-    });
-    expect(current.events).not.toContain("claimed");
-    expect(current.envelopes).toEqual([]);
-  });
+  ] as const)(
+    "maps prepare failure %s without waiting for context",
+    async (stored, code, retryable) => {
+      const current = fixture();
+      current.createResult = { ok: false, code: stored };
+      expect(await createImmediateSessionRequest(current.ports, context(), args)).toMatchObject({
+        ok: false,
+        error: { code, retryable },
+      });
+      expect(current.events).not.toContain("context-read");
+      expect(current.nativeCalls).toEqual([]);
+    },
+  );
 });
 
 describe("createImmediateSessionRequest fail-closed boundaries", () => {
@@ -617,7 +598,75 @@ describe("createImmediateSessionRequest fail-closed boundaries", () => {
 });
 
 describe("createImmediateSessionRequest storage and admission boundaries", () => {
-  test("maps persistence, claim, and completion failures", async () => {
+  test.each(["context", "request"] as const)("bounds a never-settling %s read", async (read) => {
+    const current = fixture();
+    if (read === "context") {
+      current.ports = {
+        ...current.ports,
+        contexts: {
+          ...current.ports.contexts,
+          getContextAdmission: () => new Promise(() => {}),
+        } as NonNullable<ImmediateSessionRequestPorts["contexts"]>,
+      };
+    } else {
+      current.ports = {
+        ...current.ports,
+        requests: {
+          ...current.ports.requests,
+          getRequestMetadata: () => new Promise(() => {}),
+        } as ImmediateSessionRequestPorts["requests"],
+      };
+    }
+    expect(
+      await createImmediateSessionRequest(
+        current.ports,
+        { ...context(), deadlineMs: 10_100 },
+        args,
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "storage_unavailable", details: { request_id: requestId } },
+    });
+    expect(current.events).toContain("context-detach");
+  });
+
+  test("reclaims waiter capacity after persistence rejection", async () => {
+    const current = fixture();
+    current.ports.membership.readCurrentRoots = async () => ({
+      sourceVisible: true,
+      targetVisible: true,
+      sourceTitle: undefined,
+    });
+    current.ports = { ...current.ports, contextRuntime: new ContextAdmissionRuntime(1) };
+    current.ports.requests.createPrepared = async () => {
+      throw new Error("storage unavailable");
+    };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      expect(await createImmediateSessionRequest(current.ports, context(), args)).toMatchObject({
+        ok: false,
+        error: { code: "storage_unavailable" },
+      });
+    }
+  });
+
+  test("detaches and preserves interruption when the participant gate aborts", async () => {
+    const current = fixture();
+    current.ports = {
+      ...current.ports,
+      participantOperations: {
+        run: async () => {
+          throw new ParticipantOperationAbortedFault("aborted");
+        },
+      },
+    };
+    expect(await createImmediateSessionRequest(current.ports, context(), args)).toMatchObject({
+      ok: false,
+      error: { code: "deadline_expired" },
+    });
+    expect(current.events).toContain("context-detach");
+  });
+
+  test("maps persistence, context-read, and final metadata failures", async () => {
     const persistence = fixture();
     persistence.ports.requests.createPrepared = async () => {
       throw new Error("storage unavailable");
@@ -626,26 +675,25 @@ describe("createImmediateSessionRequest storage and admission boundaries", () =>
       ok: false,
       error: { code: "storage_unavailable" },
     });
+    expect(persistence.events).toContain("context-detach");
 
-    const claim = fixture();
-    claim.claimResult = { ok: false, code: "storage_unavailable" };
-    expect(await createImmediateSessionRequest(claim.ports, context(), args)).toMatchObject({
+    const contextRead = fixture();
+    contextRead.contextReadThrows = true;
+    expect(await createImmediateSessionRequest(contextRead.ports, context(), args)).toMatchObject({
       ok: false,
-      error: { code: "storage_unavailable", details: { request_id: requestId } },
+      error: { code: "storage_unavailable" },
     });
+    expect(contextRead.events).toContain("context-detach");
 
-    const completion = fixture();
-    completion.ports.requests.completeDelivery = async () => ({
-      ok: false,
-      code: "storage_unavailable",
-    });
-    expect(await createImmediateSessionRequest(completion.ports, context(), args)).toMatchObject({
+    const metadata = fixture();
+    metadata.requestMetadataMissing = true;
+    expect(await createImmediateSessionRequest(metadata.ports, context(), args)).toMatchObject({
       ok: false,
       error: { code: "storage_unavailable", details: { request_id: requestId } },
     });
   });
 
-  test.each(["ownership", "digest", "persistence", "final visibility"] as const)(
+  test.each(["ownership", "digest", "final visibility"] as const)(
     "honors cancellation after %s",
     async (boundary) => {
       const current = fixture();
@@ -662,12 +710,6 @@ describe("createImmediateSessionRequest storage and admission boundaries", () =>
           if (calls > 1) controller.abort();
           return new Uint8Array(32).fill(0xab);
         };
-      } else if (boundary === "persistence") {
-        current.ports.requests.createPrepared = async (input) => {
-          current.prepared.push(input);
-          controller.abort();
-          return { ok: true, request: input.request };
-        };
       } else {
         let calls = 0;
         current.ports.membership.readCurrentRoots = async () => {
@@ -679,31 +721,21 @@ describe("createImmediateSessionRequest storage and admission boundaries", () =>
       expect(
         await createImmediateSessionRequest(current.ports, context(controller), args),
       ).toMatchObject({ ok: false, error: { code: "request_cancelled" } });
-      expect(current.envelopes).toEqual([]);
+      expect(current.nativeCalls).toEqual([]);
     },
   );
 
-  test("records promoted and public-message admission evidence", async () => {
-    const promoted = fixture();
-    promoted.nativeOutcome = {
-      kind: "promoted",
-      admittedSeq: 8,
-      promotedSeq: 9,
-      observedAtMs: 10_004,
-    };
-    expect(await createImmediateSessionRequest(promoted.ports, context(), args)).toMatchObject({
-      ok: true,
-      value: { deliveryState: "promoted" },
-    });
-
-    const publicMessage = fixture();
-    publicMessage.nativeOutcome = { kind: "public_message", observedAtMs: 10_005 };
-    expect(await createImmediateSessionRequest(publicMessage.ports, context(), args)).toMatchObject(
-      {
-        ok: true,
-        value: { deliveryState: "admitted" },
-      },
-    );
-    expect(publicMessage.completions[0]).toMatchObject({ admittedSeq: 0 });
-  });
+  test.each(["idle", "unknown"] as const)(
+    "rejects target activity %s before persistence",
+    async (status) => {
+      const current = fixture();
+      current.targetStatus = status;
+      expect(await createImmediateSessionRequest(current.ports, context(), args)).toMatchObject({
+        ok: false,
+        error: { code: status === "idle" ? "target_idle" : "target_status_unknown" },
+      });
+      expect(current.prepared).toEqual([]);
+      expect(current.nativeCalls).toEqual([]);
+    },
+  );
 });

@@ -41,6 +41,8 @@ const metadataFields = [
   ...requiredFields,
   ...payloadIdentityFields,
   "submittedAtMs",
+  "awaitingContextAtMs",
+  "contextAdmittedAtMs",
   "deliveryUnknownAtMs",
   "admittedAtMs",
   "promotedAtMs",
@@ -85,7 +87,9 @@ function validIdentities(value: RequestMetadata): boolean {
     validateNativeMessageId(value.nativeMessageId).ok &&
     (value.linkedStartOperationId === undefined ||
       validateStartOperationId(value.linkedStartOperationId).ok) &&
-    ((value.deliveryMode ?? "steer") === "initial") === (value.linkedStartOperationId !== undefined)
+    ((value.deliveryMode ?? "steer") === "initial") ===
+      (value.linkedStartOperationId !== undefined) &&
+    ((value.deliveryMode ?? "steer") !== "context" || value.linkedStartOperationId === undefined)
   );
 }
 

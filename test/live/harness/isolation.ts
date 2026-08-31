@@ -21,6 +21,7 @@ interface IsolationOptions {
   readonly providerBaseUrl: string;
   readonly pluginPath: string;
   readonly pluginOptions?: Readonly<Record<string, unknown>>;
+  readonly appendPluginPaths?: readonly string[];
   readonly setupOperation?: (input: {
     readonly stage: IsolationSetupStage;
     readonly root: string;
@@ -90,6 +91,7 @@ async function initializeIsolatedOpenCodeState(
         pathToFileURL(options.pluginPath).href,
         options.pluginOptions ?? { evidencePath, skillPath },
       ],
+      ...(options.appendPluginPaths ?? []).map((pluginPath) => pathToFileURL(pluginPath).href),
     ],
     permission: {
       live_allow: "allow",

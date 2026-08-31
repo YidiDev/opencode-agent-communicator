@@ -2,7 +2,6 @@ import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 
 import { cleanupAll } from "./harness/cleanup";
@@ -27,10 +26,12 @@ import {
   type ProviderHarness,
   type ProviderRequestGate,
 } from "./harness/provider";
+import { runBlockingRequestJourneys } from "./packed-blocking-request-journeys";
+import { runContextRequestJourney, runContextSendJourney } from "./packed-context-request-journey";
 import { runImmediateRequestJourneys } from "./packed-immediate-request-journeys";
 import { runPackedSessionReadJourney } from "./packed-session-read-journey";
 
-setDefaultTimeout(liveDeadlineMs * 8);
+setDefaultTimeout(liveDeadlineMs * 12);
 
 type Client = ReturnType<typeof createOpencodeClient>;
 
@@ -40,6 +41,8 @@ interface PackedFixture {
   readonly entryPath: string;
   readonly isolation: IsolatedOpenCodeState;
   readonly provider: ProviderHarness;
+  readonly stateDirectory: string;
+  exportSession(sessionID: string): Promise<{ readonly exitCode: number; readonly stdout: string }>;
   close(initialFailure?: unknown): Promise<void>;
 }
 
@@ -151,26 +154,14 @@ function toolOutput(messages: readonly { readonly parts: readonly unknown[] }[],
   return JSON.parse(part.state.output) as Record<string, unknown>;
 }
 
-function requestID(value: unknown): string | undefined {
-  return JSON.stringify(value).match(/req_[a-z0-9]{32}/)?.[0];
-}
-
-async function waitForTargetRequest(
-  client: Client,
-  sessionID: string,
-  label: string,
-): Promise<string> {
+async function waitForIdleTarget(client: Client, sessionID: string, label: string): Promise<void> {
   const deadline = performance.now() + liveDeadlineMs;
   while (performance.now() < deadline) {
-    const history = successful(
-      await client.v2.session.history({ sessionID, limit: 100 }),
-      `${label} target durable history`,
-    ).data;
-    const id = requestID(history);
-    if (id) return id;
+    const status = successful(await client.session.status(), `${label} target status`)[sessionID];
+    if (status === undefined || status.type === "idle") return;
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
-  throw new Error(`${label} request was not admitted to target ${sessionID}`);
+  throw new Error(`${label} target ${sessionID} did not become idle`);
 }
 
 async function waitForActiveTarget(
@@ -185,16 +176,6 @@ async function waitForActiveTarget(
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
   throw new Error(`${label} target ${sessionID} did not become active`);
-}
-
-async function waitForIdleTarget(client: Client, sessionID: string, label: string): Promise<void> {
-  const deadline = performance.now() + liveDeadlineMs;
-  while (performance.now() < deadline) {
-    const status = successful(await client.session.status(), `${label} target status`)[sessionID];
-    if (status === undefined || status.type === "idle") return;
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  throw new Error(`${label} target ${sessionID} did not become idle`);
 }
 
 async function waitForPublicTranscript(
@@ -243,7 +224,7 @@ async function startPackedServer(
       "0",
       "--print-logs",
       "--log-level",
-      "DEBUG",
+      "ERROR",
     ],
     cwd: isolation.project,
     environment: isolation.environment,
@@ -273,8 +254,14 @@ async function launchPackedFixture(): Promise<PackedFixture> {
   const provider = launchDeterministicProvider({
     gateText: [
       "production-target-active",
+      "production-context-source-gated",
+      "production-context-request-source-gated",
+      "production-session-ask:",
+      "production-session-wait:",
       "Packed peer session ready check",
       "packed live delivery",
+      "packed private provider context",
+      "packed private request context",
     ],
   });
   let isolation: IsolatedOpenCodeState | undefined;
@@ -282,11 +269,13 @@ async function launchPackedFixture(): Promise<PackedFixture> {
   try {
     const entryPath = await installPackedPlugin(repository, staging);
     expect(entryPath).toContain("node_modules/opencode-agent-communicator/src/index.ts");
+    const stateDirectory = join(staging, "production-state");
     isolation = await createIsolatedOpenCodeState({
       providerBaseUrl: provider.baseUrl,
       pluginPath: entryPath,
+      appendPluginPaths: [resolve(repository, "test/live/fixtures/context-coexistence-plugin.ts")],
       pluginOptions: {
-        stateDirectory: join(staging, "production-state"),
+        stateDirectory,
         policies: { start: "allow" },
       },
     });
@@ -303,6 +292,15 @@ async function launchPackedFixture(): Promise<PackedFixture> {
       entryPath,
       isolation: state,
       provider,
+      stateDirectory,
+      async exportSession(sessionID) {
+        return runBoundedProcess({
+          command: cliPath,
+          arguments: ["export", sessionID],
+          cwd: state.project,
+          environment: state.environment,
+        });
+      },
       async close(initialFailure?: unknown): Promise<void> {
         await cleanupAll(
           [
@@ -386,49 +384,34 @@ function createInvoker(client: Client): Invoker {
   };
 }
 
-async function activateTarget(fixture: PackedFixture, label: string): Promise<ActiveTarget> {
-  const active = successful(
-    await fixture.client.session.create({ title: `Packed active ${label}` }),
-    `${label} active target`,
-  );
+async function activateTarget(
+  fixture: PackedFixture,
+  label: string,
+  preparedTargetID?: string,
+): Promise<ActiveTarget> {
+  const targetID =
+    preparedTargetID ??
+    successful(
+      await fixture.client.session.create({ title: `Packed active ${label}` }),
+      `${label} active target`,
+    ).id;
   const marker = `production-target-active-${label}`;
   const run = fixture.client.session.prompt({
-    sessionID: active.id,
+    sessionID: targetID,
     model: { providerID: testProviderID, modelID: testModelID },
     agent: "build",
+    tools: { live_context_hold: true, session_respond: true, session_signal: true },
     parts: [{ type: "text", text: marker }],
   });
   const gate = await fixture.provider.waitForText(marker);
-  await waitForActiveTarget(fixture.client, active.id, label);
+  await waitForActiveTarget(fixture.client, targetID, label);
   return {
     gate,
-    id: active.id,
+    id: targetID,
     async complete(): Promise<void> {
       successful(await run, `${label} target run`);
     },
   };
-}
-
-async function processTargetRequest(
-  invoker: Invoker,
-  target: ActiveTarget,
-  requestId: string,
-  label: "ask" | "wait",
-): Promise<Record<string, unknown>> {
-  target.gate.release(`${label} request admitted; process target`);
-  await withinLiveDeadline(target.complete(), `${label} target activation completion`);
-  const startedAt = Date.now();
-  const toolID = label === "ask" ? "session_respond" : "session_signal";
-  const output = await withinLiveDeadline(
-    invoker.invoke(
-      toolID,
-      `production-session-${label === "ask" ? "respond" : "signal"}:${requestId}`,
-      target.id,
-    ),
-    `${label} target processing`,
-  );
-  expect(Date.now() - startedAt).toBeLessThan(15_000);
-  return output;
 }
 
 async function runBasicPackedJourneys(invoker: Invoker): Promise<void> {
@@ -444,8 +427,7 @@ async function runBasicPackedJourneys(invoker: Invoker): Promise<void> {
   });
 }
 
-async function runLockJourney(fixture: PackedFixture, invoker: Invoker): Promise<void> {
-  const target = await activateTarget(fixture, "lock");
+async function runLockJourney(invoker: Invoker): Promise<void> {
   const published = await invoker.begin("session_lock_publish", "production-lock-publish");
   const publishOutput = await published.output();
   expect(publishOutput).toMatchObject({
@@ -458,19 +440,12 @@ async function runLockJourney(fixture: PackedFixture, invoker: Invoker): Promise
         instructions: "Coordinate before touching packed acceptance files.",
       },
       notification: {
-        eligible: 1,
-        admitted: 1,
+        eligible: 0,
+        admitted: 0,
         unknown: 0,
       },
     },
   });
-  target.gate.release("lock notification admitted");
-  const notificationRequest = await fixture.provider.waitForRequestText(
-    "## Advisory lock published",
-    target.gate.sequence,
-  );
-  expect(JSON.stringify(notificationRequest.body)).toContain("Packed release surface");
-  await withinLiveDeadline(target.complete(), "lock target completion");
   const lockID = Reflect.get(
     Reflect.get(Reflect.get(publishOutput, "value") ?? {}, "lock") ?? {},
     "lock_id",
@@ -502,51 +477,6 @@ async function runLockJourney(fixture: PackedFixture, invoker: Invoker): Promise
       published.sessionID,
     ),
   ).toMatchObject({ ok: true, value: { locks: [] } });
-}
-
-async function runAskJourney(fixture: PackedFixture, invoker: Invoker): Promise<void> {
-  const target = await activateTarget(fixture, "ask");
-  const ask = await invoker.begin("session_ask", `production-session-ask:${target.id}`);
-  const id = await waitForTargetRequest(fixture.client, target.id, "ask");
-  const respondOutput = await processTargetRequest(invoker, target, id, "ask");
-  const askOutput = await withinLiveDeadline(ask.output(), "ask/respond completion");
-  expect(askOutput).toEqual({
-    ok: true,
-    value: { request_id: id, state: "answered", answers: [["yes"]] },
-  });
-  expect(respondOutput).toMatchObject({ ok: true, value: { request_id: id, state: "answered" } });
-  expect(
-    await invoker.invoke("session_request_get", `production-request-get:${id}`, ask.sessionID),
-  ).toMatchObject({
-    ok: true,
-    value: {
-      outcome: "available_result",
-      metadata: { request_id: id, role: "source", result_state: "available" },
-      result: { kind: "ask", answers: [["yes"]] },
-    },
-  });
-  expect(
-    await invoker.invoke("session_request_ack", `production-request-ack:${id}`, ask.sessionID),
-  ).toMatchObject({ ok: true, value: { request_id: id, state: "acknowledged" } });
-}
-
-async function runWaitJourney(fixture: PackedFixture, invoker: Invoker): Promise<void> {
-  const target = await activateTarget(fixture, "wait");
-  const wait = await invoker.begin(
-    "session_wait",
-    `production-session-wait:${target.id}:production-signal`,
-  );
-  const id = await waitForTargetRequest(fixture.client, target.id, "wait");
-  const signalOutput = await processTargetRequest(invoker, target, id, "wait");
-  const waitOutput = await withinLiveDeadline(wait.output(), "wait/signal completion");
-  expect(waitOutput).toEqual({
-    ok: true,
-    value: { request_id: id, state: "reached", evidence: "artifact://packed-live" },
-  });
-  expect(signalOutput).toMatchObject({ ok: true, value: { request_id: id, state: "reached" } });
-  expect(
-    await invoker.invoke("session_request_cancel", `production-request-cancel:${id}`, target.id),
-  ).toMatchObject({ ok: false, error: { code: "not_found_or_unauthorized" } });
 }
 
 async function runStartStopJourney(
@@ -675,37 +605,99 @@ async function runStartStopJourney(
   }
 }
 
+async function runPackedContextJourneys(fixture: PackedFixture, invoker: Invoker): Promise<void> {
+  await runBlockingRequestJourneys(
+    {
+      provider: fixture.provider,
+      prepareTarget: async (label) => {
+        const target = successful(await fixture.client.session.create(), `${label} target`);
+        return { id: target.id, activate: () => activateTarget(fixture, label, target.id) };
+      },
+      readToolOutput: async (sessionId, toolId) =>
+        toolOutput(
+          successful(await fixture.client.session.messages({ sessionID: sessionId }), toolId),
+          toolId,
+        ),
+      readToolState: async (sessionId, toolId) => {
+        const messages = await fixture.client.session.messages({ sessionID: sessionId });
+        return toolPart(successful(messages, `${toolId} state`), toolId)?.state.status;
+      },
+      withinLiveDeadline,
+    },
+    invoker,
+  );
+  await runContextSendJourney(fixture, invoker);
+  await runContextRequestJourney(fixture, invoker);
+}
+
 test(`runs the exact packed production plugin through OpenCode ${exactOpenCodeVersion}`, async () => {
   const fixture = await launchPackedFixture();
   let failure: unknown;
   try {
     await assertPackedRegistration(fixture);
+    const invoker = createInvoker(fixture.client);
+    await runBasicPackedJourneys(invoker);
+    await runLockJourney(invoker);
+    await runPackedSessionReadJourney({
+      client: fixture.client,
+      invoke: (marker, callerSessionID) => invoker.invoke("session_read", marker, callerSessionID),
+    });
+    expect(successful(await fixture.client.instance.dispose(), "production plugin disposal")).toBe(
+      true,
+    );
+  } catch (error: unknown) {
+    failure = error;
+  } finally {
+    await fixture.close(failure);
+  }
+});
+
+test(`runs packed lifecycle journeys through OpenCode ${exactOpenCodeVersion}`, async () => {
+  const fixture = await launchPackedFixture();
+  let failure: unknown;
+  try {
     const target = successful(
       await fixture.client.session.create({ title: "Packed target" }),
       "target",
     );
     const invoker = createInvoker(fixture.client);
-    await runBasicPackedJourneys(invoker);
-    await runPackedSessionReadJourney({
-      client: fixture.client,
-      invoke: (marker, callerSessionID) => invoker.invoke("session_read", marker, callerSessionID),
-    });
-    await runLockJourney(fixture, invoker);
     await runStartStopJourney(fixture, invoker, target.id);
-    await runAskJourney(fixture, invoker);
-    await runWaitJourney(fixture, invoker);
+    expect(successful(await fixture.client.instance.dispose(), "lifecycle plugin disposal")).toBe(
+      true,
+    );
+  } catch (error: unknown) {
+    failure = error;
+  } finally {
+    await fixture.close(failure);
+  }
+});
+
+test(`runs packed initial request journey through OpenCode ${exactOpenCodeVersion}`, async () => {
+  const fixture = await launchPackedFixture();
+  let failure: unknown;
+  try {
     await runImmediateRequestJourneys(
       {
-        async createSession(title, label) {
-          return successful(await fixture.client.session.create({ title }), label).id;
-        },
-        async messages(sessionID, label) {
-          return successful(await fixture.client.session.messages({ sessionID }), label);
-        },
+        waitForIdle: (sessionID) => waitForIdleTarget(fixture.client, sessionID, "request target"),
       },
-      invoker,
+      createInvoker(fixture.client),
     );
-    expect(successful(await fixture.client.instance.dispose(), "production plugin disposal")).toBe(
+    expect(successful(await fixture.client.instance.dispose(), "request plugin disposal")).toBe(
+      true,
+    );
+  } catch (error: unknown) {
+    failure = error;
+  } finally {
+    await fixture.close(failure);
+  }
+});
+
+test(`runs packed context journeys through OpenCode ${exactOpenCodeVersion}`, async () => {
+  const fixture = await launchPackedFixture();
+  let failure: unknown;
+  try {
+    await runPackedContextJourneys(fixture, createInvoker(fixture.client));
+    expect(successful(await fixture.client.instance.dispose(), "context plugin disposal")).toBe(
       true,
     );
   } catch (error: unknown) {

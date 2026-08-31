@@ -1,6 +1,8 @@
-import type { SessionDeliveryGetPorts } from "../application/get-session-delivery";
+import type {
+  ParticipantMessageDelivery,
+  SessionDeliveryGetPorts,
+} from "../application/get-session-delivery";
 import { getSessionDelivery } from "../application/get-session-delivery";
-import type { ParticipantDelivery } from "../domain/deliveries";
 import { domainFailure } from "../domain/results";
 import { validateSessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
@@ -20,7 +22,7 @@ export function createSessionDeliveryGetTool(
 ): InternalToolContract<SessionDeliveryGetToolArguments> {
   return {
     description:
-      "Inspect payload-free queue delivery metadata. After admission, inspect session_list for busy or retry before asking or waiting.",
+      "Inspect payload-free metadata for default context or explicit user delivery. After explicit user admission, inspect session_list for busy or retry before asking or waiting.",
     args: sessionDeliveryGetArgumentsSchema,
     async execute(arguments_, context) {
       const source = validateSessionId(context.sessionID);
@@ -40,7 +42,7 @@ export function createSessionDeliveryGetTool(
             arguments_,
           )
         : domainFailure("invalid_arguments", source.message, false);
-      return serializeDomainResult<ParticipantDelivery, Record<string, unknown>>(
+      return serializeDomainResult<ParticipantMessageDelivery, Record<string, unknown>>(
         result,
         publicParticipantDelivery,
         sessionDeliveryGetFailureCodes,

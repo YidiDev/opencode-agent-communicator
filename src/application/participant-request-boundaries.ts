@@ -18,6 +18,8 @@ const allowedKeys = [
   "updatedAtMs",
   "deadlineAtMs",
   "resolvedAtMs",
+  "awaitingContextAtMs",
+  "contextAdmittedAtMs",
   "submittedAtMs",
   "deliveryUnknownAtMs",
   "admittedAtMs",
@@ -44,6 +46,8 @@ const requiredKeys = [
 ] as const;
 const optionalTimeKeys = [
   "resolvedAtMs",
+  "awaitingContextAtMs",
+  "contextAdmittedAtMs",
   "submittedAtMs",
   "deliveryUnknownAtMs",
   "admittedAtMs",
@@ -68,6 +72,8 @@ const resolutions = [
 ];
 const deliveries = [
   "prepared",
+  "awaiting_context",
+  "context_admitted",
   "submitting",
   "delivery_unknown",
   "admitted",
@@ -102,6 +108,7 @@ export function inspectParticipantRequestMetadata(
     (data.deliveryMode !== undefined &&
       data.deliveryMode !== "steer" &&
       data.deliveryMode !== "queue" &&
+      data.deliveryMode !== "context" &&
       data.deliveryMode !== "initial") ||
     (data.linkedStartOperationId !== undefined &&
       !validateStartOperationId(data.linkedStartOperationId).ok) ||
@@ -133,8 +140,29 @@ export function inspectParticipantRequestMetadata(
   )
     return undefined;
 
-  const submitted = data.deliveryState !== "prepared";
+  const contextDelivery = data.deliveryMode === "context";
+  if (
+    (contextDelivery &&
+      !["prepared", "awaiting_context", "context_admitted", "delivery_failed"].includes(
+        data.deliveryState as string,
+      )) ||
+    (!contextDelivery &&
+      (data.deliveryState === "awaiting_context" || data.deliveryState === "context_admitted"))
+  )
+    return undefined;
+  const submitted = !contextDelivery && data.deliveryState !== "prepared";
   if (submitted !== Object.hasOwn(data, "submittedAtMs")) return undefined;
+  const contextAwaiting =
+    contextDelivery &&
+    (data.deliveryState === "awaiting_context" ||
+      data.deliveryState === "context_admitted" ||
+      data.deliveryState === "delivery_failed");
+  if (contextAwaiting !== Object.hasOwn(data, "awaitingContextAtMs")) return undefined;
+  if (
+    (contextDelivery && data.deliveryState === "context_admitted") !==
+    Object.hasOwn(data, "contextAdmittedAtMs")
+  )
+    return undefined;
   if ((data.deliveryState === "delivery_unknown") !== Object.hasOwn(data, "deliveryUnknownAtMs"))
     return undefined;
   if (

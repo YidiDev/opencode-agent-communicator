@@ -55,7 +55,12 @@ describe("finite tool invocation I/O", () => {
       deadline,
     );
     expect(
-      JSON.parse(await tool.execute({ session_id: "ses_target", content: "work" }, context)),
+      JSON.parse(
+        await tool.execute(
+          { session_id: "ses_target", content: "work", delivery: "user" },
+          context,
+        ),
+      ),
     ).toMatchObject({ ok: false, error: { code: "deadline_expired" } });
   });
 
@@ -65,6 +70,7 @@ describe("finite tool invocation I/O", () => {
         readiness,
         membership: visibleMembership,
         deliveries: { getForParticipant: never } as never,
+        contexts: { getContextAdmissionForParticipant: never },
       },
       workspaceKey,
       deadline,

@@ -1,3 +1,4 @@
+import type { ContextAdmissionMetadata } from "../domain/context-admissions";
 import type { DeliveryMetadata } from "../domain/deliveries";
 import { digestMessageContent, serializeVerifiedMessageEnvelope } from "../domain/message-payload";
 import { type DomainResult, domainFailure } from "../domain/results";
@@ -11,6 +12,7 @@ import {
 } from "./communicator-readiness-port";
 import { inspectMessageAuthorizationDecision } from "./delivery-ports";
 import { inspectDeliveryMutation } from "./message-recovery-boundaries";
+import { sendContextSessionMessage } from "./session-context-message-delivery";
 import type { SessionSendContext, SessionSendPorts } from "./session-message-delivery-contracts";
 import { readSessionSendMembership } from "./session-message-membership";
 import {
@@ -34,10 +36,13 @@ export async function sendSessionMessage(
   ports: SessionSendPorts,
   context: SessionSendContext,
   args: SessionSendArguments,
-): Promise<DomainResult<DeliveryMetadata>> {
+): Promise<DomainResult<DeliveryMetadata | ContextAdmissionMetadata>> {
   assertCommunicatorReady(ports.readiness);
   const input = validateSendArguments(args);
   if (!input.ok) return input;
+  if (input.value.delivery === "context") {
+    return sendContextSessionMessage(ports, context, input.value);
+  }
   const initialMembership = await readSessionSendMembership(ports, context, input.value.target);
   if (!initialMembership.ok) return initialMembership;
   const initialVisibility = sendVisibilityFailure(initialMembership.value);

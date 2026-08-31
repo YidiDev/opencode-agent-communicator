@@ -14,7 +14,7 @@ import {
   isLegalDeliveryCompletion,
   writeDeliveryCompletion,
 } from "./delivery-completion";
-import { checkDeliveryCreateQuotas } from "./delivery-quotas";
+import { checkDeliveryCreateQuotas, recordDeliveryRateEvent } from "./delivery-quotas";
 import { type DeliveryRow, deliveryMetadataColumns, hydrateDelivery } from "./delivery-rows";
 import type { OwnershipRepository } from "./ownership-repository";
 import { type StoreContext, StoreIntegrityError } from "./store-types";
@@ -141,11 +141,7 @@ export class DeliveryRepository {
             input.nowMs,
           ],
         );
-        this.context.database.run(
-          `INSERT INTO delivery_rate_events(workspace_key, source_session_id,
-             target_session_id, occurred_at_ms) VALUES (?, ?, ?, ?)`,
-          [input.workspaceKey, input.sourceSessionId, input.targetSessionId, input.nowMs],
-        );
+        recordDeliveryRateEvent(this.context, input);
         const delivery = selectDelivery(this.context, input.workspaceKey, input.id);
         if (!delivery) throw new StoreIntegrityError("A prepared delivery was not persisted.");
         return { ok: true as const, delivery };

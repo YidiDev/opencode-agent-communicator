@@ -103,6 +103,7 @@ describe("internal session tools call application boundaries", () => {
           },
         },
         deliveries: unusedDeliveries(),
+        contexts: { getContextAdmissionForParticipant: async () => undefined },
       },
       workspaceKey,
     );

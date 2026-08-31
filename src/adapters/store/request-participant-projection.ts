@@ -30,6 +30,12 @@ function constructApprovedProjection<
     updatedAtMs: request.updatedAtMs,
     deadlineAtMs: request.deadlineAtMs,
     ...(request.resolvedAtMs === undefined ? {} : { resolvedAtMs: request.resolvedAtMs }),
+    ...(!("awaitingContextAtMs" in request) || request.awaitingContextAtMs === undefined
+      ? {}
+      : { awaitingContextAtMs: request.awaitingContextAtMs }),
+    ...(!("contextAdmittedAtMs" in request) || request.contextAdmittedAtMs === undefined
+      ? {}
+      : { contextAdmittedAtMs: request.contextAdmittedAtMs }),
     ...(request.submittedAtMs === undefined ? {} : { submittedAtMs: request.submittedAtMs }),
     ...(request.deliveryUnknownAtMs === undefined
       ? {}

@@ -6,6 +6,7 @@ import type {
 } from "../application/advisory-lock-use-cases";
 import type { RequestDeadlineTimerPort } from "../application/blocking-session-request-boundaries";
 import type { CommunicatorStartupRecoveryLifecycle } from "../application/communicator-startup-lifecycle";
+import type { ContextAdmissionRuntime } from "../application/context-admission-runtime";
 import type { ClockPort, SessionReadPresencePort } from "../application/delivery-ports";
 import type { ParticipantOperationPort } from "../application/participant-operation-gate";
 import type { RequestRuntime } from "../application/request-runtime";
@@ -93,14 +94,36 @@ export function configuredStartPolicy(options: CommunicatorOptions) {
 }
 
 function sessionReadPresence(native: OpenCodeNativeAdapter): SessionReadPresencePort {
-  return {
-    observeSessionReadPresence(workspace, source, target, abort) {
-      if (!native.observeSessionReadPresence) {
-        throw new Error("Session read presence observation is unavailable.");
-      }
-      return native.observeSessionReadPresence(workspace, source, target, abort);
-    },
+  const unavailable: SessionReadPresencePort["observeSessionReadPresence"] = () => {
+    throw new Error("Session read presence observation is unavailable.");
   };
+  return {
+    observeSessionReadPresence: native.observeSessionReadPresence ?? unavailable,
+  };
+}
+
+function configuredSessionReadTool(
+  input: {
+    readonly native: OpenCodeNativeAdapter;
+    readonly lifecycle: CommunicatorStartupRecoveryLifecycle;
+    readonly workspaceKey: WorkspaceKey;
+  },
+  clock: ClockPort,
+  timer: RequestDeadlineTimerPort,
+  invocationDeadlineMs: () => number,
+) {
+  const { native, lifecycle, workspaceKey } = input;
+  return createSessionReadTool(
+    {
+      readiness: lifecycle,
+      membership: sessionReadPresence(native),
+      native,
+      digest: productionSha256,
+      clock,
+      timer,
+    },
+    { workspaceKey, invocationDeadlineMs },
+  );
 }
 
 export function constructToolContracts(input: {
@@ -109,6 +132,7 @@ export function constructToolContracts(input: {
   readonly native: OpenCodeNativeAdapter;
   readonly store: LinuxBunSqliteStore;
   readonly runtime: RequestRuntime;
+  readonly contextRuntime?: ContextAdmissionRuntime;
   readonly lifecycle: CommunicatorStartupRecoveryLifecycle;
   readonly participantOperations: ParticipantOperationPort;
   readonly exporter: SessionExportAdapterPort;
@@ -118,7 +142,7 @@ export function constructToolContracts(input: {
   readonly advisoryLockWake?: AdvisoryLockWakePort;
   readonly advisoryLockNotifications?: AdvisoryLockPostCommitNotificationPort;
 }) {
-  const { options, workspaceKey, native, store, runtime, lifecycle } = input;
+  const { options, workspaceKey, native, store, runtime, contextRuntime, lifecycle } = input;
   const clock = input.clock ?? productionClock;
   const blockingTimers = input.blockingTimers ?? productionBlockingTimers;
   const ids = createGeneratedIdFactory(productionEntropy);
@@ -158,6 +182,7 @@ export function constructToolContracts(input: {
     digest: productionSha256,
   };
   const policies = options.policies ?? {};
+  const sessionRead = configuredSessionReadTool(input, clock, blockingTimers, invocationDeadlineMs);
   const advisoryLocks = {
     ...common,
     locks: store,
@@ -171,17 +196,7 @@ export function constructToolContracts(input: {
       workspaceKey,
       invocationDeadlineMs,
     ),
-    session_read: createSessionReadTool(
-      {
-        ...common,
-        membership: sessionReadPresence(native),
-        native,
-        digest: productionSha256,
-        clock,
-        timer: blockingTimers,
-      },
-      { workspaceKey, invocationDeadlineMs },
-    ),
+    session_read: sessionRead,
     session_lock_list: createSessionLockListTool(advisoryLocks, identityScope),
     session_lock_publish: createSessionLockPublishTool(advisoryLocks, identityScope),
     session_lock_release: createSessionLockReleaseTool(advisoryLocks, identityScope),
@@ -195,13 +210,17 @@ export function constructToolContracts(input: {
         clock,
         ids,
         digest: productionSha256,
+        contexts: store,
+        ...(contextRuntime ? { contextRuntime } : {}),
+        activity: native,
+        participantOperations: input.participantOperations,
       },
       workspaceKey,
       policies.message ?? "allow",
       invocationDeadlineMs,
     ),
     session_delivery_get: createSessionDeliveryGetTool(
-      { ...common, deliveries: store },
+      { ...common, deliveries: store, contexts: store },
       workspaceKey,
       invocationDeadlineMs,
     ),
@@ -229,6 +248,10 @@ export function constructToolContracts(input: {
         clock,
         ids,
         digest: productionSha256,
+        contexts: store,
+        ...(contextRuntime ? { contextRuntime } : {}),
+        activity: native,
+        participantOperations: input.participantOperations,
       },
       requestScope,
       {

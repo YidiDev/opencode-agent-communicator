@@ -2,6 +2,10 @@ import { type RequestId, validateRequestId } from "../domain/generated-ids";
 import { type RequestKind, requestKinds } from "../domain/request-types";
 import { type SessionId, validateSessionId } from "../domain/sessions";
 import { validateWorkspaceKey, type WorkspaceKey } from "../domain/workspaces";
+import {
+  type ContextAdmissionNotificationPort,
+  notifyContextAdmissionSafely,
+} from "./context-admission-runtime";
 import type {
   CommittedRequestNotificationPort,
   CommittedRequestTerminalEvent,
@@ -68,6 +72,7 @@ export class RequestRuntime implements CommittedRequestNotificationPort {
       requestRuntimeDefaultMaximumWaitersPerWorkspace,
       maximumWaiters,
     ),
+    private readonly contextNotifications?: ContextAdmissionNotificationPort,
   ) {
     if (
       !Number.isSafeInteger(maximumWaiters) ||
@@ -123,6 +128,13 @@ export class RequestRuntime implements CommittedRequestNotificationPort {
       if (this.state.stoppedReason !== undefined) return undefined;
       const snapshot = snapshotCommittedRequestTerminalEvent(event);
       if (!snapshot) return undefined;
+      if (this.contextNotifications) {
+        notifyContextAdmissionSafely(this.contextNotifications, {
+          id: snapshot.requestId,
+          kind: "request",
+          state: "cancelled",
+        });
+      }
       const registered = this.state.waiters.get(snapshot.requestId);
       if (!registered) return undefined;
       const waiters = [...registered];

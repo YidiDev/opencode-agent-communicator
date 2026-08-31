@@ -83,6 +83,25 @@ test("projects pending ask payloads using only public snake_case content", () =>
   });
 });
 
+test("projects context admission timestamps for requests", () => {
+  expect(
+    publicRequestMetadata({
+      ...pendingMetadata,
+      deliveryMode: "context",
+      deliveryState: "context_admitted",
+      awaitingContextAtMs: 11,
+      contextAdmittedAtMs: 12,
+      submittedAtMs: undefined,
+      admittedAtMs: undefined,
+    } as ParticipantRequestMetadata),
+  ).toMatchObject({
+    delivery_mode: "context",
+    delivery_state: "context_admitted",
+    awaiting_context_at_ms: 11,
+    context_admitted_at_ms: 12,
+  });
+});
+
 test("projects retained wait results and source acknowledgement metadata", () => {
   const metadata = {
     ...pendingMetadata,

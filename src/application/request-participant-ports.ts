@@ -135,6 +135,8 @@ type SafeRequestMetadataKey =
   | "updatedAtMs"
   | "deadlineAtMs"
   | "resolvedAtMs"
+  | "awaitingContextAtMs"
+  | "contextAdmittedAtMs"
   | "submittedAtMs"
   | "deliveryUnknownAtMs"
   | "admittedAtMs"

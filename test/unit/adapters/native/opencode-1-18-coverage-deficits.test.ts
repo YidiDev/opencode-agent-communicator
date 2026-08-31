@@ -59,6 +59,7 @@ function adapter(
       directory: "/workspace",
       serverUrl: new URL("http://127.0.0.1:4321/"),
       workspaceKey,
+      projectId: "project",
     },
     {
       ...(input.now === undefined ? {} : { now: input.now }),
@@ -92,6 +93,7 @@ describe("OpenCode 1.18.23 exact native surface failures", () => {
         directory: "/workspace",
         serverUrl: new URL("http://127.0.0.1:4321/"),
         workspaceKey,
+        projectId: "project",
       }),
     ).toBeDefined();
   });
@@ -121,6 +123,7 @@ describe("OpenCode 1.18.23 exact native surface failures", () => {
         directory: "/workspace",
         serverUrl: new URL("http://127.0.0.1:4321/"),
         workspaceKey,
+        projectId: "project",
       },
       {
         createV2Client: () => ({
@@ -219,6 +222,7 @@ describe("OpenCode 1.18.23 runtime validation branches", () => {
           directory: "/workspace",
           serverUrl: new URL("http://127.0.0.1:4321/"),
           workspaceKey: "" as never,
+          projectId: "project",
         },
         {
           createV2Client: () => ({

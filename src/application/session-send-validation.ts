@@ -6,6 +6,7 @@ import type { CurrentRootMembership } from "./delivery-ports";
 export interface SessionSendArguments {
   readonly session_id: unknown;
   readonly content: unknown;
+  readonly delivery?: unknown;
 }
 
 export interface ValidatedSendInput {
@@ -13,6 +14,7 @@ export interface ValidatedSendInput {
   readonly content: string;
   readonly bytes: Uint8Array;
   readonly byteLength: number;
+  readonly delivery: "context" | "user";
 }
 
 export function sendVisibilityFailure(
@@ -42,6 +44,9 @@ export function validateSendArguments(
   if (!target.ok) return domainFailure("invalid_arguments", target.message, false);
   const content = validateMessageContent(args.content);
   if (!content.ok) return domainFailure("invalid_arguments", content.message, false);
+  if (args.delivery !== undefined && args.delivery !== "context" && args.delivery !== "user") {
+    return domainFailure("invalid_arguments", "Message delivery mode is malformed.", false);
+  }
   return {
     ok: true,
     value: {
@@ -49,6 +54,7 @@ export function validateSendArguments(
       content: args.content as string,
       bytes: content.bytes,
       byteLength: content.byteLength,
+      delivery: args.delivery ?? "context",
     },
   };
 }

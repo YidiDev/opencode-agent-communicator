@@ -44,6 +44,7 @@ function incompatibleNative(): OpenCodeNativeAdapter {
     updateSessionTitle: async () => "unknown",
     admitInitialMessage: async () => "unknown",
     readParticipantPresence: async () => "present",
+    isEligibleContextTarget: async () => true,
   };
 }
 
@@ -167,6 +168,8 @@ describe("composition factory ordering", () => {
         return { ok: true, terminalized: [] };
       },
       deleteAbsentParticipantRequests: async () => ({ ok: true, terminalized: [] }),
+      failPendingContextForParticipant: async () => [],
+      settlePendingContextForParticipant: async () => [],
       close: () => order.push("store-close"),
     };
     const plugin = createCompositionFactory({
@@ -193,6 +196,7 @@ describe("composition factory ordering", () => {
         order.push("recovery");
         return { ok: true, value: lifecycle as never };
       },
+      recoverContextStartup: async () => undefined,
       createExporter: () => ({
         adapter: { writeExport: async () => ({ ok: false, code: "export_unavailable" }) },
         drain: async () => {
@@ -273,6 +277,7 @@ describe("composition factory failure cleanup", () => {
           },
         } as never,
       }),
+      recoverContextStartup: async () => undefined,
       createExporter: () => {
         throw new Error("post-recovery failure");
       },
@@ -342,6 +347,7 @@ describe("composition factory failure cleanup", () => {
       createNative: () => incompatibleNative(),
       createStore: () => ({ starts: {}, close: () => order.push("store-close") }) as never,
       recoverStartup: async () => ({ ok: true, value: lifecycle as never }),
+      recoverContextStartup: async () => undefined,
       createExporter: () => ({
         adapter: { writeExport: async () => ({ ok: false, code: "export_unavailable" }) },
         drain: async () => {
@@ -391,6 +397,7 @@ describe("composition factory failure cleanup", () => {
           scheduler: { drain: async () => order.push("scheduler-drain") },
         } as never,
       }),
+      recoverContextStartup: async () => undefined,
       createExporter: () => ({
         adapter: { writeExport: async () => ({ ok: false, code: "export_unavailable" }) },
         drain: () =>

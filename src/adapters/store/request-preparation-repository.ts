@@ -6,6 +6,7 @@ import type {
 import { validateStartOperationId } from "../../domain/generated-ids";
 import { validateFencingToken } from "../../domain/ownership";
 import { hasRequestIdentity, snapshotRequestIdentity } from "../../domain/request-identity";
+import type { ContextAdmissionRepository } from "./context-admission-repository";
 import type { OwnershipRepository } from "./ownership-repository";
 import {
   exactPreparedReplay,
@@ -33,6 +34,7 @@ export class RequestPreparationRepository {
   constructor(
     private readonly context: StoreContext,
     private readonly ownership: OwnershipRepository,
+    private readonly contexts?: ContextAdmissionRepository,
   ) {}
 
   createPrepared(input: PrepareRequestInput): RequestStoreResult {
@@ -51,6 +53,12 @@ export class RequestPreparationRepository {
       return { ok: false, code: "state_conflict" };
     if (input.request.sourceSessionId === input.request.targetSessionId)
       return { ok: false, code: "deadlock_detected" };
+    if (
+      ((input.deliveryMode ?? "steer") === "context") !==
+      (input.contextAdmission !== undefined)
+    ) {
+      return { ok: false, code: "state_conflict" };
+    }
     const content = validatePreparedContent(input.request, input.payloadJson, input.envelopeJson);
     if (input.request.workspaceKey !== this.context.workspaceKey || !content)
       return { ok: false, code: "state_conflict" };
@@ -67,6 +75,10 @@ export class RequestPreparationRepository {
       [input.request.workspaceKey, input.request.createdAtMs],
     );
     this.insertPrepared(input, content.retainedContentBytes, rateNowMs);
+    if (input.contextAdmission) {
+      if (!this.contexts) throw new StoreIntegrityError("Context persistence was unavailable.");
+      this.contexts.insertRequestInTransaction(input.request, input.contextAdmission);
+    }
     const request = selectRequest(this.context, input.request.workspaceKey, input.request.id);
     if (!request) throw new StoreIntegrityError("A prepared request was not persisted.");
     return { ok: true, request };
@@ -185,11 +197,12 @@ export class RequestPreparationRepository {
     const request = input.request;
     this.context.database.run(
       `INSERT INTO requests(id, workspace_key, source_session_id, target_session_id,
-       native_message_id, creation_operation_id, delivery_mode, linked_start_operation_id,
+       native_message_id, creation_operation_id, delivery_mode, delivery_transport,
+       linked_start_operation_id,
        kind, resolution_state, delivery_state, result_state,
        payload_byte_length, retained_content_byte_length, payload_sha256,
        created_at_ms, updated_at_ms, deadline_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'prepared', 'none', ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'prepared', 'none', ?, ?, ?, ?, ?, ?)`,
       [
         request.id,
         request.workspaceKey,
@@ -197,7 +210,8 @@ export class RequestPreparationRepository {
         request.targetSessionId,
         request.nativeMessageId,
         input.creationOperationId,
-        input.deliveryMode ?? "steer",
+        (input.deliveryMode ?? "steer") === "context" ? "steer" : (input.deliveryMode ?? "steer"),
+        (input.deliveryMode ?? "steer") === "context" ? "context" : "native",
         input.linkedStartOperationId ?? null,
         request.kind,
         request.payloadByteLength,

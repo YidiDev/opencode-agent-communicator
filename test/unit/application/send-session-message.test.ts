@@ -13,7 +13,7 @@ import type {
 } from "../../../src/application/delivery-ports";
 import {
   type SessionSendPorts,
-  sendSessionMessage,
+  sendSessionMessage as sendApplicationSessionMessage,
 } from "../../../src/application/send-session-message";
 import {
   canTransitionDelivery,
@@ -29,6 +29,13 @@ import type { Sha256Digest } from "../../../src/domain/message-payload";
 import { type FencingToken, validateFencingToken } from "../../../src/domain/ownership";
 import { type SessionId, validateSessionId } from "../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
+
+const sendSessionMessage = (
+  ...input: Parameters<typeof sendApplicationSessionMessage>
+): ReturnType<typeof sendApplicationSessionMessage> => {
+  const [ports, context, args] = input;
+  return sendApplicationSessionMessage(ports, context, { ...args, delivery: "user" });
+};
 
 function valid<Value>(
   result: { readonly ok: true; readonly value: Value } | { readonly ok: false },

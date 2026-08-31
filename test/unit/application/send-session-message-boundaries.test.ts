@@ -1,13 +1,20 @@
 import { describe, expect, test } from "bun:test";
 
 import type { SessionSendPorts } from "../../../src/application/send-session-message";
-import { sendSessionMessage } from "../../../src/application/send-session-message";
+import { sendSessionMessage as sendApplicationSessionMessage } from "../../../src/application/send-session-message";
 import type { DeliveryMetadata } from "../../../src/domain/deliveries";
 import { validateDeliveryId, validateNativeMessageId } from "../../../src/domain/generated-ids";
 import type { Sha256Digest } from "../../../src/domain/message-payload";
 import { validateFencingToken } from "../../../src/domain/ownership";
 import { validateSessionId } from "../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
+
+const sendSessionMessage = (
+  ...input: Parameters<typeof sendApplicationSessionMessage>
+): ReturnType<typeof sendApplicationSessionMessage> => {
+  const [ports, context, args] = input;
+  return sendApplicationSessionMessage(ports, context, { ...args, delivery: "user" });
+};
 
 function value<Value>(result: { ok: true; value: Value } | { ok: false }): Value {
   if (!result.ok) throw new Error("invalid fixture");

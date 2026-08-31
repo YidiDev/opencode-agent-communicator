@@ -1,4 +1,12 @@
-import { isCoherentDeliveryMetadata, type ParticipantDelivery } from "../domain/deliveries";
+import {
+  type ContextAdmissionMetadata,
+  isCoherentContextAdmission,
+} from "../domain/context-admissions";
+import {
+  type DeliveryMetadata,
+  type DeliveryParticipantRole,
+  isCoherentDeliveryMetadata,
+} from "../domain/deliveries";
 import { validateDeliveryId } from "../domain/generated-ids";
 import { OwnershipLostFault } from "../domain/ownership";
 import { type DomainResult, domainFailure } from "../domain/results";
@@ -9,7 +17,20 @@ import {
   assertCommunicatorReady,
   type CommunicatorReadinessPort,
 } from "./communicator-readiness-port";
+import type { ContextAdmissionParticipantQueryPort } from "./context-admission-ports";
 import type { CurrentWorkspaceMembershipPort, DeliveryPersistencePort } from "./delivery-ports";
+
+export type ParticipantMessageDelivery =
+  | {
+      readonly role: DeliveryParticipantRole;
+      readonly transport: "user";
+      readonly delivery: DeliveryMetadata;
+    }
+  | {
+      readonly role: DeliveryParticipantRole;
+      readonly transport: "context";
+      readonly delivery: ContextAdmissionMetadata;
+    };
 
 export interface SessionDeliveryGetContext {
   readonly workspaceKey: WorkspaceKey;
@@ -33,6 +54,7 @@ export interface SessionDeliveryGetPorts {
   readonly readiness: CommunicatorReadinessPort;
   readonly membership: CurrentWorkspaceMembershipPort;
   readonly deliveries: DeliveryPersistencePort;
+  readonly contexts: ContextAdmissionParticipantQueryPort;
 }
 
 const hiddenFailure = (): DomainResult<never> =>
@@ -47,7 +69,7 @@ export async function getSessionDelivery(
   ports: SessionDeliveryGetPorts,
   context: SessionDeliveryGetContext,
   args: { readonly delivery_id: unknown },
-): Promise<DomainResult<ParticipantDelivery>> {
+): Promise<DomainResult<ParticipantMessageDelivery>> {
   assertCommunicatorReady(ports.readiness);
   const deliveryId = validateDeliveryId(args.delivery_id);
   if (!deliveryId.ok) return domainFailure("invalid_arguments", deliveryId.message, false);
@@ -93,8 +115,36 @@ export async function getSessionDelivery(
       return domainFailure("storage_unavailable", "Delivery storage is unavailable.", true);
     }
     const found = foundCall.value;
-    return found && isCoherentDeliveryMetadata(found.delivery)
-      ? { ok: true, value: found }
+    if (found) {
+      return isCoherentDeliveryMetadata(found.delivery)
+        ? { ok: true, value: { ...found, transport: "user" } }
+        : hiddenFailure();
+    }
+  }
+
+  {
+    const foundCall = await invoke(context, () =>
+      ports.contexts.getContextAdmissionForParticipant({
+        workspaceKey: context.workspaceKey,
+        deliveryId: deliveryId.value,
+        participantSessionId: context.sourceSessionId,
+      }),
+    );
+    if (foundCall.kind === "expired") {
+      return domainFailure("deadline_expired", "Delivery query invocation deadline expired.", false);
+    }
+    if (foundCall.kind === "rejected") {
+      if (foundCall.cause instanceof OwnershipLostFault) {
+        return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+      }
+      return domainFailure("storage_unavailable", "Delivery storage is unavailable.", true);
+    }
+    const found = foundCall.value;
+    return found && found.admission.kind === "message" && isCoherentContextAdmission(found.admission)
+      ? {
+          ok: true,
+          value: { role: found.role, transport: "context", delivery: found.admission },
+        }
       : hiddenFailure();
   }
 }
