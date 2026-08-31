@@ -226,7 +226,7 @@ export async function runScenarios(context: AttemptContext): Promise<AttemptResu
 
   const send = await execute(
     "workflow-send",
-    `Call session_request_send exactly once for session_id ${targetSessionId}. Set content to Answer the evaluation choice safely. Set request to an ask with timeout_seconds 120 and one question whose prompt is Choose the evaluation result, options are pass and fail, multiple is false, and allow_custom is false. After its result, reply EVAL_REQUEST_SENT. Do not call other tools.`,
+    `Call session_request_send exactly once for session_id ${targetSessionId}. Set content to Answer the evaluation choice safely. The request argument must be a nested JSON object, never a string or escaped JSON: {"kind":"ask","timeout_seconds":120,"questions":[{"prompt":"Choose the evaluation result","options":["pass","fail"],"multiple":false,"allow_custom":false}]}. After its result, reply EVAL_REQUEST_SENT. Do not call other tools.`,
     ["session_request_send"],
     [],
     sourceSessionId,
