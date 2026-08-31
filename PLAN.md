@@ -192,8 +192,27 @@ must not appear in routine identifiers or logs. Every persisted record and
 authorization query includes `workspace_key`.
 
 One coordinator instance is shared by all plugin tool closures in one backend.
-Its lifecycle owns the database, lease, event subscriptions, timers, waiters,
-and bounded workers.
+It holds one immutable current composition generation. Each generation owns its database, lease,
+event delegates, timers, waiters, exporter/advisory resources, and bounded workers.
+
+If the current generation loses its ownership lease, a later tool invocation that has not started
+payload validation may serialize one replacement attempt. Replacement synchronously closes stale
+admission, aborts active work, requires a strict bounded drain, disposes the stale generation, runs
+one abortable delay through the persisted lease expiry plus configured takeover grace, runs the
+complete startup and context recovery sequence on a fresh store, and publishes only a strictly
+higher fencing epoch. The delay is capped by the startup deadline; disposal cancels both it and any
+in-progress successor startup through the same recovery signal, then rolls partial successor
+resources back. The one subsequent store acquisition remains authoritative under clock divergence
+or competing takeover, whose typed terminal diagnostic exposes no owner identity or adapter detail.
+Concurrent waiting invocations share that attempt and may each execute once on
+the successor. An invocation whose callback has begun is never replayed or transferred. Events and
+chat transforms route the current generation but do not initiate recovery.
+
+Host disposal, storage failure, port-contract or workflow faults, a timed-out stale drain, and a
+failed or non-advancing replacement are terminal for that coordinator. They do not enter a retry
+loop. Host disposal becomes terminal synchronously and prevents an in-flight replacement from being
+published. A timed-out invocation drain retains its terminal timeout classification, observes the
+quarantined work until it actually settles, and disposes stale resources exactly once afterward.
 
 ### 5.2 Visible Session Set
 

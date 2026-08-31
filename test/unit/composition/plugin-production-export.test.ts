@@ -71,8 +71,11 @@ function nativeFixture(): OpenCodeNativeAdapter {
 function lifecycle(order: string[]) {
   return {
     fencingToken: 1 as never,
+    status: "ready",
+    stopState: undefined,
     effectSignal: new AbortController().signal,
     assertReady: () => undefined,
+    observeStop: () => () => undefined,
     stop: () => order.push("lifecycle-stop"),
     scheduler: { drain: async () => order.push("scheduler-drain") },
   };

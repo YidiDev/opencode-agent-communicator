@@ -175,7 +175,8 @@ export function constructToolContracts(input: {
     deadlineTimer: blockingTimers,
     workflowFault: {
       fault(fault: { readonly fencingToken: typeof lifecycle.fencingToken }): void {
-        if (fault.fencingToken === lifecycle.fencingToken) lifecycle.stop("shutdown");
+        if (fault.fencingToken === lifecycle.fencingToken)
+          lifecycle.stop("shutdown", "workflow_fault");
       },
     },
     ids,
