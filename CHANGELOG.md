@@ -33,6 +33,34 @@ All notable changes to this project are documented in this file. The format is b
   in the OpenCode transcript or included in transcript export.
 - Startup fails context admissions whose prior injection is uncertain and never replays them.
 
+## [0.6.0] - 2026-08-30
+
+### Added
+
+- Added `session_read` immediately after `session_list` in the canonical 21-tool manifest. It returns
+  chronological, cursor-paginated restricted transcript projections with 100 default/500 maximum
+  rendered lines, 4,096-byte line wrapping, a 65,536-byte content cap, append-aware opaque protocol cursors,
+  and explicit `cursor_stale` recovery.
+- Added bounded native page and fixed-anchor reads with immutable 8-message pages, 96 transcript calls, 512 raw
+  examined messages including omitted variants, 8 MiB projection-safe assistant-text examination,
+  16,384 examined assistant parts, 32,768 rendered lines per invocation, 8,192 rendered lines per
+  message, 4 MiB per-response and 32 MiB invocation-wide pre-deserialization response caps, and
+  512-character native cursors. One shared
+  budget includes the initial anchor, every page, and the final anchor reread.
+- Added exact structural adapter ceilings of 1,048,576 UTF-16 characters per native text part, 4,096
+  parts per assistant message, and 256 UTF-16 characters per raw tool name; these remain separate from
+  invocation-wide transcript work budgets.
+
+### Security
+
+- Limited transcript projection to omitted user markers, assistant state/text, and tool name/status;
+  reasoning, user content, tool input/output, and other native metadata remain excluded. Assistant
+  text is documented as unsanitized, prompt-injection-capable peer data.
+- Allowed self-read only for the current visible root and required exact per-invocation approval for
+  cross-session reads, with abort-aware visibility checks before and after approval, before every
+  native read, and immediately before disclosure. Transcript content is not persisted, logged,
+  exported, or written.
+
 ## [0.5.0] - 2026-08-29
 
 ### Fixed
@@ -229,7 +257,8 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.3.0...v0.4.0

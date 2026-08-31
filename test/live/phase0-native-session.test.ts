@@ -26,6 +26,7 @@ import type { IsolatedOpenCodeState } from "./harness/isolation";
 import { createIsolatedOpenCodeState } from "./harness/isolation";
 import { launchManagedProcess, type ManagedProcess, waitForOutputLine } from "./harness/process";
 import { launchDeterministicProvider, type ProviderHarness } from "./harness/provider";
+import { proveProjectedMessagePagination } from "./session-read-feasibility";
 
 setDefaultTimeout(liveDeadlineMs * 8);
 
@@ -694,6 +695,18 @@ test("proves Phase 0 native session semantics with the exact local SDK and CLI",
     await proveSteerRace(fixture);
     await proveInterruptAndQueueSurvival(fixture);
     await proveProductionAdapterParsingAndMergedActivity(fixture);
+    await proveProjectedMessagePagination({
+      baseUrl: fixture.baseUrl,
+      client: fixture.client,
+      project: fixture.isolation.project,
+      createSession: (id, title) => createV2Session(fixture, id, title),
+      async completePrompt(sessionID, messageID, text) {
+        await prompt(fixture, sessionID, messageID, text);
+        const request = await fixture.provider.waitForText(text);
+        request.release();
+        await waitForStepEnd(fixture, sessionID);
+      },
+    });
     await proveSubscriptionDisposal(fixture);
     expect(successful(await fixture.client.instance.dispose(), "server instance dispose")).toBe(
       true,

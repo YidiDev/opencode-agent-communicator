@@ -7,7 +7,7 @@ import type {
 import type { RequestDeadlineTimerPort } from "../application/blocking-session-request-boundaries";
 import type { CommunicatorStartupRecoveryLifecycle } from "../application/communicator-startup-lifecycle";
 import type { ContextAdmissionRuntime } from "../application/context-admission-runtime";
-import type { ClockPort } from "../application/delivery-ports";
+import type { ClockPort, SessionReadPresencePort } from "../application/delivery-ports";
 import type { ParticipantOperationPort } from "../application/participant-operation-gate";
 import type { RequestRuntime } from "../application/request-runtime";
 import { sessionExportPolicyPort } from "../application/session-export-policy";
@@ -26,6 +26,7 @@ import {
   createSessionLockReleaseTool,
   createSessionLockRenewTool,
 } from "../tools/session-locks";
+import { createSessionReadTool } from "../tools/session-read";
 import { createSessionRequestAckTool } from "../tools/session-request-ack";
 import { createSessionRequestCancelTool } from "../tools/session-request-cancel";
 import { createSessionRequestGetTool } from "../tools/session-request-get";
@@ -39,35 +40,15 @@ import { createSessionStartTool } from "../tools/session-start";
 import { createSessionStopTool } from "../tools/session-stop";
 import { createSessionWaitTool } from "../tools/session-wait";
 import type { CommunicatorOptions } from "./config";
+
+export { communicatorToolIds } from "./tool-ids";
+
 import {
   productionBlockingTimers,
   productionClock,
   productionEntropy,
   productionSha256,
 } from "./primitives";
-
-export const communicatorToolIds = Object.freeze([
-  "session_list",
-  "session_lock_list",
-  "session_lock_publish",
-  "session_lock_release",
-  "session_lock_renew",
-  "session_send",
-  "session_delivery_get",
-  "session_ask",
-  "session_respond",
-  "session_wait",
-  "session_signal",
-  "session_request_list",
-  "session_request_get",
-  "session_request_ack",
-  "session_request_cancel",
-  "session_request_send",
-  "session_request_start",
-  "session_stop",
-  "session_start",
-  "session_export",
-] as const);
 
 function configuredUnresolvedProvenanceLimit(value: number | undefined) {
   return value === undefined ? {} : { unresolvedProvenancePerWorkspace: value };
@@ -110,6 +91,39 @@ export function configuredStartPolicy(options: CommunicatorOptions) {
           },
         }),
   });
+}
+
+function sessionReadPresence(native: OpenCodeNativeAdapter): SessionReadPresencePort {
+  const unavailable: SessionReadPresencePort["observeSessionReadPresence"] = () => {
+    throw new Error("Session read presence observation is unavailable.");
+  };
+  return {
+    observeSessionReadPresence: native.observeSessionReadPresence ?? unavailable,
+  };
+}
+
+function configuredSessionReadTool(
+  input: {
+    readonly native: OpenCodeNativeAdapter;
+    readonly lifecycle: CommunicatorStartupRecoveryLifecycle;
+    readonly workspaceKey: WorkspaceKey;
+  },
+  clock: ClockPort,
+  timer: RequestDeadlineTimerPort,
+  invocationDeadlineMs: () => number,
+) {
+  const { native, lifecycle, workspaceKey } = input;
+  return createSessionReadTool(
+    {
+      readiness: lifecycle,
+      membership: sessionReadPresence(native),
+      native,
+      digest: productionSha256,
+      clock,
+      timer,
+    },
+    { workspaceKey, invocationDeadlineMs },
+  );
 }
 
 export function constructToolContracts(input: {
@@ -168,6 +182,7 @@ export function constructToolContracts(input: {
     digest: productionSha256,
   };
   const policies = options.policies ?? {};
+  const sessionRead = configuredSessionReadTool(input, clock, blockingTimers, invocationDeadlineMs);
   const advisoryLocks = {
     ...common,
     locks: store,
@@ -181,6 +196,7 @@ export function constructToolContracts(input: {
       workspaceKey,
       invocationDeadlineMs,
     ),
+    session_read: sessionRead,
     session_lock_list: createSessionLockListTool(advisoryLocks, identityScope),
     session_lock_publish: createSessionLockPublishTool(advisoryLocks, identityScope),
     session_lock_release: createSessionLockReleaseTool(advisoryLocks, identityScope),

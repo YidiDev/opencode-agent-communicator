@@ -97,12 +97,41 @@ function toolResponse(name = diagnosticToolID, arguments_ = "{}"): Response {
   ]);
 }
 
-function textResponse(): Response {
-  return eventStream([
-    chunk({ role: "assistant" }),
-    chunk({ content: "diagnostic complete" }),
-    chunk({}, "stop"),
-  ]);
+function textResponse(text = "diagnostic complete"): Response {
+  return eventStream([chunk({ role: "assistant" }), chunk({ content: text }), chunk({}, "stop")]);
+}
+
+function sessionReadToolResponse(serialized: string): Response | undefined {
+  const after = serialized.match(
+    /production-session-read-after:(ses_[A-Za-z0-9]+):([A-Za-z0-9_-]+)/,
+  );
+  if (after) {
+    return toolResponse(
+      "session_read",
+      JSON.stringify({ session_id: after[1], cursor: after[2], direction: "after" }),
+    );
+  }
+  const cross = serialized.match(/production-session-read-cross:(ses_[A-Za-z0-9]+)/)?.[1];
+  if (cross) return toolResponse("session_read", JSON.stringify({ session_id: cross }));
+  const self = serialized.match(/production-session-read-self:(ses_[A-Za-z0-9]+)/)?.[1];
+  return self ? toolResponse("session_read", JSON.stringify({ session_id: self })) : undefined;
+}
+
+function deliveryToolResponse(serialized: string): Response | undefined {
+  const send = serialized.match(/production-session-send:(ses_[A-Za-z0-9]+)/)?.[1];
+  if (send) {
+    return toolResponse(
+      "session_send",
+      JSON.stringify({ session_id: send, content: "packed live delivery", delivery: "user" }),
+    );
+  }
+  const delivery = serialized.match(/production-delivery-get:(dlv_[a-z0-9]+)/)?.[1];
+  if (delivery) {
+    return toolResponse("session_delivery_get", JSON.stringify({ delivery_id: delivery }));
+  }
+  return serialized.includes("production-request-list")
+    ? toolResponse("session_request_list")
+    : undefined;
 }
 
 function productionContextResponse(serialized: string): Response | undefined {
@@ -144,18 +173,10 @@ function productionToolResponse(serialized: string): Response | undefined {
     return toolResponse("session_lock_release", JSON.stringify({ lock_id: lockRelease }));
   }
   if (serialized.includes("production-session-list")) return toolResponse("session_list");
-  const send = serialized.match(/production-session-send:(ses_[A-Za-z0-9]+)/)?.[1];
-  if (send) {
-    return toolResponse(
-      "session_send",
-      JSON.stringify({ session_id: send, content: "packed live delivery", delivery: "user" }),
-    );
-  }
-  const delivery = serialized.match(/production-delivery-get:(dlv_[a-z0-9]+)/)?.[1];
-  if (delivery) {
-    return toolResponse("session_delivery_get", JSON.stringify({ delivery_id: delivery }));
-  }
-  if (serialized.includes("production-request-list")) return toolResponse("session_request_list");
+  const sessionRead = sessionReadToolResponse(serialized);
+  if (sessionRead) return sessionRead;
+  const delivery = deliveryToolResponse(serialized);
+  if (delivery) return delivery;
   const ask = serialized.match(/production-session-ask:(ses_[A-Za-z0-9]+)/)?.[1];
   if (ask) {
     return toolResponse(
@@ -291,6 +312,7 @@ function advertisesTool(body: unknown, name: string): boolean {
 function productionRequestResponse(body: unknown): Response | undefined {
   const envelope = communicatorEnvelope(body);
   if (!envelope || typeof envelope.request_id !== "string") return undefined;
+  const serialized = JSON.stringify(body);
   if (envelope.operation === "ask") {
     if (!advertisesTool(body, "session_respond")) return textResponse();
     return toolResponse(
@@ -299,7 +321,12 @@ function productionRequestResponse(body: unknown): Response | undefined {
     );
   }
   if (envelope.operation === "wait") {
-    if (!advertisesTool(body, "session_signal")) return textResponse();
+    if (
+      !serialized.includes("production-process-wait-request") ||
+      !advertisesTool(body, "session_signal")
+    ) {
+      return textResponse();
+    }
     const payload = isRecord(envelope.payload) ? envelope.payload : undefined;
     if (payload?.milestone === "production-cancel") return textResponse();
     return toolResponse(
@@ -370,10 +397,17 @@ function shouldGateRequest(
 }
 
 function completedProviderResponse(body: unknown): Response {
+  if (hasToolResult(body)) return textResponse();
   const request = productionRequestResponse(body);
   if (request) return request;
-  if (hasToolResult(body)) return textResponse();
-  return requestedToolResponse(lastMessageSerialized(body));
+  const serialized = lastMessageSerialized(body);
+  if (serialized.includes("packed session read first progress")) {
+    return textResponse("packed first progress complete");
+  }
+  if (serialized.includes("packed session read second progress")) {
+    return textResponse("packed second progress complete");
+  }
+  return requestedToolResponse(serialized);
 }
 
 function withDeadline<T>(promise: Promise<T>, label: string): Promise<T> {

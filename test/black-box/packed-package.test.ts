@@ -47,6 +47,7 @@ describe("packed npm archive", () => {
 
     const expectedToolIds = [
       "session_list",
+      "session_read",
       "session_lock_list",
       "session_lock_publish",
       "session_lock_release",
@@ -93,14 +94,14 @@ describe("packed npm archive", () => {
       cpu: string[];
     };
     expect(metadata).toMatchObject({
-      version: "0.5.0",
+      version: "0.6.0",
       exports: { ".": "./src/index.ts" },
       os: ["linux"],
       cpu: ["x64"],
     });
     expect(
       await readFile(join(installedRoot, "skills/session-communication/SKILL.md"), "utf8"),
-    ).toContain("session_start");
+    ).toContain("session_read");
     expect(
       await readFile(join(installedRoot, "skills/session-request-participant/SKILL.md"), "utf8"),
     ).toContain("session_respond");
@@ -114,6 +115,9 @@ describe("packed npm archive", () => {
     ]);
     expect(await readFile(join(installedRoot, "docs/plugin-configuration.md"), "utf8")).toContain(
       ">=1.18.21 <1.19.0",
+    );
+    expect(await readFile(join(installedRoot, "docs/session-read-security.md"), "utf8")).toContain(
+      "untrusted",
     );
   }, 60_000);
 });

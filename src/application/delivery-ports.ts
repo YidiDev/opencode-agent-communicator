@@ -24,6 +24,23 @@ export interface CurrentWorkspaceMembershipPort {
   ): Promise<CurrentRootMembership>;
 }
 
+export interface SessionReadPresence {
+  readonly sourceVisible: boolean;
+  readonly targetVisible: boolean;
+  readonly targetStatus: "busy" | "retry" | "idle" | "unknown";
+  readonly observedAtMs: number;
+}
+
+/** One abort-aware observation used to guard every session transcript disclosure effect. */
+export interface SessionReadPresencePort {
+  observeSessionReadPresence(
+    workspaceKey: WorkspaceKey,
+    sourceSessionId: SessionId,
+    targetSessionId: SessionId,
+    abort: AbortSignal,
+  ): Promise<SessionReadPresence>;
+}
+
 export interface ClockPort {
   nowMs(): number;
 }

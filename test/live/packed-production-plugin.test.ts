@@ -27,9 +27,11 @@ import {
   type ProviderRequestGate,
 } from "./harness/provider";
 import { runBlockingRequestJourneys } from "./packed-blocking-request-journeys";
-import { runContextRequestJourney } from "./packed-immediate-request-journeys";
+import { runContextRequestJourney, runContextSendJourney } from "./packed-context-request-journey";
+import { runImmediateRequestJourneys } from "./packed-immediate-request-journeys";
+import { runPackedSessionReadJourney } from "./packed-session-read-journey";
 
-setDefaultTimeout(liveDeadlineMs * 8);
+setDefaultTimeout(liveDeadlineMs * 12);
 
 type Client = ReturnType<typeof createOpencodeClient>;
 
@@ -62,6 +64,7 @@ interface ActiveTarget {
 
 const toolIds = [
   "session_list",
+  "session_read",
   "session_lock_list",
   "session_lock_publish",
   "session_lock_release",
@@ -221,7 +224,7 @@ async function startPackedServer(
       "0",
       "--print-logs",
       "--log-level",
-      "DEBUG",
+      "ERROR",
     ],
     cwd: isolation.project,
     environment: isolation.environment,
@@ -476,90 +479,6 @@ async function runLockJourney(invoker: Invoker): Promise<void> {
   ).toMatchObject({ ok: true, value: { locks: [] } });
 }
 
-async function runContextSendJourney(fixture: PackedFixture, invoker: Invoker): Promise<void> {
-  const source = successful(
-    await fixture.client.session.create({ title: "Packed context source" }),
-    "context source",
-  );
-  const sourceRun = fixture.client.session.prompt({
-    sessionID: source.id,
-    model: { providerID: testProviderID, modelID: testModelID },
-    agent: "build",
-    tools: { session_send: true },
-    parts: [{ type: "text", text: "production-context-source-gated" }],
-  });
-  const sourceGate = await fixture.provider.waitForText("production-context-source-gated");
-  const target = successful(
-    await fixture.client.session.create({ title: "Packed context target" }),
-    "context target",
-  );
-  const marker = "production-target-active-context-send";
-  const firstRun = fixture.client.session.prompt({
-    sessionID: target.id,
-    model: { providerID: testProviderID, modelID: testModelID },
-    agent: "build",
-    tools: { live_context_hold: true },
-    parts: [{ type: "text", text: marker }],
-  });
-  await waitForActiveTarget(fixture.client, target.id, "context target");
-  const targetGate = await fixture.provider.waitForText(marker, sourceGate.sequence);
-  sourceGate.releaseTool(
-    "session_send",
-    JSON.stringify({ session_id: target.id, content: "packed private provider context" }),
-  );
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  targetGate.releaseTool("live_context_hold");
-  const injected = await fixture.provider.waitForText(marker, targetGate.sequence);
-  const providerBody = JSON.stringify(injected.body);
-  expect(providerBody).toContain(`identity:${target.id}`);
-  expect(providerBody).toContain("packed private provider context");
-  expect(providerBody).toContain("live coexistence reminder");
-  injected.release("complete injected context target");
-  successful(
-    await withinLiveDeadline(firstRun, "context target completion"),
-    "context target prompt",
-  );
-  successful(
-    await withinLiveDeadline(sourceRun, "context source completion"),
-    "context source prompt",
-  );
-  const sent = toolOutput(
-    successful(await fixture.client.session.messages({ sessionID: source.id }), "context source"),
-    "session_send",
-  );
-  expect(sent).toMatchObject({
-    ok: true,
-    value: {
-      target_session_id: target.id,
-      delivery: "context",
-      state: "context_admitted",
-    },
-  });
-  const deliveryID = Reflect.get(Reflect.get(sent, "value") ?? {}, "delivery_id");
-  if (typeof deliveryID !== "string") throw new Error("context send returned no delivery ID");
-  expect(
-    await invoker.invoke(
-      "session_delivery_get",
-      `production-delivery-get:${deliveryID}`,
-      target.id,
-    ),
-  ).toMatchObject({
-    ok: true,
-    value: {
-      role: "target",
-      delivery: { delivery: "context", state: "context_admitted" },
-    },
-  });
-  const transcript = successful(
-    await fixture.client.session.messages({ sessionID: target.id }),
-    "context send public transcript",
-  );
-  expect(JSON.stringify(transcript)).not.toContain("packed private provider context");
-  const exported = await fixture.exportSession(target.id);
-  expect(exported.exitCode).toBe(0);
-  expect(exported.stdout).not.toContain("packed private provider context");
-}
-
 async function runStartStopJourney(
   fixture: PackedFixture,
   invoker: Invoker,
@@ -686,42 +605,99 @@ async function runStartStopJourney(
   }
 }
 
+async function runPackedContextJourneys(fixture: PackedFixture, invoker: Invoker): Promise<void> {
+  await runBlockingRequestJourneys(
+    {
+      provider: fixture.provider,
+      prepareTarget: async (label) => {
+        const target = successful(await fixture.client.session.create(), `${label} target`);
+        return { id: target.id, activate: () => activateTarget(fixture, label, target.id) };
+      },
+      readToolOutput: async (sessionId, toolId) =>
+        toolOutput(
+          successful(await fixture.client.session.messages({ sessionID: sessionId }), toolId),
+          toolId,
+        ),
+      readToolState: async (sessionId, toolId) => {
+        const messages = await fixture.client.session.messages({ sessionID: sessionId });
+        return toolPart(successful(messages, `${toolId} state`), toolId)?.state.status;
+      },
+      withinLiveDeadline,
+    },
+    invoker,
+  );
+  await runContextSendJourney(fixture, invoker);
+  await runContextRequestJourney(fixture, invoker);
+}
+
 test(`runs the exact packed production plugin through OpenCode ${exactOpenCodeVersion}`, async () => {
   const fixture = await launchPackedFixture();
   let failure: unknown;
   try {
     await assertPackedRegistration(fixture);
+    const invoker = createInvoker(fixture.client);
+    await runBasicPackedJourneys(invoker);
+    await runLockJourney(invoker);
+    await runPackedSessionReadJourney({
+      client: fixture.client,
+      invoke: (marker, callerSessionID) => invoker.invoke("session_read", marker, callerSessionID),
+    });
+    expect(successful(await fixture.client.instance.dispose(), "production plugin disposal")).toBe(
+      true,
+    );
+  } catch (error: unknown) {
+    failure = error;
+  } finally {
+    await fixture.close(failure);
+  }
+});
+
+test(`runs packed lifecycle journeys through OpenCode ${exactOpenCodeVersion}`, async () => {
+  const fixture = await launchPackedFixture();
+  let failure: unknown;
+  try {
     const target = successful(
       await fixture.client.session.create({ title: "Packed target" }),
       "target",
     );
     const invoker = createInvoker(fixture.client);
-    await runBasicPackedJourneys(invoker);
-    await runLockJourney(invoker);
     await runStartStopJourney(fixture, invoker, target.id);
-    await runBlockingRequestJourneys(
-      {
-        provider: fixture.provider,
-        prepareTarget: async (label) => {
-          const target = successful(await fixture.client.session.create(), `${label} target`);
-          return { id: target.id, activate: () => activateTarget(fixture, label, target.id) };
-        },
-        readToolOutput: async (sessionId, toolId) =>
-          toolOutput(
-            successful(await fixture.client.session.messages({ sessionID: sessionId }), toolId),
-            toolId,
-          ),
-        readToolState: async (sessionId, toolId) => {
-          const messages = await fixture.client.session.messages({ sessionID: sessionId });
-          return toolPart(successful(messages, `${toolId} state`), toolId)?.state.status;
-        },
-        withinLiveDeadline,
-      },
-      invoker,
+    expect(successful(await fixture.client.instance.dispose(), "lifecycle plugin disposal")).toBe(
+      true,
     );
-    await runContextSendJourney(fixture, invoker);
-    await runContextRequestJourney(fixture, invoker);
-    expect(successful(await fixture.client.instance.dispose(), "production plugin disposal")).toBe(
+  } catch (error: unknown) {
+    failure = error;
+  } finally {
+    await fixture.close(failure);
+  }
+});
+
+test(`runs packed initial request journey through OpenCode ${exactOpenCodeVersion}`, async () => {
+  const fixture = await launchPackedFixture();
+  let failure: unknown;
+  try {
+    await runImmediateRequestJourneys(
+      {
+        waitForIdle: (sessionID) => waitForIdleTarget(fixture.client, sessionID, "request target"),
+      },
+      createInvoker(fixture.client),
+    );
+    expect(successful(await fixture.client.instance.dispose(), "request plugin disposal")).toBe(
+      true,
+    );
+  } catch (error: unknown) {
+    failure = error;
+  } finally {
+    await fixture.close(failure);
+  }
+});
+
+test(`runs packed context journeys through OpenCode ${exactOpenCodeVersion}`, async () => {
+  const fixture = await launchPackedFixture();
+  let failure: unknown;
+  try {
+    await runPackedContextJourneys(fixture, createInvoker(fixture.client));
+    expect(successful(await fixture.client.instance.dispose(), "context plugin disposal")).toBe(
       true,
     );
   } catch (error: unknown) {

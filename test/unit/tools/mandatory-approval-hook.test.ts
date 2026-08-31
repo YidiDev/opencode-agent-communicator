@@ -16,44 +16,71 @@ describe("mandatory approval hook", () => {
     time: { created: 1 },
   });
 
-  test("narrows a configured stop allow decision back to ask", async () => {
-    const output = { status: "allow" } as { status: "allow" | "ask" | "deny" };
-    await enforceMandatoryApproval(permission("session_stop"), output);
-    expect(output.status).toBe("ask");
-  });
-
-  test("preserves denial, asking, and unrelated permission decisions", async () => {
-    for (const [type, status] of [
-      ["session_stop", "deny"],
-      ["session_stop", "ask"],
-      ["session_send", "allow"],
-    ] as const) {
-      const output = { status } as { status: "allow" | "ask" | "deny" };
+  test.each(["session_stop", "session_read"])(
+    "narrows a configured %s allow decision back to ask",
+    async (type) => {
+      const output = { status: "allow" } as { status: "allow" | "ask" | "deny" };
       await enforceMandatoryApproval(permission(type), output);
-      expect(output.status).toBe(status);
+      expect(output.status).toBe("ask");
+    },
+  );
+
+  test("preserves denial and asking for both mandatory permission types", async () => {
+    for (const type of ["session_stop", "session_read"]) {
+      for (const status of ["deny", "ask"] as const) {
+        const output = { status } as { status: "allow" | "ask" | "deny" };
+        await enforceMandatoryApproval(permission(type), output);
+        expect(output.status).toBe(status);
+      }
     }
   });
 
-  test("narrows only stop in permissive configuration so the pinned host invokes the hook", () => {
+  test("preserves unrelated permission decisions", async () => {
+    const output = { status: "allow" } as { status: "allow" | "ask" | "deny" };
+    await enforceMandatoryApproval(permission("session_send"), output);
+    expect(output.status).toBe("allow");
+  });
+
+  test("installs both mandatory asks when permission configuration is absent", () => {
+    const empty: { permission?: unknown } = {};
+    enforceMandatoryStopConfiguration(empty);
+    expect(empty.permission).toEqual({ session_stop: "ask", session_read: "ask" });
+  });
+
+  test("narrows global string, wildcard, and explicit allows to ask", () => {
     const objectPolicy: { permission: Record<string, string> } = {
-      permission: { bash: "allow", session_send: "deny" },
+      permission: { "*": "allow", session_read: "allow" },
     };
     enforceMandatoryStopConfiguration(objectPolicy);
     expect(objectPolicy.permission).toEqual({
-      bash: "allow",
-      session_send: "deny",
+      "*": "allow",
+      session_read: "ask",
       session_stop: "ask",
     });
     const globalPolicy: { permission: unknown } = { permission: "allow" };
     enforceMandatoryStopConfiguration(globalPolicy);
-    expect(globalPolicy.permission).toEqual({ "*": "allow", session_stop: "ask" });
+    expect(globalPolicy.permission).toEqual({
+      "*": "allow",
+      session_stop: "ask",
+      session_read: "ask",
+    });
   });
 
-  test("installs a stop rule when absent and rejects malformed host policy shapes", () => {
-    const empty: { permission?: unknown } = {};
-    enforceMandatoryStopConfiguration(empty);
-    expect(empty.permission).toEqual({ session_stop: "ask" });
+  test("preserves explicit and inherited mandatory denials", () => {
+    const explicit = { permission: { session_stop: "deny", session_read: "deny" } };
+    enforceMandatoryStopConfiguration(explicit);
+    expect(explicit.permission).toEqual({ session_stop: "deny", session_read: "deny" });
 
+    const global: { permission: unknown } = { permission: "deny" };
+    enforceMandatoryStopConfiguration(global);
+    expect(global.permission).toEqual({
+      "*": "deny",
+      session_stop: "deny",
+      session_read: "deny",
+    });
+  });
+
+  test("rejects malformed host policy shapes", () => {
     for (const permission of ["sometimes", null, [], 42]) {
       expect(() => enforceMandatoryStopConfiguration({ permission })).toThrow("malformed");
     }
@@ -105,7 +132,7 @@ describe("mandatory approval hook", () => {
         return Reflect.defineProperty(inner, key, descriptor);
       },
       get(inner, key, receiver) {
-        if (key === "permission") return { session_stop: "allow" };
+        if (key === "permission") return { session_stop: "allow", session_read: "allow" };
         return Reflect.get(inner, key, receiver);
       },
     });
@@ -149,11 +176,12 @@ describe("mandatory approval hook", () => {
     }
   });
 
-  test("preserves valid pinned mutable nested permission configuration", () => {
+  test("narrows nested mandatory patterns while preserving their denials", () => {
     const config: { permission: Record<string, unknown> } = {
       permission: {
         bash: { "git status": "allow", "rm *": "deny" },
         read: "ask",
+        session_read: { "safe:*": "allow", "blocked:*": "deny" },
       },
     };
     const original = config.permission;
@@ -163,6 +191,7 @@ describe("mandatory approval hook", () => {
       bash: { "git status": "allow", "rm *": "deny" },
       read: "ask",
       session_stop: "ask",
+      session_read: { "*": "ask", "safe:*": "ask", "blocked:*": "deny" },
     });
     const descriptor = Object.getOwnPropertyDescriptor(config.permission, "session_stop");
     expect(descriptor).toMatchObject({ value: "ask", writable: true, enumerable: true });

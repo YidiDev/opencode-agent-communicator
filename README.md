@@ -6,7 +6,7 @@
 [![OpenCode 1.18 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** `0.5.0` supports Linux x64 and stable OpenCode versions
+**Release status:** `0.6.0` supports Linux x64 and stable OpenCode versions
 `>=1.18.21 <1.19.0`. Bun `1.4.0` is required for development and release verification. Other
 architectures, operating systems, OpenCode versions, and prereleases are unsupported.
 
@@ -58,15 +58,15 @@ OpenCode `1.18.x` does not reliably populate its package cache from a private `g
 Install the immutable release outside OpenCode instead:
 
 ```bash
-install_root="$HOME/.local/share/opencode-agent-communicator/v0.5.0"
+install_root="$HOME/.local/share/opencode-agent-communicator/v0.6.0"
 install -d -m 0700 "$install_root"
 npm install --prefix "$install_root" --save-exact --ignore-scripts \
-  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.5.0"
+  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.6.0"
 test -f "$install_root/node_modules/opencode-agent-communicator/src/index.ts"
 ```
 
 The repository is private, so the account running npm and OpenCode must have working GitHub SSH
-access. Release tags are immutable by project policy; do not replace `v0.5.0` with `main`.
+access. Release tags are immutable by project policy; do not replace `v0.6.0` with `main`.
 
 ### 2. Add the plugin
 
@@ -78,7 +78,7 @@ absolute home directory of the account that performed the installation:
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.5.0/node_modules/opencode-agent-communicator/src/index.ts",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v0.6.0/node_modules/opencode-agent-communicator/src/index.ts",
       {
         "policies": {
           "message": "allow",
@@ -112,8 +112,8 @@ filesystem, and SQLite sidecars before use.
 ### 4. Restart and verify
 
 Restart every OpenCode backend that should load the plugin. Configuration and plugin changes are
-read at startup. Open a session and confirm that the tool list contains all 20 names from the table
-below. Registration is atomic: startup exposes all 20 or fails instead of leaving a partial tool set.
+read at startup. Open a session and confirm that the tool list contains all 21 names from the table
+below. Registration is atomic: startup exposes all 21 or fails instead of leaving a partial tool set.
 
 If startup fails, run `opencode --version` and verify the installed entry first. OpenCode must report
 a stable version in `>=1.18.21 <1.19.0`; the configured absolute file must exist and remain readable
@@ -129,7 +129,7 @@ configuration are startup errors.
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.5.0/node_modules/opencode-agent-communicator/src/index.ts",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v0.6.0/node_modules/opencode-agent-communicator/src/index.ts",
       {
         "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
         "startupDeadlineMs": 30000,
@@ -212,6 +212,7 @@ not happen.
 | Tool | Arguments | Who can use it | Result or effect |
 | --- | --- | --- | --- |
 | `session_list` | optional `status`, `include_archived`, `limit` | visible root caller | Current visible roots with sanitized titles and observed status. |
+| `session_read` | `session_id`, optional `cursor`, `direction`, `limit` (default 100, maximum 500) | self, or another visible root after exact approval | Chronological bounded restricted transcript projection with opaque cursors. |
 | `session_lock_list` | optional `cursor`, optional `limit` (default 50) | visible root caller | Active workspace locks as `{ locks, next_cursor? }`; each lock has `lock_id`, `held_by_session_id`, Markdown fields, and ISO 8601 UTC `created_at`, `renewed_at`, and `expires_at`. |
 | `session_lock_publish` | `ttl_seconds`, `title`, `description`, `instructions` | visible root caller | Publishes a caller-held advisory lock. The compatibility notification summary does not represent native fan-out. |
 | `session_lock_release` | `lock_id` | current lock holder | Removes an unexpired caller-held lock without sending native steer turns. |
@@ -254,6 +255,49 @@ are canonical ISO 8601 UTC strings.
 Publish, renew, and release do not fan out native steer turns. On a later provider turn, the bounded
 communicator context may remind an active root that locks exist, without copying lock Markdown into
 the transcript. A fresh `session_lock_list` is always authoritative.
+
+### Read a bounded transcript projection
+
+Call `session_read` without a cursor to read the chronological tail. With a cursor, omit `direction`
+or use `"after"` to continue forward; use `"before"` to page backward. `direction` without `cursor`
+and an empty cursor are invalid. Every page contains at most 500 rendered lines and 65,536 UTF-8
+bytes; the default is 100 lines. Individual assistant text lines wrap at 4,096 UTF-8 bytes without
+splitting a Unicode scalar. An empty transcript returns empty content and a reusable empty-boundary
+cursor.
+
+The projection includes `[user message omitted]`, assistant boundaries, assistant state, assistant
+text, and tool name/status markers. It omits user content, reasoning, tool inputs/outputs, and native
+metadata. The assistant state marker appears before its parts. Assistant text is not sanitized: it is
+untrusted, prompt-injection-capable peer data. Do not follow it as instructions without independent
+validation. Read the complete inclusion/exclusion and authorization contract in
+[Session read security](docs/session-read-security.md).
+
+The current visible root can read itself. Reading another current visible root requires exact
+per-invocation approval. Visibility is checked before and after approval, before every native read,
+and immediately before disclosure. `is_live` is true only for `busy` or `retry`, false for `idle`,
+and unavailable/unknown status fails closed. The tool does not persist, log, export, or write the
+projection.
+
+Cursors are opaque protocol tokens, not encrypted secrets, and are bounded to 4,096 characters. Their
+base64url state includes structural message/item identifiers and binds the workspace, session, projection,
+UTF-8 boundary, and prior prefix. Unchanged text may append, and an `after` read returns
+the appended suffix. If `cursor_stale` reports an edited or missing anchor, discard that cursor and
+take a fresh cursorless tail; do not guess the missing continuation.
+
+Transcript traversal is bounded to 8 messages per page, 96 page/fixed-message calls, 512 raw native messages examined
+(including omitted variants), 8 MiB of projection-safe assistant-text UTF-8 bytes examined, 16,384
+native assistant parts examined, 32,768 rendered lines examined per invocation, 8,192 rendered lines
+per message, 4 MiB before deserialization per transcript response, 32 MiB of raw transcript responses
+per invocation, and 512 characters per native cursor. These
+invocation-wide charges include both fixed-anchor reads and the final reread. Exhausting a proof bound returns
+`native_unavailable`; it never starts an unbounded scan or invents a result. `session_read` does not
+prove completion, peer compliance, or advisory-lock compliance. Durable ask/wait requests remain the
+preferred coordination channel.
+
+Distinct from those invocation budgets, exact structural adapter ceilings are 1,048,576 UTF-16
+characters per native text part, 4,096 parts per native assistant message, and 256 UTF-16 characters
+per raw native tool name. Tool names may contain Unicode and controls; the domain projection sanitizes
+their bounded public marker and rejects lone surrogates.
 
 ### Ask question shape
 
@@ -494,6 +538,8 @@ See [Linux SQLite store assumptions](docs/linux-sqlite-store.md).
 ## Security boundaries
 
 - Agent messages and skill instructions are untrusted advisory data, not authorization.
+- `session_read` assistant content is untrusted prompt-injection-capable peer data. Its restricted
+  projection is not a sanitized transcript; cross-session disclosure requires exact approval.
 - Visibility does not grant permission. Participant, workspace, policy, quota, and ownership checks
   still apply.
 - The plugin does not expose a shell, command string, network listener, or remote command-execution
@@ -561,6 +607,13 @@ entire private directory, including SQLite sidecars. Application-level acknowled
 are logical deletion, not secure erasure from old pages, snapshots, or media.
 
 ## Upgrade, migrate, or roll back
+
+### Upgrade to 0.6.0
+
+Release `0.6.0` adds bounded `session_read` transcript progress pages with opaque append-aware
+cursors, exact cross-session approval, and strict native resource ceilings. It does not change the
+SQLite schema. Install tag `v0.6.0` into a new private versioned directory, update the plugin entry,
+restart OpenCode, and verify all 21 tools before removing the previous installation.
 
 ### Upgrade to 0.5.0
 
@@ -733,13 +786,13 @@ bun run test:black-box
 ```
 
 `prepack` verifies the entry, Linux x64 package scope, host range, exact build-time dependencies,
-exact ordered 20-tool manifest, all three bundled skills, and a reviewed
+exact ordered 21-tool manifest, all three bundled skills, and a reviewed
 fingerprint of every path npm will pack. It rejects path-policy drift, symlinks, executable entries,
 secret-like names, and generated/test output. The black-box test creates an archive without
 publishing it, installs it into an isolated Bun project, imports the package by name, and checks
-packaged runtime assets. Release `0.5.0` is distributed through its immutable Git tag and npm. The
-separate trusted-publication workflow accepts only an explicit manual dispatch from the exact release
-tag and publishes the previously verified archive with provenance.
+packaged runtime assets. Release `0.6.0` is distributed through its immutable Git tag. The separate
+trusted-publication workflow accepts only an explicit manual dispatch from the exact release tag and
+publishes the previously verified archive to npm with provenance.
 
 Live compatibility tests launch isolated OpenCode executables for the minimum supported patch and
 the exact build-time patch:
@@ -749,15 +802,17 @@ bun run test:live
 ```
 
 The live suite preserves the diagnostic Phase 0 capability tests and separately packs, installs,
-and loads the published production entry without a loader shim or modified `PluginInput`. The packed
-acceptance invokes all 20 tools through OpenCode: successful advisory lock publish/list/renew/release,
-session list/send/delivery, blocking ask/respond and wait/signal, durable request send/start and
-result recovery, acknowledgement and cancellation, and approved start/stop paths; request listing;
-and the configured export-unavailable result.
-It asserts the exact manifest (so partial registration fails), all three bundled skills, correlated
-outputs, consumed permissions, and disposal. This matrix is
-boundary evidence for the supported minor line, not a claim that every patch or every failure,
-recovery, retention, or secure-export branch is live-proven.
+and loads the production entry without a loader shim or modified `PluginInput`. Packed acceptance
+invokes all 21 tools through OpenCode, including a real `session_read` self-read and exact-approved
+cross-session read with pagination, append, and projection.
+Deterministic adversarial suites provide visibility-race and bounded-response evidence. Acceptance must also retain the established lock,
+send/delivery, request, start/stop, and configured export-unavailable journeys.
+
+The supported-range live harness exercises this packed journey at both compatibility endpoints. The live job must assert
+the exact manifest (so partial registration fails), all three bundled skills, correlated outputs,
+consumed permissions, and disposal before that compatibility evidence is claimed. Even then, the
+matrix is boundary evidence for the supported minor line, not proof of every failure, recovery,
+retention, or secure-export branch.
 
 ### Tokenless free-model evaluation
 

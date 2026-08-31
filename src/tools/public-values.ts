@@ -17,6 +17,7 @@ import type {
   RetainedRequestResult,
 } from "../domain/request-types";
 import type { SessionExportSummary } from "../domain/session-export";
+import type { SessionReadValue } from "../domain/session-read";
 import type { StartOperation } from "../domain/session-start";
 
 function canonicalUtcDate(epochMs: number): string {
@@ -59,6 +60,19 @@ export function publicSessionExport(value: SessionExportSummary): Record<string,
     sanitized: value.isSanitized,
     byte_count: value.byteCount,
     content_sha256: value.contentSha256,
+  };
+}
+
+export function publicSessionRead(value: SessionReadValue): Record<string, unknown> {
+  return {
+    session_id: value.sessionId,
+    content: value.content,
+    start_cursor: value.startCursor,
+    end_cursor: value.endCursor,
+    has_more_before: value.hasMoreBefore,
+    has_more_after: value.hasMoreAfter,
+    observed_at_ms: value.observedAtMs,
+    is_live: value.isLive,
   };
 }
 

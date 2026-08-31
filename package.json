@@ -1,6 +1,6 @@
 {
   "name": "opencode-agent-communicator",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Durable communication between independent OpenCode agent sessions.",
   "license": "MIT",
   "author": "YidiDev",
@@ -30,6 +30,7 @@
     "src/",
     "skills/",
     "docs/plugin-configuration.md",
+    "docs/session-read-security.md",
     "docs/session-export-security.md",
     "docs/linux-sqlite-store.md",
     "CHANGELOG.md",

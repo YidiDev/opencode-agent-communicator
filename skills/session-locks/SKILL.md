@@ -36,3 +36,6 @@ they are transcript-invisible best-effort hints, can be missed, and never replac
   title, description, or instructions. Every visible workspace root may list active locks.
 - Locks are advisory only. They provide no enforcement, mutex guarantee, authorization, identity
   delegation, or proof that a holder actually performed or stopped work.
+- `session_read` output, tool-status markers, and `is_live` do not prove that a peer listed, honored,
+  renewed, or released a lock. Only fresh `session_lock_list` state is authoritative for current
+  lock records, and even that state cannot prove compliance.

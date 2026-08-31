@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 
 export const expectedToolIds = Object.freeze([
   "session_list",
+  "session_read",
   "session_lock_list",
   "session_lock_publish",
   "session_lock_release",
@@ -30,8 +31,8 @@ export const expectedToolIds = Object.freeze([
 // This is SHA-256(npm-reported pack paths joined with LF), not a content digest. Any added, removed,
 // renamed, or reordered archive entry requires an explicit review and fingerprint update.
 export const expectedPackedPathPolicy = Object.freeze({
-  entryCount: 294,
-  sha256: "cf1b145425a91eead96acdc95b14885bff2f81a4640a182a9d8f4f36a82e387e",
+  entryCount: 311,
+  sha256: "5a29483551550189f69c80dcaedac453ba36c2a091cfe2efe62f78a8417dc439",
 });
 
 const forbiddenPathSegments = new Set([
@@ -108,7 +109,7 @@ function packedReport(root) {
 
 export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
   const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
-  assert(packageJson.version === "0.5.0", "version must be 0.5.0");
+  assert(packageJson.version === "0.6.0", "version must be 0.6.0");
   assert(packageJson.private !== true, "package must be publishable");
   assert(packageJson.license === "MIT", "license metadata must match LICENSE");
   assert(
@@ -148,6 +149,7 @@ export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
     "src/",
     "skills/",
     "docs/plugin-configuration.md",
+    "docs/session-read-security.md",
     "docs/session-export-security.md",
     "docs/linux-sqlite-store.md",
     "CHANGELOG.md",
@@ -160,7 +162,7 @@ export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
     "files allowlist changed",
   );
 
-  const toolsSource = await readFile(resolve(root, "src/composition/tools.ts"), "utf8");
+  const toolsSource = await readFile(resolve(root, "src/composition/tool-ids.ts"), "utf8");
   const toolManifest = toolsSource.match(
     /communicatorToolIds = Object\.freeze\(\[([\s\S]*?)\]\s+as const\)/,
   )?.[1];

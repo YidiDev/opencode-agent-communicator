@@ -5,7 +5,7 @@ configuration, and values above compiled safety ceilings stop startup before the
 
 ```json
 [
-  "file:///home/operator/.local/share/opencode-agent-communicator/v0.5.0/node_modules/opencode-agent-communicator/src/index.ts",
+  "file:///home/operator/.local/share/opencode-agent-communicator/v0.6.0/node_modules/opencode-agent-communicator/src/index.ts",
   {
     "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
     "startupDeadlineMs": 30000,
@@ -57,7 +57,7 @@ configuration, and values above compiled safety ceilings stop startup before the
 `XDG_STATE_HOME` or `HOME/.local/state`, outside the workspace; the store verifies ownership,
 permissions, no-follow traversal, and filesystem support. This implementation fails closed on any
 runtime other than Linux x64 before it opens the state store. Linux ARM64 and all other CPU
-architectures are outside the certified `0.5.0` package scope; package metadata also restricts
+architectures are outside the certified `0.6.0` package scope; package metadata also restricts
 installation to x64. Install the immutable private Git release externally with npm, then configure
 its absolute `file://` source entry; OpenCode `1.18.x` does not reliably populate its cache directly
 from a private `git+ssh` spec. Bun `1.4.0` remains the exact development and verification target.
@@ -72,7 +72,7 @@ boundary.
 `ToolContext.abort` remains the only explicit action that durably cancels the request.
 
 Export remains registered when its three trust fields are omitted or its secure adapter cannot be
-opened. Only `session_export` then returns `export_unavailable`; the other seventeen tools remain
+opened. Only `session_export` then returns `export_unavailable`; the other 20 tools remain
 available. The executable must report a stable version in `>=1.18.21 <1.19.0` and satisfy the
 root-owned OpenCode trust checks. No shell is used.
 
@@ -89,6 +89,17 @@ Advisory locks have no configuration switch or policy bypass. Any current visibl
 publish workspace locks; only their holder may renew or release them. Locks are advisory and do not
 enforce exclusion or grant authorization. Their TTL, UTF-8 field bounds, list limits, and 1024-active
 workspace quota are immutable compiled safety policies documented in the README.
+
+`session_read` also has no configuration override in this release. The current visible root may read
+its own bounded projection; reading another current visible root always requests exact
+per-invocation approval. Projection version, approval binding, repeated visibility checks, 100/500
+line limits, 4,096-byte rendered-line cap, 65,536-byte content cap, 4,096-character public cursor,
+8-message native pages, 96 transcript page/fixed-message calls, 512 examined messages, 4 MiB per
+transcript response and 32 MiB cumulatively before deserialization, 512-character native cursors,
+1,048,576 UTF-16 characters per native text part,
+4,096 parts per native assistant message, and 256 UTF-16 characters per raw native tool name are
+immutable compiled policies. The final three are structural adapter ceilings, not invocation budgets. See
+[Session read security](session-read-security.md).
 
 Start operation count and retained private-payload bytes are hard admission quotas below immutable
 compiled ceilings. Denied and approval-rejected starts keep only payload-free idempotency metadata
