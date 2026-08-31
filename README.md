@@ -579,6 +579,22 @@ spec failed before this plugin was imported; do not configure the private `git+s
 Use the externally installed absolute `file://` entry above, restart the backend, and inspect its
 startup log.
 
+### Ownership expires while OpenCode is running
+
+A tool call that has not started validation may recover an expired communicator ownership lease
+without restarting OpenCode. The plugin drains and discards the complete stale composition, acquires
+a higher fencing epoch after one bounded wait through the persisted lease grace, runs full startup
+recovery, and then executes the waiting call once. The wait is canceled by disposal and does not
+retry acquisition. Disposal also aborts an in-progress successor startup and rolls its partial
+resources back. Another backend taking ownership still fails closed with a sanitized contention
+diagnostic. Calls that already started are aborted or settle on their original generation and are
+never replayed.
+
+Recovery is deliberately one-shot and fail closed. Storage or contract faults, workflow shutdown,
+host disposal, a drain timeout, takeover by another live backend, or a failed replacement remain
+terminal for that plugin instance. Resolve the underlying condition and restart OpenCode; do not
+blindly retry an effect whose outcome is unknown.
+
 ### A target looks idle
 
 Only explicit `session_send` with `delivery: "user"` can wake an existing idle target. Default

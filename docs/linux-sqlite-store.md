@@ -84,6 +84,25 @@ workers. The barrier object is process-local and cannot be forged into the store
 stale-token recovery query. Recovery drains repeated bounded stale batches before
 it reads prepared work and stops on abort, deadline, or ownership loss.
 
+After a live generation observes its own lease expiry, it never renews that stale token. The next
+not-yet-started tool call may trigger one process-local composition replacement: stale tool admission
+closes synchronously, active calls are aborted and must drain within the bound, and stale resources
+and the store close before one abortable wait through the persisted expiry plus configured takeover
+grace. The wait is capped by the startup deadline. Disposal cancels the wait or an in-progress fresh
+startup with the same signal, preventing later startup phases and rolling partial resources back.
+One fresh store then runs this full startup barrier; its acquisition remains authoritative if clocks
+diverged or another backend took ownership. Contention is retained only as a typed sanitized
+diagnostic, never an owner label or raw adapter error. The successor is published only when its
+fencing token is strictly greater.
+Concurrent callers share the replacement; callbacks that already began, including argument parsing,
+never transfer or replay.
+
+A stale close naturally performs no ownership release mutation. A drain timeout leaves unresolved
+work quarantined rather than pretending it drained; eventual settlement triggers exactly one stale
+resource disposal while the timeout remains terminal. Storage, contract, or workflow faults, host
+disposal, takeover/non-advancing epochs, and any replacement failure are not recoverable in-process
+and do not loop.
+
 Session-start recovery also scans bounded `outcome_unknown` creation records. Requested agent/model
 identity and whether a title was requested remain in bounded non-message columns independently of the
 erasable initial-message payload. Native read-back must prove the deterministic ID is an exact root

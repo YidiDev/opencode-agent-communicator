@@ -6,6 +6,15 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+
+- Ownership lease expiry no longer leaves every tool permanently not-ready until OpenCode restarts.
+  A later not-yet-started tool call can replace the full composition through one serialized,
+  fail-closed recovery with one grace-aware bounded delay and a higher fencing epoch; started calls
+  are never replayed, disposal aborts partial successor startup, ownership contention stays typed and
+  sanitized, timed-out work is quarantined until cleanup, and drain,
+  takeover, storage, contract, workflow, disposal, or replacement failures remain terminal.
+
 ## [0.7.0] - 2026-08-30
 
 ### Added
