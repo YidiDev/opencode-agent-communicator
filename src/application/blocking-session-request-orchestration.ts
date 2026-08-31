@@ -1,4 +1,5 @@
 import type { NativeMessageId, RequestId, StartOperationId } from "../domain/generated-ids";
+import { digestMessageContent } from "../domain/message-payload";
 import { blockingRequestDeadlineMarginMs } from "../domain/request-constants";
 import {
   canonicalizeSerializeAndDigestPendingRequestPayload,
@@ -17,7 +18,6 @@ import {
   requestStorageFailure as storageFailure,
   wakeRequestScheduler as wakeScheduler,
 } from "./blocking-request-creation-preconditions";
-import { claimAndAdmitBlockingRequest } from "./blocking-session-request-admission";
 import {
   blockingCheckpoint,
   type SessionBlockingRequestContext,
@@ -111,7 +111,7 @@ async function createInternal(
     sourceSessionId: validated.value.sourceSessionId,
     targetSessionId: validated.value.targetSessionId,
     nativeMessageId,
-    deliveryMode: "steer",
+    deliveryMode: "context",
     kind: operation,
     resolutionState: "pending",
     deliveryState: "prepared",
@@ -130,15 +130,27 @@ async function createInternal(
   );
   if (envelopeSettlement.kind === "aborted") return cancelledFailure();
   if (envelopeSettlement.kind !== "settled") return storageFailure();
+  const envelopeBytes = new TextEncoder().encode(envelopeSettlement.value);
+  const envelopeDigest = await runUntilAborted(context.abort, () =>
+    digestMessageContent(ports.digest, envelopeBytes),
+  );
+  if (envelopeDigest.kind === "aborted") return cancelledFailure();
+  if (envelopeDigest.kind !== "settled") return storageFailure();
   const approved = await authorize(ports, context, prepared, payload.value.timeoutSeconds);
   if (!approved.ok) return approved;
   const prepareInput = {
     fencingToken: context.fencingToken,
     creationOperationId,
-    deliveryMode: "steer",
+    deliveryMode: "context",
     request: prepared,
     payloadJson: payload.serialized,
     envelopeJson: envelopeSettlement.value,
+    contextAdmission: {
+      requestId,
+      envelopeJson: envelopeSettlement.value,
+      contentByteLength: envelopeBytes.length,
+      contentSha256: envelopeDigest.value,
+    },
   } as const;
   let gated: DomainResult<{
     readonly provisional: RequestRuntimeRegistration;
@@ -189,18 +201,9 @@ async function createInternal(
     return storageFailure();
   }
   if (!gated.ok) return gated;
-  const { provisional, settled } = gated.value;
+  const { provisional } = gated.value;
   wakeScheduler(ports.scheduler);
   const admissionController = linkedAdmissionController(context.abort, ports.runtime.effectSignal);
-  const admissionStarted =
-    (settled.deliveryState === "prepared" || settled.deliveryState === "submitting") &&
-    settled.resolutionState === "pending"
-      ? await claimAndAdmitBlockingRequest(ports, context, settled, admissionController)
-      : { ok: true as const, value: undefined };
-  if (!admissionStarted.ok) {
-    // Creation is durable. Do not abandon it because admission startup was ambiguous.
-    wakeScheduler(ports.scheduler);
-  }
   return blockUntilRequestTerminal(
     ports,
     context,

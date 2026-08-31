@@ -1,5 +1,7 @@
 import type { WorkspaceKey } from "../domain/workspaces";
 import type { CommunicatorStartupRecoveryLifecycle } from "./communicator-startup-lifecycle";
+import type { ParticipantContextPersistencePort } from "./context-admission-ports";
+import type { ContextAdmissionNotificationPort } from "./context-admission-runtime";
 import {
   isOpenCode118SessionDeletedEvent,
   parseOpenCode118SessionDeletedEvent,
@@ -13,6 +15,7 @@ import {
   ParticipantDeletionReconciliationFault,
   reconcileParticipantDeletions,
 } from "./participant-deletion-reconciliation";
+import type { ParticipantOperationPort } from "./participant-operation-gate";
 import { RequestDeadlineSchedulerFault } from "./request-deadline-scheduler";
 import type { CommittedRequestNotificationPort } from "./request-notification-port";
 
@@ -38,6 +41,9 @@ export interface ParticipantDeletionLifecycleOptions {
   readonly requests: ParticipantDeletionPersistencePort;
   readonly presence: NativeParticipantPresencePort;
   readonly notifications: CommittedRequestNotificationPort;
+  readonly contexts?: ParticipantContextPersistencePort;
+  readonly contextNotifications?: ContextAdmissionNotificationPort;
+  readonly operations: ParticipantOperationPort;
   readonly lifecycle: CommunicatorStartupRecoveryLifecycle;
   readonly workspaceKey: WorkspaceKey;
   readonly directory: string;
@@ -134,12 +140,11 @@ export class ParticipantDeletionLifecycle {
     deletedSessionId: import("../domain/sessions").SessionId,
   ): Promise<boolean> {
     try {
-      return await applyParticipantDeletionHint(
-        this.options,
-        deletedSessionId,
-        this.effects.signal,
-      );
+      const apply = () =>
+        applyParticipantDeletionHint(this.options, deletedSessionId, this.effects.signal);
+      return await this.options.operations.run([deletedSessionId], this.effects.signal, apply);
     } catch (cause: unknown) {
+      if (this.effects.signal.aborted) return false;
       const code =
         cause instanceof ParticipantDeletionReconciliationFault ? cause.code : "storage_failure";
       this.fail(code);
@@ -173,6 +178,7 @@ export class ParticipantDeletionLifecycle {
     try {
       await reconcileParticipantDeletions(this.options, this.effects.signal);
     } catch (cause: unknown) {
+      if (this.effects.signal.aborted) return;
       const code =
         cause instanceof ParticipantDeletionReconciliationFault ? cause.code : "storage_failure";
       this.fail(code);

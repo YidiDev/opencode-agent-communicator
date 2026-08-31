@@ -1,8 +1,10 @@
+import type { ContextTargetEligibilityPort } from "../../application/inject-communicator-context";
 import type {
   NativeParticipantPresencePort,
   ParticipantPresence,
 } from "../../application/participant-deletion-ports";
 import type { SessionId } from "../../domain/sessions";
+import type { WorkspaceKey } from "../../domain/workspaces";
 
 interface DirectSessionSurface {
   get(
@@ -98,6 +100,38 @@ export function classifyOpenCode118DirectSessionPresence(
   return isExactCorrelatedNotFound(response, expectedSessionId) ? "absent" : "unknown";
 }
 
+export function classifyOpenCode118ContextTargetEligibility(
+  response: unknown,
+  expected: {
+    readonly sessionId: SessionId;
+    readonly projectId: string;
+    readonly directory: string;
+  },
+): boolean {
+  const outer = snapshotRecord(response, 3, envelopeKeys);
+  const envelope = snapshotRecord(outer?.data, 1, new Set(["data"]));
+  const session = snapshotRecord(envelope?.data, 32);
+  const time = snapshotRecord(session?.time, 4);
+  const location = snapshotRecord(session?.location, 8);
+  const directories = [session?.directory, location?.directory].filter(
+    (directory) => directory !== undefined,
+  );
+  return (
+    genuineResponseStatus(outer?.response) === 200 &&
+    session?.id === expected.sessionId &&
+    session.projectID === expected.projectId &&
+    directories.length > 0 &&
+    directories.every((directory) => directory === expected.directory) &&
+    !Object.hasOwn(session, "parentID") &&
+    !!time &&
+    Number.isSafeInteger(time.created) &&
+    (time.created as number) >= 0 &&
+    Number.isSafeInteger(time.updated) &&
+    (time.updated as number) >= (time.created as number) &&
+    !Object.hasOwn(time, "archived")
+  );
+}
+
 export function createDirectParticipantPresencePort(
   surface: DirectSessionSurface,
 ): NativeParticipantPresencePort {
@@ -114,6 +148,36 @@ export function createDirectParticipantPresencePort(
           : classifyOpenCode118DirectSessionPresence(response, sessionId);
       } catch {
         return "unknown";
+      }
+    },
+  });
+}
+
+export function createDirectContextTargetEligibilityPort(
+  surface: DirectSessionSurface,
+  binding: {
+    readonly workspaceKey: WorkspaceKey;
+    readonly projectId: string;
+    readonly directory: string;
+  },
+): ContextTargetEligibilityPort {
+  return Object.freeze({
+    async isEligibleContextTarget(
+      input: Parameters<ContextTargetEligibilityPort["isEligibleContextTarget"]>[0],
+    ): Promise<boolean> {
+      if (input.abort.aborted || input.workspaceKey !== binding.workspaceKey) return false;
+      try {
+        const response = await surface.get({ sessionID: input.sessionId }, { signal: input.abort });
+        return (
+          !input.abort.aborted &&
+          classifyOpenCode118ContextTargetEligibility(response, {
+            sessionId: input.sessionId,
+            projectId: binding.projectId,
+            directory: binding.directory,
+          })
+        );
+      } catch {
+        return false;
       }
     },
   });

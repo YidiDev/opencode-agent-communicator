@@ -24,6 +24,18 @@ export function assertCommunicatorReady(
   }
 }
 
+export function communicatorIsReady(
+  port: CommunicatorReadinessPort,
+  expectedFencingToken?: FencingToken,
+): boolean {
+  try {
+    assertCommunicatorReady(port, expectedFencingToken);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Returns only the epoch which passed startup recovery; this deliberately never reacquires. */
 export function communicatorLifecycleFencingToken(port: CommunicatorReadinessPort): FencingToken {
   const token = validateFencingToken(port.fencingToken);

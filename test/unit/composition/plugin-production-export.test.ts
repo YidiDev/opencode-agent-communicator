@@ -64,6 +64,7 @@ function nativeFixture(): OpenCodeNativeAdapter {
     updateSessionTitle: async () => "unknown",
     admitInitialMessage: async () => "unknown",
     readParticipantPresence: async () => "present",
+    isEligibleContextTarget: async () => true,
   };
 }
 
@@ -98,6 +99,7 @@ function injectedDependencies(
         stop: () => order.push("runtime-stop"),
       }) as never,
     recoverStartup: async () => ({ ok: true, value: lifecycle(order) as never }),
+    recoverContextStartup: async () => undefined,
   };
 }
 

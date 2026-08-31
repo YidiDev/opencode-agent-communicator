@@ -130,7 +130,12 @@ export class RequestParticipantQueryRepository {
         : this.queryList(
             "requests_participant_inbox",
             "target_session_id",
-            "resolution_state = 'pending'",
+            `resolution_state = 'pending' AND (
+              delivery_transport = 'native' OR EXISTS (
+                SELECT 1 FROM context_admissions
+                WHERE id = requests.id AND state = 'context_admitted'
+              )
+            )`,
             "target",
             caller,
             input.boundary,

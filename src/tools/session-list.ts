@@ -20,7 +20,7 @@ export function createSessionListTool(
 ): InternalToolContract<SessionListToolArguments> {
   return {
     description:
-      "List current visible root sessions. Queue with session_send, inspect status here until busy or retry, then ask or wait.",
+      "List current visible root sessions. Busy or retry accepts default context delivery; idle requires explicit session_send user delivery to wake. Confirm busy or retry, then ask or wait.",
     args: sessionListArgumentsSchema,
     async execute(arguments_, context) {
       const deadlineMs = invocationDeadlineMs?.();

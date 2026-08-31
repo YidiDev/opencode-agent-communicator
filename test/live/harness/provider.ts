@@ -19,6 +19,7 @@ export interface ProviderRequestGate {
   readonly sequence: number;
   readonly body: unknown;
   release(text?: string): void;
+  releaseTool(name: string, arguments_?: string): void;
   waitForCancellation(): Promise<void>;
 }
 
@@ -121,7 +122,7 @@ function deliveryToolResponse(serialized: string): Response | undefined {
   if (send) {
     return toolResponse(
       "session_send",
-      JSON.stringify({ session_id: send, content: "packed live delivery" }),
+      JSON.stringify({ session_id: send, content: "packed live delivery", delivery: "user" }),
     );
   }
   const delivery = serialized.match(/production-delivery-get:(dlv_[a-z0-9]+)/)?.[1];
@@ -131,6 +132,17 @@ function deliveryToolResponse(serialized: string): Response | undefined {
   return serialized.includes("production-request-list")
     ? toolResponse("session_request_list")
     : undefined;
+}
+
+function productionContextResponse(serialized: string): Response | undefined {
+  const target = serialized.match(/production-context-send:(ses_[A-Za-z0-9]+)/)?.[1];
+  if (target) {
+    return toolResponse(
+      "session_send",
+      JSON.stringify({ session_id: target, content: "packed private provider context" }),
+    );
+  }
+  return undefined;
 }
 
 function productionToolResponse(serialized: string): Response | undefined {
@@ -263,7 +275,7 @@ function productionToolResponse(serialized: string): Response | undefined {
   if (serialized.includes("production-export-unavailable")) {
     return toolResponse("session_export", JSON.stringify({ destination: "live.json" }));
   }
-  return undefined;
+  return productionContextResponse(serialized);
 }
 
 function communicatorEnvelope(value: unknown): Record<string, unknown> | undefined {
@@ -302,12 +314,7 @@ function productionRequestResponse(body: unknown): Response | undefined {
   if (!envelope || typeof envelope.request_id !== "string") return undefined;
   const serialized = JSON.stringify(body);
   if (envelope.operation === "ask") {
-    if (
-      !serialized.includes("production-process-ask-request") ||
-      !advertisesTool(body, "session_respond")
-    ) {
-      return textResponse();
-    }
+    if (!advertisesTool(body, "session_respond")) return textResponse();
     return toolResponse(
       "session_respond",
       JSON.stringify({ request_id: envelope.request_id, answers: [["yes"]] }),
@@ -348,13 +355,51 @@ function shouldGateRequest(
   if (options.gateText === undefined || !isRecord(body) || !Array.isArray(body.messages)) {
     return false;
   }
-  const message = body.messages.at(-1);
   const markers = typeof options.gateText === "string" ? [options.gateText] : options.gateText;
+  const serialized = JSON.stringify(body);
+  if (
+    serialized.includes("production-target-active-context-send") &&
+    serialized.includes("live context noop complete")
+  ) {
+    return true;
+  }
+  if (
+    markers.includes("packed private provider context") &&
+    serialized.includes("packed private provider context") &&
+    serialized.includes("production-target-active-context-send")
+  ) {
+    return true;
+  }
+  if (
+    markers.includes("packed private request context") &&
+    serialized.includes("packed private request context") &&
+    serialized.includes("production-target-active-context-request")
+  ) {
+    return true;
+  }
+  if (
+    (serialized.includes("production-target-active-ask") &&
+      serialized.includes('\\"operation\\":\\"ask\\"')) ||
+    (serialized.includes("production-target-active-wait") &&
+      serialized.includes('\\"operation\\":\\"wait\\"'))
+  ) {
+    return true;
+  }
+  if (
+    (serialized.includes("production-target-active-ask") ||
+      serialized.includes("production-target-active-wait")) &&
+    lastMessageSerialized(body).includes("live context hold complete")
+  ) {
+    return true;
+  }
+  const message = body.messages.at(-1);
   return isRecord(message) && markers.some((marker) => String(message.content).includes(marker));
 }
 
 function completedProviderResponse(body: unknown): Response {
   if (hasToolResult(body)) return textResponse();
+  const request = productionRequestResponse(body);
+  if (request) return request;
   const serialized = lastMessageSerialized(body);
   if (serialized.includes("packed session read first progress")) {
     return textResponse("packed first progress complete");
@@ -362,7 +407,7 @@ function completedProviderResponse(body: unknown): Response {
   if (serialized.includes("packed session read second progress")) {
     return textResponse("packed second progress complete");
   }
-  return productionRequestResponse(body) ?? requestedToolResponse(serialized);
+  return requestedToolResponse(serialized);
 }
 
 function withDeadline<T>(promise: Promise<T>, label: string): Promise<T> {
@@ -378,7 +423,31 @@ function withDeadline<T>(promise: Promise<T>, label: string): Promise<T> {
   });
 }
 
-function gatedTextResponse(release: Promise<string>, cancelled: Deferred<void>): Response {
+type ProviderGateRelease =
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "tool"; readonly name: string; readonly arguments: string };
+
+function gatedReleaseChunks(release: ProviderGateRelease): readonly unknown[] {
+  if (release.kind === "text") return [chunk({ content: release.text }), chunk({}, "stop")];
+  return [
+    chunk({
+      tool_calls: [
+        {
+          index: 0,
+          id: diagnosticProviderCallID,
+          type: "function",
+          function: { name: release.name, arguments: release.arguments },
+        },
+      ],
+    }),
+    chunk({}, "tool_calls"),
+  ];
+}
+
+function gatedTextResponse(
+  release: Promise<ProviderGateRelease>,
+  cancelled: Deferred<void>,
+): Response {
   const encoder = new TextEncoder();
   return new Response(
     new ReadableStream({
@@ -386,12 +455,11 @@ function gatedTextResponse(release: Promise<string>, cancelled: Deferred<void>):
         controller.enqueue(
           encoder.encode(`data: ${JSON.stringify(chunk({ role: "assistant" }))}\n\n`),
         );
-        void release.then((text) => {
+        void release.then((result) => {
           try {
-            controller.enqueue(
-              encoder.encode(`data: ${JSON.stringify(chunk({ content: text }))}\n\n`),
-            );
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk({}, "stop"))}\n\n`));
+            for (const item of gatedReleaseChunks(result)) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(item)}\n\n`));
+            }
             controller.enqueue(encoder.encode("data: [DONE]\n\n"));
             controller.close();
           } catch {
@@ -437,14 +505,17 @@ export function launchDeterministicProvider(
         );
       }
       if (shouldGateRequest(options, body)) {
-        const release = deferred<string>();
+        const release = deferred<ProviderGateRelease>();
         const cancelled = deferred<void>();
         const sequence = requests.length;
         gates.push({
           sequence,
           body,
           release(text = `gate-${sequence}-complete`): void {
-            release.resolve(text);
+            release.resolve({ kind: "text", text });
+          },
+          releaseTool(name, arguments_ = "{}"): void {
+            release.resolve({ kind: "tool", name, arguments: arguments_ });
           },
           waitForCancellation(): Promise<void> {
             return withDeadline(cancelled.promise, `provider request ${sequence} cancellation`);

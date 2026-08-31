@@ -1,4 +1,5 @@
 import type { LinuxBunSqliteStore } from "../adapters/store/sqlite-store";
+import type { ContextAdmissionRuntime } from "../application/context-admission-runtime";
 import type { ParticipantDeletionLifecycle } from "../application/participant-deletion-lifecycle";
 import type { ParticipantOperationGate } from "../application/participant-operation-gate";
 import type { ParticipantStopLifecycle } from "../application/participant-stop-lifecycle";
@@ -12,6 +13,7 @@ export function createCompositionDisposer(input: {
   readonly participantStop: () => ParticipantStopLifecycle | undefined;
   readonly participantOperations: () => ParticipantOperationGate | undefined;
   readonly runtime: () => RequestRuntime | undefined;
+  readonly contextRuntime: () => ContextAdmissionRuntime | undefined;
   readonly invocations: ActiveInvocationRegistry;
   readonly exporterDrain: () => (() => Promise<void>) | undefined;
   readonly exporterDispose: () => (() => void) | undefined;
@@ -34,6 +36,7 @@ export function createCompositionDisposer(input: {
       await capture(() => input.participantStop()?.dispose());
       await capture(() => input.deletion()?.dispose());
       await capture(() => lifecycle?.stop("shutdown") ?? input.runtime()?.stop("shutdown"));
+      await capture(() => input.contextRuntime()?.stop("shutdown"));
       await capture(() => input.advisoryLockDispose()?.());
       await capture(() => input.invocations.shutdown());
       await capture(() => input.participantOperations()?.close());

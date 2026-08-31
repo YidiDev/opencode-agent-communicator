@@ -34,7 +34,9 @@ const resolutionTransitions: Readonly<
 
 const deliveryTransitions: Readonly<Record<RequestDeliveryState, readonly RequestDeliveryState[]>> =
   {
-    prepared: ["submitting"],
+    prepared: ["awaiting_context", "submitting"],
+    awaiting_context: ["context_admitted", "delivery_failed"],
+    context_admitted: [],
     submitting: ["delivery_unknown", "admitted", "promoted", "delivery_failed"],
     delivery_unknown: ["admitted", "promoted", "delivery_failed"],
     admitted: ["promoted"],
@@ -122,8 +124,9 @@ function latestDeliveryTransitionAtMs(metadata: RequestMetadata): number {
   // transitions and obscured that invariant.
   const transition = metadata as Extract<
     RequestMetadata,
-    { readonly deliveryState: "submitting" | "delivery_unknown" }
+    { readonly deliveryState: "awaiting_context" | "submitting" | "delivery_unknown" }
   >;
+  if (transition.deliveryState === "awaiting_context") return transition.awaitingContextAtMs;
   return transition.deliveryState === "delivery_unknown"
     ? transition.deliveryUnknownAtMs
     : transition.submittedAtMs;

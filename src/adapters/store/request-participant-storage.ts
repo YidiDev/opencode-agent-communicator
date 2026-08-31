@@ -14,7 +14,14 @@ export function authorizeParticipant(
     .query<{ readonly participantRole: unknown }, [string, string, string, string]>(
       `SELECT CASE WHEN source_session_id = ?3 THEN 'source' ELSE 'target' END AS participantRole
        FROM requests WHERE workspace_key = ?1 AND id = ?2
-         AND (source_session_id = ?3 OR target_session_id = ?4)`,
+          AND (source_session_id = ?3 OR (
+            target_session_id = ?4 AND (
+              delivery_transport = 'native' OR EXISTS (
+                SELECT 1 FROM context_admissions
+                WHERE id = requests.id AND state = 'context_admitted'
+              )
+            )
+          ))`,
     )
     .get(workspace, requestId, caller, caller);
   if (!row) return undefined;

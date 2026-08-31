@@ -12,6 +12,7 @@ import { validateFencingToken } from "../../domain/ownership";
 import type { PendingRequestMetadata, RequestMetadata } from "../../domain/request-types";
 import { submittingRequestsPerWorkspaceHardCeiling } from "../../domain/safety-ceilings";
 import { validateWorkspaceKey } from "../../domain/workspaces";
+import type { ContextAdmissionRepository } from "./context-admission-repository";
 import type { OwnershipRepository } from "./ownership-repository";
 import { RequestExpiryRepository } from "./request-expiry-repository";
 import {
@@ -47,9 +48,10 @@ export class RequestRepository {
   constructor(
     private readonly context: StoreContext,
     private readonly ownership: OwnershipRepository,
+    contexts?: ContextAdmissionRepository,
   ) {
     this.expiry = new RequestExpiryRepository(context);
-    this.preparation = new RequestPreparationRepository(context, ownership);
+    this.preparation = new RequestPreparationRepository(context, ownership, contexts);
   }
 
   createPrepared(input: PrepareRequestInput): RequestStoreResult {

@@ -63,9 +63,13 @@ describe("immediate request tool coverage", () => {
       {
         readiness: { ...setup.ports.readiness, fencingToken: setup.token },
         membership: setup.ports.membership,
-        requests: setup.store,
+        requests: setup.ports.requests,
         scheduler: setup.ports.scheduler,
         nativeQueue: { queueMessage: async () => ({ kind: "unknown" }) },
+        contexts: setup.store,
+        contextRuntime: setup.contextRuntime,
+        activity: setup.ports.activity,
+        participantOperations: setup.ports.participantOperations,
         ownership: setup.store,
         clock: setup.ports.clock,
         ids: setup.ports.ids,
@@ -93,7 +97,10 @@ describe("immediate request tool coverage", () => {
         { sessionID: setup.source, abort: signal() },
       ),
     );
-    expect(created).toMatchObject({ ok: true, value: { kind: "ask" } });
+    expect(created).toMatchObject({
+      ok: true,
+      value: { kind: "ask", delivery_mode: "context", delivery_state: "context_admitted" },
+    });
 
     const invalidTarget = JSON.parse(
       await tool.execute(

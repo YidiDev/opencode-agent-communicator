@@ -8,6 +8,7 @@ import type {
 import type { StartOperation } from "../domain/session-start";
 import type { ActivityStatus, SessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
+import type { PrepareRequestContextAdmissionInput } from "./context-admission-ports";
 import type {
   ClockPort,
   NativeQueueAdmissionPort,
@@ -113,6 +114,7 @@ export interface PrepareRequestInput {
   readonly request: PendingRequestMetadata & { readonly deliveryState: "prepared" };
   readonly payloadJson: string;
   readonly envelopeJson: string;
+  readonly contextAdmission?: PrepareRequestContextAdmissionInput;
 }
 
 export interface RequestTransitionInput {

@@ -9,6 +9,13 @@ export interface RequestRow {
   readonly targetSessionId: unknown;
   readonly nativeMessageId: unknown;
   readonly deliveryMode?: unknown;
+  readonly deliveryTransport?: unknown;
+  readonly contextState?: unknown;
+  readonly contextAwaitingAtMs?: unknown;
+  readonly contextAdmittedAtMs?: unknown;
+  readonly contextFailedAtMs?: unknown;
+  readonly contextCancelledAtMs?: unknown;
+  readonly contextUpdatedAtMs?: unknown;
   readonly linkedStartOperationId?: unknown;
   readonly kind: unknown;
   readonly resolutionState: unknown;
@@ -40,6 +47,13 @@ export const requestMetadataColumns = `
 id, workspace_key AS workspaceKey, source_session_id AS sourceSessionId,
 target_session_id AS targetSessionId, native_message_id AS nativeMessageId, kind,
 delivery_mode AS deliveryMode, linked_start_operation_id AS linkedStartOperationId,
+delivery_transport AS deliveryTransport,
+(SELECT state FROM context_admissions WHERE id = requests.id) AS contextState,
+(SELECT awaiting_context_at_ms FROM context_admissions WHERE id = requests.id) AS contextAwaitingAtMs,
+(SELECT context_admitted_at_ms FROM context_admissions WHERE id = requests.id) AS contextAdmittedAtMs,
+(SELECT failed_at_ms FROM context_admissions WHERE id = requests.id) AS contextFailedAtMs,
+(SELECT cancelled_at_ms FROM context_admissions WHERE id = requests.id) AS contextCancelledAtMs,
+(SELECT updated_at_ms FROM context_admissions WHERE id = requests.id) AS contextUpdatedAtMs,
 resolution_state AS resolutionState, delivery_state AS deliveryState, result_state AS resultState,
 payload_byte_length AS payloadByteLength, payload_sha256 AS payloadSha256,
 created_at_ms AS createdAtMs, updated_at_ms AS updatedAtMs, deadline_at_ms AS deadlineAtMs,
@@ -68,29 +82,86 @@ const optionalMappings = [
   ["acknowledgedAtMs", "acknowledgedAtMs"],
 ] as const;
 
+const contextCommonOptionalMappings = [
+  ["payloadSha256", "payloadSha256"],
+  ["resolvedAtMs", "resolvedAtMs"],
+  ["resultByteLength", "resultByteLength"],
+  ["resultSha256", "resultSha256"],
+  ["resultAvailableAtMs", "resultAvailableAtMs"],
+  ["resultExpiresAtMs", "resultExpiresAtMs"],
+  ["resultExpiredAtMs", "resultExpiredAtMs"],
+  ["acknowledgedAtMs", "acknowledgedAtMs"],
+] as const;
+
 function invalidRow(): StoreIntegrityError {
   return new StoreIntegrityError("Stored request metadata failed strict domain validation.");
 }
 
-export function hydrateRequest(row: RequestRow): RequestMetadata {
-  const candidate: Record<string, unknown> = {
+function projectedDeliveryState(row: RequestRow, contextDelivery: boolean): unknown {
+  let deliveryState = row.deliveryState;
+  if (contextDelivery) {
+    if (row.contextState === "awaiting_context") deliveryState = "awaiting_context";
+    else if (row.contextState === "context_admitted") deliveryState = "context_admitted";
+    else if (row.contextState === "failed") deliveryState = "delivery_failed";
+    else if (row.contextState === "cancelled") deliveryState = "delivery_failed";
+    else if (row.contextState !== "prepared") throw invalidRow();
+  } else if (row.contextState !== null && row.contextState !== undefined) {
+    throw invalidRow();
+  }
+  return deliveryState;
+}
+
+function baseCandidate(
+  row: RequestRow,
+  contextDelivery: boolean,
+  deliveryState: unknown,
+): Record<string, unknown> {
+  return {
     id: row.id,
     workspaceKey: row.workspaceKey,
     sourceSessionId: row.sourceSessionId,
     targetSessionId: row.targetSessionId,
     nativeMessageId: row.nativeMessageId,
-    deliveryMode: row.deliveryMode ?? "steer",
+    deliveryMode: contextDelivery ? "context" : (row.deliveryMode ?? "steer"),
     kind: row.kind,
     resolutionState: row.resolutionState,
-    deliveryState: row.deliveryState,
+    deliveryState,
     resultState: row.resultState,
     payloadByteLength: row.payloadByteLength,
     createdAtMs: row.createdAtMs,
-    updatedAtMs: row.updatedAtMs,
+    updatedAtMs:
+      contextDelivery && typeof row.contextUpdatedAtMs === "number"
+        ? Math.max(row.updatedAtMs as number, row.contextUpdatedAtMs)
+        : row.updatedAtMs,
     deadlineAtMs: row.deadlineAtMs,
   };
+}
+
+function addDeliveryFields(
+  candidate: Record<string, unknown>,
+  row: RequestRow,
+  contextDelivery: boolean,
+): void {
   if (row.linkedStartOperationId !== null && row.linkedStartOperationId !== undefined)
     candidate.linkedStartOperationId = row.linkedStartOperationId;
+  if (contextDelivery) {
+    addContextDeliveryFields(candidate, row);
+    return;
+  }
+  addNativeDeliveryFields(candidate, row);
+}
+
+function addContextDeliveryFields(candidate: Record<string, unknown>, row: RequestRow): void {
+  for (const [property, rowProperty] of contextCommonOptionalMappings) {
+    if (row[rowProperty] !== null) candidate[property] = row[rowProperty];
+  }
+  if (row.contextAwaitingAtMs !== null) candidate.awaitingContextAtMs = row.contextAwaitingAtMs;
+  if (row.contextAdmittedAtMs !== null) candidate.contextAdmittedAtMs = row.contextAdmittedAtMs;
+  if (row.contextFailedAtMs !== null) candidate.deliveryFailedAtMs = row.contextFailedAtMs;
+  if (row.contextCancelledAtMs !== null) candidate.deliveryFailedAtMs = row.contextCancelledAtMs;
+}
+
+function addNativeDeliveryFields(candidate: Record<string, unknown>, row: RequestRow): void {
   for (const [property, rowProperty] of optionalMappings) {
     if (row[rowProperty] !== null) candidate[property] = row[rowProperty];
   }
@@ -104,6 +175,16 @@ export function hydrateRequest(row: RequestRow): RequestMetadata {
     if (row.deliveryState === "promoted") evidence.promotedSeq = row.promotedSeq;
     candidate.admissionEvidence = evidence;
   }
+}
+
+export function hydrateRequest(row: RequestRow): RequestMetadata {
+  const contextDelivery = row.deliveryTransport === "context";
+  const candidate = baseCandidate(
+    row,
+    contextDelivery,
+    projectedDeliveryState(row, contextDelivery),
+  );
+  addDeliveryFields(candidate, row, contextDelivery);
   if (!isCoherentRequestMetadata(candidate)) throw invalidRow();
   return candidate;
 }

@@ -1,6 +1,8 @@
+import { isCoherentContextAdmission } from "../domain/context-admissions";
 import { isCoherentRequestMetadata } from "../domain/request-metadata";
 import type { RequestMetadata } from "../domain/request-types";
 import {
+  deliveryRecordsPerWorkspaceHardCeiling,
   participantDeletionCandidatesHardCeiling,
   pendingRequestsPerWorkspaceHardCeiling,
 } from "../domain/safety-ceilings";
@@ -8,10 +10,16 @@ import { type SessionId, validateSessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
 import { runUntilAborted } from "./abortable-operation";
 import type { CommunicatorStartupRecoveryLifecycle } from "./communicator-startup-lifecycle";
+import type { ParticipantContextPersistencePort } from "./context-admission-ports";
+import {
+  type ContextAdmissionNotificationPort,
+  notifyContextAdmissionSafely,
+} from "./context-admission-runtime";
 import type {
   NativeParticipantPresencePort,
   ParticipantDeletionPersistencePort,
 } from "./participant-deletion-ports";
+import type { ParticipantOperationPort } from "./participant-operation-gate";
 import type { CommittedRequestNotificationPort } from "./request-notification-port";
 import {
   createTerminalNotificationEvent,
@@ -23,6 +31,9 @@ export interface ParticipantDeletionReconciliationOptions {
   readonly requests: ParticipantDeletionPersistencePort;
   readonly presence: NativeParticipantPresencePort;
   readonly notifications: CommittedRequestNotificationPort;
+  readonly contexts?: ParticipantContextPersistencePort;
+  readonly contextNotifications?: ContextAdmissionNotificationPort;
+  readonly operations?: ParticipantOperationPort;
   readonly lifecycle: Pick<CommunicatorStartupRecoveryLifecycle, "fencingToken">;
   readonly workspaceKey: WorkspaceKey;
 }
@@ -40,6 +51,66 @@ export class ParticipantDeletionReconciliationFault extends Error {
     cause?: unknown,
   ) {
     super(`Participant deletion reconciliation failed: ${code}.`, { cause });
+  }
+}
+
+async function failDeletedParticipantContext(
+  options: Omit<ParticipantDeletionReconciliationOptions, "presence">,
+  deletedSessionId: SessionId,
+  terminalParticipantSessionIds: readonly SessionId[] = [deletedSessionId],
+): Promise<void> {
+  if (!options.contexts || !options.contextNotifications) return;
+  const seen = new Set<string>();
+  for (let settled = 0; settled < deliveryRecordsPerWorkspaceHardCeiling; settled += 100) {
+    const admissions = await options.contexts.settlePendingContextForParticipant({
+      fencingToken: options.lifecycle.fencingToken,
+      workspaceKey: options.workspaceKey,
+      participantSessionId: deletedSessionId,
+      terminalParticipantSessionIds,
+      limit: 100,
+    });
+    const admissionValues = snapshotDenseArray(admissions, 100);
+    if (!admissionValues)
+      throw new ParticipantDeletionReconciliationFault("port_contract_violation");
+    const terminal = new Set(terminalParticipantSessionIds);
+    for (const admission of admissionValues) {
+      if (!isCoherentContextAdmission(admission))
+        throw new ParticipantDeletionReconciliationFault("port_contract_violation");
+      const expected = terminal.has(admission.targetSessionId) ? "failed" : "cancelled";
+      if (
+        admission.workspaceKey !== options.workspaceKey ||
+        (admission.targetSessionId !== deletedSessionId &&
+          admission.sourceSessionId !== deletedSessionId) ||
+        admission.state !== expected ||
+        seen.has(admission.id)
+      ) {
+        throw new ParticipantDeletionReconciliationFault("port_contract_violation");
+      }
+      seen.add(admission.id);
+      notifyContextAdmissionSafely(options.contextNotifications, {
+        id: admission.id,
+        kind: admission.kind,
+        state: admission.state,
+      });
+    }
+    if (admissionValues.length < 100) return;
+  }
+}
+
+async function settleAbsentParticipantContexts(
+  options: ParticipantDeletionReconciliationOptions,
+  absentSessionIds: readonly SessionId[],
+  abort: AbortSignal,
+): Promise<void> {
+  const terminalIds = Object.freeze([...absentSessionIds]);
+  for (const sessionId of absentSessionIds) {
+    if (abort.aborted) return;
+    const settle = () => failDeletedParticipantContext(options, sessionId, terminalIds);
+    if (options.operations) {
+      await options.operations.run([sessionId], abort, settle);
+    } else {
+      await settle();
+    }
   }
 }
 
@@ -105,6 +176,18 @@ export async function applyParticipantDeletion(
         },
       ),
     );
+  if (options.contextNotifications) {
+    for (const request of committed) {
+      if ((request.deliveryMode ?? "steer") === "context") {
+        notifyContextAdmissionSafely(options.contextNotifications, {
+          id: request.id,
+          kind: "request",
+          state: "cancelled",
+        });
+      }
+    }
+  }
+  await failDeletedParticipantContext(options, deletedSessionId);
   return committed.length;
 }
 
@@ -214,6 +297,7 @@ export async function reconcileParticipantDeletions(
         },
       ),
     );
+  await settleAbsentParticipantContexts(options, absentSessionIds, abort);
   return Object.freeze({
     candidates: candidates.length,
     absent: absentSessionIds.length,

@@ -74,6 +74,7 @@ test("readiness blocks list and delivery query families before validation or eff
       listRecoverable: base.touch,
       getForParticipant: base.touch,
     },
+    contexts: { getContextAdmissionForParticipant: base.touch },
   } satisfies SessionDeliveryGetPorts;
   await expect(
     listVisibleRootSessions(listPorts, { workspaceKey: workspace.value, sourceSessionId: null }),

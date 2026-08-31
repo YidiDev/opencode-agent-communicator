@@ -6,13 +6,15 @@ export const submittingRequestsPerWorkspaceHardCeiling = 4_096;
 export const availableResultsPerWorkspaceHardCeiling = 4_096;
 export const managedSessionsPerWorkspaceHardCeiling = 1_024;
 export const activeAdvisoryLocksPerWorkspaceHardCeiling = 1_024;
-/** Distinct deletion candidates from two pending roles, available-result sources, and provenance. */
+/** Distinct deletion candidates from pending requests/context, available results, and provenance. */
 export const participantDeletionCandidatesHardCeiling =
   pendingRequestsPerWorkspaceHardCeiling * 2 +
+  deliveryRecordsPerWorkspaceHardCeiling * 2 +
   availableResultsPerWorkspaceHardCeiling +
   managedSessionsPerWorkspaceHardCeiling;
-/** Distinct source and target participants from pending blocking requests. */
-export const participantStopCandidatesHardCeiling = pendingRequestsPerWorkspaceHardCeiling * 2;
+/** Distinct source and target participants from pending blocking requests and context admissions. */
+export const participantStopCandidatesHardCeiling =
+  pendingRequestsPerWorkspaceHardCeiling * 2 + deliveryRecordsPerWorkspaceHardCeiling * 2;
 /** Ambiguous deterministic creates are isolated from the ordinary managed-session budget. */
 export const unresolvedStartProvenancePerWorkspaceHardCeiling = 128;
 export const startOperationsRecoveryHardCeiling = 1_024;

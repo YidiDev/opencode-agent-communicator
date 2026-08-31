@@ -75,6 +75,7 @@ function fixture(options: FixtureOptions = {}) {
       directory: "/workspace",
       serverUrl: new URL("http://127.0.0.1:4321/"),
       workspaceKey,
+      projectId: "project",
     },
     dependencies,
   );

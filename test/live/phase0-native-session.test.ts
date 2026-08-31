@@ -626,6 +626,7 @@ async function proveProductionAdapterParsingAndMergedActivity(fixture: LiveFixtu
     directory: fixture.isolation.project,
     serverUrl: new URL(fixture.baseUrl),
     workspaceKey: workspaceKey.value,
+    projectId: fixture.isolation.project,
   });
   const admission = await adapter.queueMessage({
     targetSessionId: validatedSessionID.value,

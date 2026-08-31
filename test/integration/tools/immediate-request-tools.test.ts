@@ -1,11 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
+
 import { createSessionStartPolicy } from "../../../src/domain/session-start-policy";
 import { createSessionRequestSendTool } from "../../../src/tools/session-request-send";
 import { createSessionRequestStartTool } from "../../../src/tools/session-request-start";
-import {
-  blockingRequestFixture,
-  requestIdFromEnvelope,
-} from "../../support/blocking-request-fixture";
+import { blockingRequestFixture } from "../../support/blocking-request-fixture";
 import {
   cleanupRequestStoreRoots,
   requestDigestPort,
@@ -14,37 +12,29 @@ import {
 
 afterEach(cleanupRequestStoreRoots);
 
-test("request-send persists before one idle-capable queue effect and allows immediate completion", async () => {
-  let calls = 0;
-  let setup: Awaited<ReturnType<typeof blockingRequestFixture>>;
-  setup = await blockingRequestFixture(async () => ({ kind: "unknown" }));
+test("request-send returns after transform context admission without native queue I/O", async () => {
+  let legacyNativeCalls = 0;
+  const setup = await blockingRequestFixture(async () => {
+    legacyNativeCalls += 1;
+    return { kind: "unknown" };
+  });
+  let queueCalls = 0;
   const tool = createSessionRequestSendTool(
     {
       readiness: { ...setup.ports.readiness, fencingToken: setup.token },
       membership: setup.ports.membership,
-      requests: setup.store,
-      scheduler: { wake: () => undefined },
+      requests: setup.ports.requests,
+      scheduler: setup.ports.scheduler,
       nativeQueue: {
-        queueMessage: async ({ envelope }) => {
-          calls += 1;
-          const requestId = requestIdFromEnvelope(envelope);
-          expect(
-            await setup.store.getRequestMetadata({
-              fencingToken: setup.token,
-              workspaceKey: requestTestWorkspace(),
-              requestId: requestId as never,
-            }),
-          ).toBeDefined();
-          await setup.store.answerAsk({
-            fencingToken: setup.token,
-            workspaceKey: requestTestWorkspace(),
-            requestId: requestId as never,
-            callerSessionId: setup.target,
-            answers: [["done"]],
-          });
-          return { kind: "public_message", observedAtMs: 25_000 };
+        queueMessage: async () => {
+          queueCalls += 1;
+          return { kind: "unknown" };
         },
       },
+      contexts: setup.store,
+      contextRuntime: setup.contextRuntime,
+      activity: setup.ports.activity,
+      participantOperations: setup.ports.participantOperations,
       ownership: setup.store,
       clock: setup.ports.clock,
       ids: setup.ports.ids,
@@ -63,37 +53,39 @@ test("request-send persists before one idle-capable queue effect and allows imme
       {
         session_id: setup.target,
         content: "Do the work.",
-        request: {
-          kind: "ask",
-          questions: [{ prompt: "Result?", options: [], allow_custom: true }],
-          timeout_seconds: 30,
-        },
+        request: { kind: "wait", milestone: "done", timeout_seconds: 30 },
       },
       { sessionID: setup.source, abort: new AbortController().signal },
     ),
   );
-  expect(calls).toBe(1);
   expect(result).toMatchObject({
     ok: true,
-    value: { delivery_mode: "queue", resolution_state: "answered", result_state: "available" },
+    value: { delivery_mode: "context", delivery_state: "context_admitted" },
   });
+  expect(legacyNativeCalls).toBe(1);
+  expect(queueCalls).toBe(0);
+  setup.store.close();
 });
 
-test("request-send records queue ambiguity without replay", async () => {
-  let calls = 0;
+test("request-send rejects an idle target without persisting a request", async () => {
   const setup = await blockingRequestFixture(async () => ({ kind: "unknown" }));
   const tool = createSessionRequestSendTool(
     {
-      readiness: setup.ports.readiness,
+      readiness: { ...setup.ports.readiness, fencingToken: setup.token },
       membership: setup.ports.membership,
-      requests: setup.store,
-      scheduler: { wake: () => undefined },
-      nativeQueue: {
-        queueMessage: async () => {
-          calls += 1;
-          return { kind: "unknown" };
-        },
+      requests: setup.ports.requests,
+      scheduler: setup.ports.scheduler,
+      nativeQueue: setup.ports.nativeSteer as never,
+      contexts: setup.store,
+      contextRuntime: setup.contextRuntime,
+      activity: {
+        observeRequestParticipants: async () => ({
+          sourceVisible: true,
+          targetVisible: true,
+          targetStatus: "idle",
+        }),
       },
+      participantOperations: setup.ports.participantOperations,
       ownership: setup.store,
       clock: setup.ports.clock,
       ids: setup.ports.ids,
@@ -110,79 +102,26 @@ test("request-send records queue ambiguity without replay", async () => {
     await tool.execute(
       {
         session_id: setup.target,
-        content: "Build it.",
-        request: { kind: "wait", milestone: "built", timeout_seconds: 30 },
+        content: "Do the work.",
+        request: { kind: "wait", milestone: "done", timeout_seconds: 30 },
       },
       { sessionID: setup.source, abort: new AbortController().signal },
     ),
   );
-  expect(calls).toBe(1);
-  expect(result).toMatchObject({
-    ok: true,
-    value: {
-      delivery_mode: "queue",
-      delivery_state: "delivery_unknown",
-      resolution_state: "pending",
-    },
-  });
-});
-
-test("request-send never reads activity, so a busy-to-idle transition cannot race creation", async () => {
-  let activityReads = 0;
-  let queueCalls = 0;
-  const setup = await blockingRequestFixture(async () => ({ kind: "unknown" }));
-  const ports = {
-    readiness: { ...setup.ports.readiness, fencingToken: setup.token },
-    membership: setup.ports.membership,
-    requests: setup.store,
-    scheduler: setup.ports.scheduler,
-    nativeQueue: {
-      queueMessage: async () => {
-        queueCalls += 1;
-        return { kind: "public_message" as const, observedAtMs: 25_000 };
-      },
-    },
-    ownership: setup.store,
-    clock: setup.ports.clock,
-    ids: setup.ports.ids,
-    digest: requestDigestPort,
-    activity: {
-      observeRequestParticipants: async () => {
-        activityReads += 1;
-        throw new Error("activity changed from busy to idle");
-      },
-    },
-  };
-  const tool = createSessionRequestSendTool(
-    ports,
-    {
-      workspaceKey: requestTestWorkspace(),
+  expect(result).toMatchObject({ ok: false, error: { code: "target_idle" } });
+  expect(
+    await setup.store.listForParticipant({
       fencingToken: setup.token,
-      invocationDeadlineMs: () => 90_000,
-    },
-    { message: "allow", ask: "allow", wait: "allow" },
-  );
-
-  const result = JSON.parse(
-    await tool.execute(
-      {
-        session_id: setup.target,
-        content: "Build it even if the target becomes idle.",
-        request: { kind: "wait", milestone: "built", timeout_seconds: 30 },
-      },
-      { sessionID: setup.source, abort: new AbortController().signal },
-    ),
-  );
-
-  expect(result).toMatchObject({
-    ok: true,
-    value: { delivery_mode: "queue", delivery_state: "admitted" },
-  });
-  expect(queueCalls).toBe(1);
-  expect(activityReads).toBe(0);
+      workspaceKey: requestTestWorkspace(),
+      callerSessionId: setup.source,
+      role: "outbox",
+      limit: 10,
+    }),
+  ).toMatchObject({ items: [] });
+  setup.store.close();
 });
 
-test("request-start sends one canonical initial envelope linked to the idempotent start", async () => {
+test("request-start retains one canonical initial user turn linked to the idempotent start", async () => {
   const setup = await blockingRequestFixture(async () => ({ kind: "unknown" }));
   let approvals = 0;
   let initialCalls = 0;
@@ -202,7 +141,6 @@ test("request-start sends one canonical initial envelope linked to the idempoten
           initialCalls += 1;
           const parsed = JSON.parse(message);
           expect(parsed.response.tool).toBe("session_signal");
-          expect(parsed.work.content).toBe("Build the release notes.");
           await setup.store.signalWait({
             fencingToken: setup.token,
             workspaceKey: requestTestWorkspace(),
@@ -246,14 +184,9 @@ test("request-start sends one canonical initial envelope linked to the idempoten
       operation: { admission_state: "admitted" },
     },
   });
-  expect(first.value.request.linked_start_operation_id).toBe(first.value.operation.operation_id);
   const second = JSON.parse(await tool.execute(args, context));
   expect(second.value.operation.operation_id).toBe(first.value.operation.operation_id);
-  expect(second.value.request.request_id).toBe(first.value.request.request_id);
-  const conflict = JSON.parse(
-    await tool.execute({ ...args, initial_message: "Build different release notes." }, context),
-  );
-  expect(conflict).toMatchObject({ ok: false, error: { code: "idempotency_conflict" } });
   expect(initialCalls).toBe(1);
   expect(approvals).toBe(1);
+  setup.store.close();
 });

@@ -31,8 +31,8 @@ export const expectedToolIds = Object.freeze([
 // This is SHA-256(npm-reported pack paths joined with LF), not a content digest. Any added, removed,
 // renamed, or reordered archive entry requires an explicit review and fingerprint update.
 export const expectedPackedPathPolicy = Object.freeze({
-  entryCount: 300,
-  sha256: "459ebf072f888e28b687434d8543ee92a72824337fec0d0cadb59027ba1e4b98",
+  entryCount: 311,
+  sha256: "5a29483551550189f69c80dcaedac453ba36c2a091cfe2efe62f78a8417dc439",
 });
 
 const forbiddenPathSegments = new Set([

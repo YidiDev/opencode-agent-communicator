@@ -84,6 +84,7 @@ export async function proveProjectedMessagePagination(input: {
   const adapter = createOpenCode118NativeAdapter({
     client: createLegacyOpencodeClient({ baseUrl: input.baseUrl, directory: input.project }),
     directory: input.project,
+    projectId: input.project,
     serverUrl: new URL(input.baseUrl),
     workspaceKey: workspace.value,
   });
