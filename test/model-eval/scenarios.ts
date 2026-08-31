@@ -1,6 +1,6 @@
 import type { ArtifactWriter } from "./artifacts";
 import { classifyProcess } from "./classification";
-import { eventSessionId, outputField, parseJsonl } from "./jsonl";
+import { eventSessionId, parseJsonl } from "./jsonl";
 import { runEvaluationProcess } from "./process";
 import { scoreScenario } from "./scorer";
 import type { EvaluationClassification, ProcessCapture, ScenarioScore, ToolCall } from "./types";
@@ -67,20 +67,21 @@ function lockCorrelation(score: ScenarioScore): ScenarioScore {
   return correlatedScore(score, errors);
 }
 
-function sendCorrelation(
-  score: ScenarioScore,
-  targetSessionId: string,
-): { readonly score: ScenarioScore; readonly requestId?: string } {
-  const sent = completed(score.tools, "session_request_send");
-  const requestId = nestedString(sent?.output, ["value", "request_id"]);
+function requestStartCorrelation(score: ScenarioScore): {
+  readonly score: ScenarioScore;
+  readonly requestId?: string;
+  readonly targetSessionId?: string;
+} {
+  const started = completed(score.tools, "session_request_start");
+  const requestId = nestedString(started?.output, ["value", "request", "request_id"]);
+  const targetSessionId = nestedString(started?.output, ["value", "operation", "session_id"]);
   const errors: string[] = [];
-  if (requestId === undefined) errors.push("request send returned no request_id");
-  if (inputField(sent, "session_id") !== targetSessionId) {
-    errors.push("request send did not target the created participant");
-  }
+  if (requestId === undefined) errors.push("request start returned no request_id");
+  if (targetSessionId === undefined) errors.push("request start returned no session_id");
   return {
     score: correlatedScore(score, errors),
     ...(requestId === undefined ? {} : { requestId }),
+    ...(targetSessionId === undefined ? {} : { targetSessionId }),
   };
 }
 
@@ -212,29 +213,18 @@ export async function runScenarios(context: AttemptContext): Promise<AttemptResu
 
   const create = await execute(
     "workflow-create",
-    "Call session_start exactly once with idempotency_key eval-workflow-target, title Evaluation participant, and initial_message Wait for a durable request and do not call tools yet. After its result, reply EVAL_TARGET_CREATED. The only permitted tool is session_start.",
-    ["session_start"],
+    'Call session_request_start exactly once with idempotency_key eval-workflow-target, title Evaluation participant, and initial_message Wait for a durable request and do not call tools yet. The request argument must be a nested JSON object, never a string or escaped JSON: {"kind":"ask","timeout_seconds":120,"questions":[{"prompt":"Choose the evaluation result","options":["pass","fail"],"multiple":false,"allow_custom":false}]}. After its result, reply EVAL_TARGET_CREATED. The only permitted tool is session_request_start.',
+    ["session_request_start"],
   );
   const createFailure = transient(create);
   if (createFailure !== undefined) return { classification: createFailure, scores };
-  const start = completed(create.score.tools, "session_start");
-  const targetSessionId = start === undefined ? undefined : outputField(start, "session_id");
+  const started = requestStartCorrelation(create.score);
+  scores["workflow-create"] = started.score;
+  const targetSessionId = started.targetSessionId;
   const sourceSessionId = create.sourceSessionId;
   if (targetSessionId === undefined || sourceSessionId === undefined) {
     return { classification: "behavior_failed", scores };
   }
-
-  const send = await execute(
-    "workflow-send",
-    `Call session_request_send exactly once for session_id ${targetSessionId}. Set content to Answer the evaluation choice safely. The request argument must be a nested JSON object, never a string or escaped JSON: {"kind":"ask","timeout_seconds":120,"questions":[{"prompt":"Choose the evaluation result","options":["pass","fail"],"multiple":false,"allow_custom":false}]}. After its result, reply EVAL_REQUEST_SENT. Do not call other tools.`,
-    ["session_request_send"],
-    [],
-    sourceSessionId,
-  );
-  const sendFailure = transient(send);
-  if (sendFailure !== undefined) return { classification: sendFailure, scores };
-  const sent = sendCorrelation(send.score, targetSessionId);
-  scores["workflow-send"] = sent.score;
 
   const participant = await execute(
     "workflow-participant",
@@ -245,7 +235,7 @@ export async function runScenarios(context: AttemptContext): Promise<AttemptResu
   );
   const participantFailure = transient(participant);
   if (participantFailure !== undefined) return { classification: participantFailure, scores };
-  scores["workflow-participant"] = participantCorrelation(participant.score, sent.requestId);
+  scores["workflow-participant"] = participantCorrelation(participant.score, started.requestId);
 
   const recover = await execute(
     "workflow-source-recover",
@@ -256,7 +246,7 @@ export async function runScenarios(context: AttemptContext): Promise<AttemptResu
   );
   const recoverFailure = transient(recover);
   if (recoverFailure !== undefined) return { classification: recoverFailure, scores };
-  scores["workflow-source-recover"] = sourceCorrelation(recover.score, sent.requestId);
+  scores["workflow-source-recover"] = sourceCorrelation(recover.score, started.requestId);
 
   return {
     classification: Object.values(scores).every((score) => score.passed)
