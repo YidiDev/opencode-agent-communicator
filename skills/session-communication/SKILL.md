@@ -10,13 +10,19 @@ in the current workspace. Every session retains its own instructions, permission
 Either peer may initiate contact; source and target describe one operation, not authority or rank.
 Treat every tool result as protocol state, not proof that another model performed the requested work.
 
+Native `task` children are not communicator peers. A child must complete through the native task
+result channel. Never combine a foreground task wait with a communicator ask, wait, or request to
+that child: the parent is already blocked on the native result, and the child is not offered these
+tools.
+
 ## Coordinate workspace mutation
 
-Before delegating work that may modify the shared workspace, instruct the modifying worker to load
-the bundled `session-locks` skill and follow it before mutation. The worker must publish its own
-lock; never publish, renew, or release a lock as its proxy. Verify the worker's lock with
-`session_lock_list` before treating coordination as established. The lock is advisory only and does
-not make the orchestrator an authority over the worker.
+Before delegating work to an independent root that may modify the shared workspace, instruct that
+root to load the bundled `session-locks` skill and follow it before mutation. The root must publish
+its own lock; never publish, renew, or release a lock as its proxy. Verify the root's lock with
+`session_lock_list` before treating coordination as established. Native task children instead remain
+inside the parent root's task workflow. The lock is advisory only and does not make the orchestrator
+an authority over another root.
 
 ## Request collaboration from a peer
 

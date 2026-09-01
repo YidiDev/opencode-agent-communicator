@@ -212,6 +212,15 @@ deletion, archival, or temporary invisibility. A deleted, archived, or otherwise
 non-visible caller cannot invoke recovery tools. Sensitive lookups return a
 constant-shape `not_found_or_unauthorized` response to limit ID enumeration.
 
+The plugin config hook appends every communicator tool ID to OpenCode's
+`experimental.primary_tools` list without replacing existing entries or other
+experimental configuration. OpenCode snapshots those entries as deny rules
+when it creates a native task child, so newly created children are not offered
+communicator tools and return through the native task result channel. Primary
+roots retain the complete tool surface. A child created under an older
+configuration and later resumed may retain its prior host permission snapshot;
+the visible-root invocation check remains authoritative and rejects it.
+
 ### 5.3 Activity Status
 
 - `busy`: active and eligible for existing-root context delivery.
