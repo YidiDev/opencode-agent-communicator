@@ -80,6 +80,14 @@ export class CommunicatorGeneration {
     return this.store.ownershipTakeoverDelayMs();
   }
 
+  shutdownUnpublished(): void {
+    try {
+      this.lifecycle.stop("shutdown", "contract_fault");
+    } finally {
+      this.quiesce();
+    }
+  }
+
   disposeResources(): Promise<void> {
     this.resourceDisposal ??= this.disposeResourcesOnce();
     return this.resourceDisposal;

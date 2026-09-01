@@ -7,7 +7,66 @@ import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 const workspace = validateWorkspaceKey("startup-diagnostic");
 if (!workspace.ok) throw new Error("Invalid workspace fixture.");
 
+const invalidStartupClocks: ReadonlyArray<readonly [string, () => number]> = [
+  [
+    "throws",
+    () => {
+      throw new Error("clock detail");
+    },
+  ],
+  ["is negative", () => -1],
+  ["is non-integer", () => 1.5],
+  ["is unsafe", () => Number.MAX_SAFE_INTEGER + 1],
+  ["overflows after addition", () => Number.MAX_SAFE_INTEGER],
+];
+
 describe("composition startup diagnostics", () => {
+  test.each(invalidStartupClocks)(
+    "rejects before host or persistent effects when the startup clock %s",
+    async (_name, clock) => {
+      let health = 0;
+      let compatibility = 0;
+      let native = 0;
+      let stores = 0;
+      const plugin = createCompositionFactory({
+        parseOptions: (value) => parseCommunicatorOptions(value, { HOME: "/home/operator" }),
+        deriveWorkspace: () => ({
+          workspaceKey: workspace.value,
+          projectId: "project",
+          directory: "/",
+          worktree: "/",
+        }),
+        generationClock: { nowMs: clock },
+        createHealth: () => {
+          health += 1;
+          return { readHealth: async () => ({}) };
+        },
+        checkCompatibility: async () => {
+          compatibility += 1;
+          return { ok: true, value: { version: "1.18.23" } };
+        },
+        createNative: () => {
+          native += 1;
+          return {} as never;
+        },
+        createStore: () => {
+          stores += 1;
+          return {} as never;
+        },
+      });
+
+      await expect(Reflect.apply(plugin, undefined, [{}, {}])).rejects.toThrow(
+        "Communicator startup timing is invalid.",
+      );
+      expect({ health, compatibility, native, stores }).toEqual({
+        health: 0,
+        compatibility: 0,
+        native: 0,
+        stores: 0,
+      });
+    },
+  );
+
   test("keeps generic startup ownership loss neutral and sanitized", async () => {
     let closes = 0;
     const plugin = createCompositionFactory({

@@ -16,7 +16,10 @@ import {
 import { RequestRuntime } from "../application/request-runtime";
 import { createChatMessagesTransformBookkeeping } from "./chat-messages-transform";
 import { createCommunicatorGeneration } from "./communicator-generation";
-import { assertGenerationStartupActive } from "./communicator-generation-errors";
+import {
+  assertGenerationStartupActive,
+  createCommunicatorStartupDeadline,
+} from "./communicator-generation-errors";
 import { CommunicatorGenerationManager } from "./communicator-generation-manager";
 import type { CompositionDependencies } from "./composition-dependencies";
 import { parseCommunicatorOptions } from "./config";
@@ -143,7 +146,10 @@ export function createCompositionFactory(
     const options = dependencies.parseOptions(rawOptions);
     const workspace = dependencies.deriveWorkspace(input);
     const startupAbort = new AbortController();
-    const startupDeadlineMs = dependencies.generationClock.nowMs() + options.startupDeadlineMs;
+    const startupDeadlineMs = createCommunicatorStartupDeadline(
+      () => dependencies.generationClock.nowMs(),
+      options.startupDeadlineMs,
+    );
     const compatible = await dependencies.checkCompatibility(
       dependencies.runtimeIdentity,
       dependencies.createHealth(input),
@@ -169,8 +175,19 @@ export function createCompositionFactory(
         startupDeadlineMs: deadlineMs,
         startupAbort: abort,
       });
+    const initial = await build(startupDeadlineMs, startupAbort.signal);
+    if (initial.lifecycle.status !== "ready") {
+      const diagnostic =
+        initial.lifecycle.stopState?.diagnostic ?? "Communicator lifecycle is not ready.";
+      try {
+        initial.shutdownUnpublished();
+        if ((await initial.drainInvocations()) === "timed_out") await initial.settleInvocations();
+        await initial.disposeResources();
+      } catch {}
+      throw new Error(diagnostic);
+    }
     const manager = new CommunicatorGenerationManager(
-      await build(startupDeadlineMs, startupAbort.signal),
+      initial,
       build,
       dependencies.generationRecoveryDelay,
       options.startupDeadlineMs,

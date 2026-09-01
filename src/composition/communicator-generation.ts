@@ -5,17 +5,23 @@ import {
   OwnershipUnavailableError,
   sqliteStoreDefaultTakeoverGraceMs,
 } from "../adapters/store/store-types";
+import { settleUntilAborted } from "../application/abortable-operation";
 import type { CommunicatorStartupRecoveryLifecycle } from "../application/communicator-startup-lifecycle";
+import type { ContextAdmissionRuntime } from "../application/context-admission-runtime";
 import { ParticipantDeletionLifecycle } from "../application/participant-deletion-lifecycle";
 import { ParticipantOperationGate } from "../application/participant-operation-gate";
 import { ParticipantStopLifecycle } from "../application/participant-stop-lifecycle";
+import type { RequestRuntime } from "../application/request-runtime";
+import { createLinkedEffectControl } from "../application/startup-effect-control";
 import { ActiveInvocationRegistry } from "./active-invocations";
 import {
   type ChatMessagesTransformBookkeeping,
   createChatMessagesTransform,
 } from "./chat-messages-transform";
 import {
-  assertGenerationStartupActive,
+  assertGenerationStartupBoundary,
+  CommunicatorGenerationConstructionError,
+  constructionErrorForLifecycle,
   constructionErrorForStartupCode,
   sanitizeGenerationConstructionError,
 } from "./communicator-generation-errors";
@@ -23,7 +29,12 @@ import {
   CommunicatorGeneration,
   type CommunicatorToolContracts,
 } from "./communicator-generation-instance";
-import { rollbackPartialGeneration } from "./communicator-generation-rollback";
+import {
+  disposeUnpublishedGeneration,
+  type PartialGenerationResources,
+  quiescePartialGeneration,
+  rollbackPartialGeneration,
+} from "./communicator-generation-rollback";
 import type { CompositionDependencies } from "./composition-dependencies";
 import type { CommunicatorOptions } from "./config";
 import { productionSha256 } from "./primitives";
@@ -45,45 +56,109 @@ export interface CommunicatorGenerationFactoryInput {
   readonly startupDeadlineMs: number;
   readonly startupAbort: AbortSignal;
 }
-export async function createCommunicatorGeneration(
+
+async function cleanupFailedGeneration(
+  generation: CommunicatorGeneration | undefined,
+  resources: PartialGenerationResources,
+): Promise<void> {
+  if (!generation) return rollbackPartialGeneration(resources);
+  await disposeUnpublishedGeneration(generation);
+}
+
+function startupOwnership(store: LinuxBunSqliteStore, contention: () => void) {
+  return {
+    acquire: async () => {
+      try {
+        return await store.acquire();
+      } catch (cause: unknown) {
+        if (cause instanceof OwnershipUnavailableError) contention();
+        throw cause;
+      }
+    },
+    isCurrent: (token: Parameters<LinuxBunSqliteStore["isCurrent"]>[0]) => store.isCurrent(token),
+  };
+}
+
+function assertFactoryBoundary(input: CommunicatorGenerationFactoryInput): void {
+  assertGenerationStartupBoundary(input.startupAbort, input.startupDeadlineMs, () =>
+    input.dependencies.generationClock.nowMs(),
+  );
+}
+
+function assertLinkedFactoryBoundary(
   input: CommunicatorGenerationFactoryInput,
-): Promise<CommunicatorGeneration> {
-  const { dependencies, native, options, workspace } = input;
-  const contextRuntime = dependencies.createContextRuntime();
-  const runtime = dependencies.createRuntime(contextRuntime);
-  let store: LinuxBunSqliteStore | undefined;
-  let lifecycle: CommunicatorStartupRecoveryLifecycle | undefined;
-  let participantOperations: ParticipantOperationGate | undefined;
-  let deletion: ParticipantDeletionLifecycle | undefined;
-  let participantStop: ParticipantStopLifecycle | undefined;
-  let exporter: ReturnType<CompositionDependencies["createExporter"]> | undefined;
-  let advisory: ReturnType<CompositionDependencies["createAdvisoryLockHooks"]> | undefined;
-  let confirmedOwnershipContention = false;
+  signal: AbortSignal,
+): void {
+  if (!signal.aborted) {
+    assertGenerationStartupBoundary(signal, input.startupDeadlineMs, () =>
+      input.dependencies.generationClock.nowMs(),
+    );
+    return;
+  }
+  assertFactoryBoundary(input);
+  throw new CommunicatorGenerationConstructionError("contract_fault");
+}
+
+class InterruptedFactoryPhase {
+  constructor(
+    readonly cause: unknown,
+    readonly settlement: Promise<void>,
+  ) {}
+}
+
+async function runFactoryPhase<Value>(
+  input: CommunicatorGenerationFactoryInput,
+  signal: AbortSignal,
+  operation: () => Promise<Value>,
+): Promise<Value> {
+  const promise = operation();
+  const result = await settleUntilAborted(promise, signal);
+  if (result.kind === "settled") return result.value;
+  if (result.kind === "rejected") throw result.cause;
+  let cause: unknown;
   try {
-    assertGenerationStartupActive(input.startupAbort);
-    store = dependencies.createStore({
-      stateDirectory: options.stateDirectory,
-      databaseFileName: `${workspace.workspaceKey.slice(0, 56)}.sqlite3`,
-      workspaceKey: workspace.workspaceKey,
-      nowWallMs: () => dependencies.generationClock.nowMs(),
-      nowMonotonicMs: dependencies.generationMonotonicNowMs,
-      takeoverGraceMs: sqliteStoreDefaultTakeoverGraceMs,
-    });
-    assertGenerationStartupActive(input.startupAbort);
-    const ownedStore = store;
-    const ownership = {
-      acquire: async () => {
-        try {
-          return await ownedStore.acquire();
-        } catch (cause: unknown) {
-          if (cause instanceof OwnershipUnavailableError) confirmedOwnershipContention = true;
-          throw cause;
-        }
-      },
-      isCurrent: (token: Parameters<LinuxBunSqliteStore["isCurrent"]>[0]) =>
-        ownedStore.isCurrent(token),
-    };
-    const recovered = await dependencies.recoverStartup(
+    assertLinkedFactoryBoundary(input, signal);
+    cause = new CommunicatorGenerationConstructionError("contract_fault");
+  } catch (interruption: unknown) {
+    cause = interruption;
+  }
+  const settlement = Promise.prototype.then.call(
+    promise,
+    () => undefined,
+    () => undefined,
+  ) as Promise<void>;
+  throw new InterruptedFactoryPhase(cause, settlement);
+}
+
+function createFactoryStartupControl(input: CommunicatorGenerationFactoryInput) {
+  const control = createLinkedEffectControl({
+    signals: [input.startupAbort],
+    deadlineMs: input.startupDeadlineMs,
+    clock: input.dependencies.generationClock,
+    timers: input.dependencies.generationStartupTimers,
+  });
+  if (!control) throw new CommunicatorGenerationConstructionError("contract_fault");
+  return control;
+}
+
+function disposeFactoryStartupControl(control: { dispose(): void }): void {
+  try {
+    control.dispose();
+  } catch {
+    throw new CommunicatorGenerationConstructionError("contract_fault");
+  }
+}
+
+function recoverFactoryStartup(
+  input: CommunicatorGenerationFactoryInput,
+  signal: AbortSignal,
+  store: LinuxBunSqliteStore,
+  runtime: RequestRuntime,
+  ownership: ReturnType<typeof startupOwnership>,
+) {
+  const { dependencies, native, options, workspace } = input;
+  return runFactoryPhase(input, signal, () =>
+    dependencies.recoverStartup(
       {
         membership: native,
         deliveries: store,
@@ -107,59 +182,116 @@ export async function createCommunicatorGeneration(
       },
       {
         workspaceKey: workspace.workspaceKey,
-        abort: input.startupAbort,
+        abort: signal,
         deadlineMs: input.startupDeadlineMs,
         limit: 100,
         timers: dependencies.generationSchedulerTimers,
         startupTimers: dependencies.generationStartupTimers,
         nowMonotonicMs: dependencies.generationMonotonicNowMs,
       },
+    ),
+  );
+}
+
+export async function createCommunicatorGeneration(
+  input: CommunicatorGenerationFactoryInput,
+): Promise<CommunicatorGeneration> {
+  const { dependencies, native, options, workspace } = input;
+  const startupControl = createFactoryStartupControl(input);
+  const startupSignal = startupControl.signal;
+  const assertBoundary = (): void => assertLinkedFactoryBoundary(input, startupSignal);
+  let contextRuntime: ContextAdmissionRuntime | undefined;
+  let runtime: RequestRuntime | undefined;
+  let store: LinuxBunSqliteStore | undefined;
+  let lifecycle: CommunicatorStartupRecoveryLifecycle | undefined;
+  let participantOperations: ParticipantOperationGate | undefined;
+  let deletion: ParticipantDeletionLifecycle | undefined;
+  let participantStop: ParticipantStopLifecycle | undefined;
+  let exporter: ReturnType<CompositionDependencies["createExporter"]> | undefined;
+  let advisory: ReturnType<CompositionDependencies["createAdvisoryLockHooks"]> | undefined;
+  let generation: CommunicatorGeneration | undefined;
+  let confirmedOwnershipContention = false;
+  try {
+    assertBoundary();
+    const createdContextRuntime = dependencies.createContextRuntime();
+    contextRuntime = createdContextRuntime;
+    assertBoundary();
+    const createdRuntime = dependencies.createRuntime(createdContextRuntime);
+    runtime = createdRuntime;
+    assertBoundary();
+    store = dependencies.createStore({
+      stateDirectory: options.stateDirectory,
+      databaseFileName: `${workspace.workspaceKey.slice(0, 56)}.sqlite3`,
+      workspaceKey: workspace.workspaceKey,
+      nowWallMs: () => dependencies.generationClock.nowMs(),
+      nowMonotonicMs: dependencies.generationMonotonicNowMs,
+      takeoverGraceMs: sqliteStoreDefaultTakeoverGraceMs,
+    });
+    assertBoundary();
+    const ownedStore = store;
+    const ownership = startupOwnership(ownedStore, () => {
+      confirmedOwnershipContention = true;
+    });
+    const recovered = await recoverFactoryStartup(
+      input,
+      startupSignal,
+      ownedStore,
+      createdRuntime,
+      ownership,
     );
-    assertGenerationStartupActive(input.startupAbort);
+    assertBoundary();
     if (!recovered.ok) {
       throw constructionErrorForStartupCode(recovered.error.code, confirmedOwnershipContention);
     }
-    lifecycle = recovered.value;
-    assertGenerationStartupActive(input.startupAbort);
-    await dependencies.recoverContextStartup(
-      store,
-      lifecycle,
-      workspace.workspaceKey,
-      input.startupAbort,
+    const recoveredLifecycle = recovered.value;
+    lifecycle = recoveredLifecycle;
+    assertBoundary();
+    await runFactoryPhase(input, startupSignal, () =>
+      dependencies.recoverContextStartup(
+        ownedStore,
+        recoveredLifecycle,
+        workspace.workspaceKey,
+        startupSignal,
+      ),
     );
-    assertGenerationStartupActive(input.startupAbort);
-    await dependencies.generationStartupCheckpoint("participants", input.startupAbort);
-    assertGenerationStartupActive(input.startupAbort);
+    assertBoundary();
+    await runFactoryPhase(input, startupSignal, () =>
+      dependencies.generationStartupCheckpoint("participants", startupSignal),
+    );
+    assertBoundary();
     const createdParticipantOperations = new ParticipantOperationGate();
     participantOperations = createdParticipantOperations;
-    assertGenerationStartupActive(input.startupAbort);
+    assertBoundary();
     const createdDeletion = new ParticipantDeletionLifecycle({
-      requests: store,
+      requests: ownedStore,
       presence: native,
-      notifications: runtime,
-      contexts: store,
-      contextNotifications: contextRuntime,
+      notifications: createdRuntime,
+      contexts: ownedStore,
+      contextNotifications: createdContextRuntime,
       operations: createdParticipantOperations,
-      lifecycle,
+      lifecycle: recoveredLifecycle,
       workspaceKey: workspace.workspaceKey,
       directory: workspace.directory,
       projectId: workspace.projectId,
     });
     deletion = createdDeletion;
-    assertGenerationStartupActive(input.startupAbort);
+    assertBoundary();
     const createdParticipantStop = new ParticipantStopLifecycle({
-      requests: store,
+      requests: ownedStore,
       activity: native,
       operations: createdParticipantOperations,
-      notifications: runtime,
-      contexts: store,
-      contextNotifications: contextRuntime,
-      lifecycle,
+      notifications: createdRuntime,
+      contexts: ownedStore,
+      contextNotifications: createdContextRuntime,
+      lifecycle: recoveredLifecycle,
       workspaceKey: workspace.workspaceKey,
     });
     participantStop = createdParticipantStop;
-    await dependencies.generationStartupCheckpoint("exporter", input.startupAbort);
-    assertGenerationStartupActive(input.startupAbort);
+    assertBoundary();
+    await runFactoryPhase(input, startupSignal, () =>
+      dependencies.generationStartupCheckpoint("exporter", startupSignal),
+    );
+    assertBoundary();
     try {
       exporter = dependencies.createExporter(options, {
         ...input.pluginInput,
@@ -170,48 +302,52 @@ export async function createCommunicatorGeneration(
       console.warn("Session export is unavailable because secure initialization failed.");
       exporter = { adapter: unavailableSessionExporter };
     }
-    await dependencies.generationStartupCheckpoint("advisory", input.startupAbort);
-    assertGenerationStartupActive(input.startupAbort);
-    advisory = dependencies.createAdvisoryLockHooks({ native, lifecycle });
-    assertGenerationStartupActive(input.startupAbort);
+    assertBoundary();
+    await runFactoryPhase(input, startupSignal, () =>
+      dependencies.generationStartupCheckpoint("advisory", startupSignal),
+    );
+    assertBoundary();
+    advisory = dependencies.createAdvisoryLockHooks({ native, lifecycle: recoveredLifecycle });
+    assertBoundary();
     const contracts = constructToolContracts({
       options,
       workspaceKey: workspace.workspaceKey,
       native,
-      store,
-      runtime,
-      contextRuntime,
-      lifecycle,
+      store: ownedStore,
+      runtime: createdRuntime,
+      contextRuntime: createdContextRuntime,
+      lifecycle: recoveredLifecycle,
       participantOperations: createdParticipantOperations,
       exporter: exporter.adapter,
       advisoryLockWake: advisory.wake,
       ...(advisory.notifications ? { advisoryLockNotifications: advisory.notifications } : {}),
     });
-    assertGenerationStartupActive(input.startupAbort);
+    assertBoundary();
     const chat = createChatMessagesTransform(
       {
-        readiness: lifecycle,
-        contexts: store,
+        readiness: recoveredLifecycle,
+        contexts: ownedStore,
         participantOperations,
-        notifications: contextRuntime,
+        notifications: createdContextRuntime,
         targetEligibility: native,
       },
       {
         workspaceKey: workspace.workspaceKey,
-        fencingToken: lifecycle.fencingToken,
-        abort: lifecycle.effectSignal,
+        fencingToken: recoveredLifecycle.fencingToken,
+        abort: recoveredLifecycle.effectSignal,
       },
       input.chatBookkeeping,
     );
+    assertBoundary();
     const event: EventHook = async ({ event }) => {
       await createdParticipantStop.handle(event);
       await createdDeletion.handle(event);
     };
-    return new CommunicatorGeneration(
-      store,
-      runtime,
-      contextRuntime,
-      lifecycle,
+    generation = new CommunicatorGeneration(
+      ownedStore,
+      createdRuntime,
+      createdContextRuntime,
+      recoveredLifecycle,
       new ActiveInvocationRegistry(),
       createdParticipantOperations,
       createdDeletion,
@@ -224,8 +360,16 @@ export async function createCommunicatorGeneration(
       advisory.drain,
       advisory.dispose,
     );
+    assertBoundary();
+    const lifecycleFailure = constructionErrorForLifecycle(recoveredLifecycle);
+    if (lifecycleFailure) throw lifecycleFailure;
+    disposeFactoryStartupControl(startupControl);
+    return generation;
   } catch (cause: unknown) {
-    await rollbackPartialGeneration({
+    try {
+      startupControl.dispose();
+    } catch {}
+    const resources = {
       store,
       lifecycle,
       contextRuntime,
@@ -235,7 +379,15 @@ export async function createCommunicatorGeneration(
       participantStop,
       exporter,
       advisory,
-    });
+    };
+    if (cause instanceof InterruptedFactoryPhase) {
+      quiescePartialGeneration(resources);
+      void cause.settlement
+        .then(() => cleanupFailedGeneration(generation, resources))
+        .catch(() => undefined);
+      throw sanitizeGenerationConstructionError(cause.cause);
+    }
+    await cleanupFailedGeneration(generation, resources);
     throw sanitizeGenerationConstructionError(cause);
   }
 }

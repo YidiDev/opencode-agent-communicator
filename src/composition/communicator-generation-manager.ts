@@ -1,7 +1,19 @@
 import type { Hooks } from "@opencode-ai/plugin";
 import type { InternalToolContract, StructuralToolContext } from "../tools/contracts";
 import type { CommunicatorGeneration, CommunicatorToolContracts } from "./communicator-generation";
-import { CommunicatorGenerationConstructionError } from "./communicator-generation-errors";
+import {
+  CommunicatorGenerationRecoveryError,
+  type CommunicatorTerminalClassification,
+  classifyGenerationRecoveryFailure,
+  readGenerationRecoveryClock,
+  recoveryErrorForLifecycle,
+} from "./communicator-generation-errors";
+import {
+  disposeQuiescedGeneration,
+  disposeQuiescedGenerationStrict,
+  disposeUnpublishedGeneration,
+  inspectTakeoverAndDispose,
+} from "./communicator-generation-rollback";
 import type { GenerationRecoveryDelayPort } from "./generation-recovery-delay";
 
 export type CommunicatorGenerationManagerState = "active" | "recovering" | "failed" | "disposed";
@@ -17,52 +29,15 @@ export interface CommunicatorGenerationHandle {
   drainInvocations(): Promise<"drained" | "timed_out">;
   settleInvocations(): Promise<void>;
   ownershipTakeoverDelayMs(): number;
+  shutdownUnpublished(): void;
   disposeResources(): Promise<void>;
 }
 
-export type CommunicatorTerminalClassification =
-  | "ownership_unavailable"
-  | "ownership_lost"
-  | "storage_failure"
-  | "contract_fault"
-  | "workflow_fault"
-  | "drain_timeout"
-  | "recovery_failed"
-  | "host_disposal";
+export type { CommunicatorTerminalClassification } from "./communicator-generation-errors";
 
 export interface CommunicatorTerminalState {
   readonly classification: CommunicatorTerminalClassification;
   readonly diagnostic: string;
-}
-
-class CommunicatorGenerationRecoveryError extends Error {
-  override readonly name = "CommunicatorGenerationRecoveryError";
-
-  constructor(
-    readonly classification: CommunicatorTerminalClassification,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-function classifyRecoveryFailure(cause: unknown): CommunicatorGenerationRecoveryError {
-  if (cause instanceof CommunicatorGenerationRecoveryError) return cause;
-  if (cause instanceof CommunicatorGenerationConstructionError) {
-    const classification =
-      cause.classification === "ownership_unavailable"
-        ? "ownership_unavailable"
-        : cause.classification === "ownership_lost"
-          ? "ownership_lost"
-          : cause.classification === "storage_failure"
-            ? "storage_failure"
-            : "recovery_failed";
-    return new CommunicatorGenerationRecoveryError(classification, cause.diagnostic);
-  }
-  return new CommunicatorGenerationRecoveryError(
-    "recovery_failed",
-    "Communicator generation recovery failed.",
-  );
 }
 
 export class CommunicatorGenerationManager {
@@ -71,6 +46,7 @@ export class CommunicatorGenerationManager {
   private recovery: Promise<CommunicatorGenerationHandle> | undefined;
   private disposal: Promise<void> | undefined;
   private terminalValue: CommunicatorTerminalState | undefined;
+  private terminalCleanup: Promise<void> | undefined;
   private readonly recoveryAbort = new AbortController();
 
   constructor(
@@ -116,21 +92,31 @@ export class CommunicatorGenerationManager {
     ) => Promise<string>,
     context: Omit<StructuralToolContext, "abort">,
   ): Promise<string> {
-    const generation = await this.ensureReady();
-    return generation.invocations.run(caller, (abort) =>
-      operation(generation.contracts[id], { ...context, abort }),
-    );
+    let handoffs = 0;
+    while (true) {
+      this.assertCallerActive(caller);
+      const generation = await this.ensureReady();
+      this.assertCallerActive(caller);
+      const result = await generation.invocations.runWithAdmission(caller, (abort) =>
+        operation(generation.contracts[id], { ...context, abort }),
+      );
+      if (result.admitted) return result.value;
+      if (result.reason === "cancelled") throw new Error("Communicator invocation was cancelled.");
+      this.assertCallerActive(caller);
+      if (handoffs >= 1) return this.failAdmissionHandoff();
+      handoffs += 1;
+    }
   }
 
   async routeEvent(...arguments_: Parameters<NonNullable<Hooks["event"]>>): Promise<void> {
-    if (this.stateValue === "disposed") return;
+    if (this.stateValue !== "active" || this.currentValue.lifecycle.status !== "ready") return;
     await this.currentValue.event(...arguments_);
   }
 
   async routeChat(
     ...arguments_: Parameters<NonNullable<Hooks["experimental.chat.messages.transform"]>>
   ): Promise<void> {
-    if (this.stateValue === "disposed") return;
+    if (this.stateValue !== "active" || this.currentValue.lifecycle.status !== "ready") return;
     await this.currentValue.chat(...arguments_);
   }
 
@@ -145,9 +131,11 @@ export class CommunicatorGenerationManager {
       try {
         await this.recovery;
       } catch {}
-      const drained = await generation.drainInvocations();
-      if (drained === "timed_out") await generation.settleInvocations();
-      await generation.disposeResources();
+      if (this.terminalCleanup) {
+        await this.terminalCleanup;
+        return;
+      }
+      await disposeQuiescedGenerationStrict(generation);
     })();
     return this.disposal;
   }
@@ -173,13 +161,15 @@ export class CommunicatorGenerationManager {
       this.setTerminal(classification, diagnostic);
       throw new Error(diagnostic);
     }
-    this.stateValue = "recovering";
-    const deadlineMs = this.recoveryDelay.nowMs() + this.startupDeadlineMs;
-    if (!Number.isSafeInteger(deadlineMs)) {
-      this.stateValue = "failed";
-      this.setTerminal("contract_fault", "Communicator recovery timing is invalid.");
-      throw new Error(this.terminalValue?.diagnostic);
+    let deadlineMs: number;
+    try {
+      deadlineMs =
+        readGenerationRecoveryClock(() => this.recoveryDelay.nowMs()) + this.startupDeadlineMs;
+    } catch {
+      return this.failInvalidTiming();
     }
+    if (!Number.isSafeInteger(deadlineMs)) return this.failInvalidTiming();
+    this.stateValue = "recovering";
     this.recovery = this.replace(generation, deadlineMs);
     return this.recovery;
   }
@@ -200,23 +190,32 @@ export class CommunicatorGenerationManager {
           "Communicator recovery invocation drain timed out.",
         );
       }
-      const takeoverDelayMs = stale.ownershipTakeoverDelayMs();
-      await stale.disposeResources();
+      const takeoverDelayMs = await inspectTakeoverAndDispose(stale);
       if (this.stateValue === "disposed") throw new Error("Communicator has been disposed.");
       await this.waitForTakeover(takeoverDelayMs, deadlineMs);
       const successor = await this.createGeneration(deadlineMs, this.recoveryAbort.signal);
+      const successorFailure = this.failureForLifecycle(successor);
+      if (successorFailure) {
+        await disposeUnpublishedGeneration(successor);
+        throw successorFailure;
+      }
       if (successor.fencingToken <= stale.fencingToken) {
-        successor.quiesce();
-        if ((await successor.drainInvocations()) === "drained") await successor.disposeResources();
-        throw new CommunicatorGenerationRecoveryError(
+        const failure = new CommunicatorGenerationRecoveryError(
           "ownership_unavailable",
           "Communicator recovery did not advance ownership.",
         );
+        await disposeUnpublishedGeneration(successor);
+        throw failure;
       }
       if (this.isDisposed()) {
-        successor.quiesce(true);
-        if ((await successor.drainInvocations()) === "drained") await successor.disposeResources();
-        throw new Error("Communicator has been disposed.");
+        const failure = new Error("Communicator has been disposed.");
+        await disposeUnpublishedGeneration(successor, true);
+        throw failure;
+      }
+      const publicationFailure = this.failureForLifecycle(successor);
+      if (publicationFailure) {
+        await disposeUnpublishedGeneration(successor);
+        throw publicationFailure;
       }
       this.currentValue = successor;
       this.stateValue = "active";
@@ -226,20 +225,15 @@ export class CommunicatorGenerationManager {
       if (this.stateValue === "disposed") {
         throw new Error(this.terminalValue?.diagnostic ?? "The communicator host was disposed.");
       }
-      const failure = classifyRecoveryFailure(cause);
+      const failure = classifyGenerationRecoveryFailure(cause);
       this.setTerminal(failure.classification, failure.message);
       throw new Error(this.terminalValue?.diagnostic);
     }
   }
 
   private async waitForTakeover(delayMs: number, deadlineMs: number): Promise<void> {
-    const nowMs = this.recoveryDelay.nowMs();
-    if (
-      !Number.isSafeInteger(delayMs) ||
-      delayMs < 0 ||
-      !Number.isSafeInteger(nowMs) ||
-      nowMs >= deadlineMs
-    ) {
+    const nowMs = readGenerationRecoveryClock(() => this.recoveryDelay.nowMs());
+    if (!Number.isSafeInteger(delayMs) || delayMs < 0 || nowMs >= deadlineMs) {
       throw new CommunicatorGenerationRecoveryError(
         "contract_fault",
         "Communicator recovery timing is invalid.",
@@ -250,12 +244,44 @@ export class CommunicatorGenerationManager {
     const waitMs = Math.min(delayMs, remainingMs);
     const outcome = await this.recoveryDelay.wait(waitMs, this.recoveryAbort.signal);
     if (outcome === "aborted") throw new Error("Communicator recovery was interrupted.");
-    if (delayMs >= remainingMs || this.recoveryDelay.nowMs() >= deadlineMs) {
+    const completedAtMs = readGenerationRecoveryClock(() => this.recoveryDelay.nowMs());
+    if (delayMs >= remainingMs || completedAtMs >= deadlineMs) {
       throw new CommunicatorGenerationRecoveryError(
         "ownership_unavailable",
         "Communicator ownership recovery exceeded its startup deadline.",
       );
     }
+  }
+
+  private failureForLifecycle(
+    generation: CommunicatorGenerationHandle,
+  ): CommunicatorGenerationRecoveryError | undefined {
+    return recoveryErrorForLifecycle(generation.lifecycle);
+  }
+
+  private failInvalidTiming(): never {
+    this.stateValue = "failed";
+    this.setTerminal("contract_fault", "Communicator recovery timing is invalid.");
+    throw new Error(this.terminalValue?.diagnostic);
+  }
+
+  private assertCallerActive(caller: AbortSignal): void {
+    if (caller.aborted) throw new Error("Communicator invocation was cancelled.");
+  }
+
+  private failAdmissionHandoff(): never {
+    if (this.stateValue === "disposed") {
+      throw new Error(this.terminalValue?.diagnostic ?? "The communicator host was disposed.");
+    }
+    this.stateValue = "failed";
+    this.setTerminal("contract_fault", "Communicator invocation admission handoff failed.");
+    const generation = this.currentValue;
+    try {
+      generation.shutdownUnpublished();
+    } catch {}
+    this.terminalCleanup ??= disposeQuiescedGeneration(generation);
+    void this.terminalCleanup.catch(() => undefined);
+    throw new Error(this.terminalValue?.diagnostic);
   }
 
   private setTerminal(

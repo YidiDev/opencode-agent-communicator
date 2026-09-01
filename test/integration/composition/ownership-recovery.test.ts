@@ -17,6 +17,7 @@ import {
 } from "../../../src/composition/communicator-generation-manager";
 import type { CompositionDependencies } from "../../../src/composition/composition-dependencies";
 import { parseCommunicatorOptions } from "../../../src/composition/config";
+import { createCompositionFactory } from "../../../src/composition/plugin";
 import { validateDeliveryId, validateNativeMessageId } from "../../../src/domain/generated-ids";
 import type { Sha256Digest } from "../../../src/domain/message-payload";
 import { validateSessionId } from "../../../src/domain/sessions";
@@ -70,21 +71,28 @@ function openStore(path: string, clock: ReturnType<typeof controlledClock>) {
   });
 }
 
-function nativeFixture(onQueue: () => void) {
+function nativeFixture(onQueue: () => void, onObserve: () => void = () => undefined) {
   return {
-    readCurrentRoots: async () => ({
-      sourceVisible: true,
-      targetVisible: true,
-      sourceTitle: "Source",
-    }),
-    readVisibleRoots: async () => [],
-    readParticipantPresence: async () => "present" as const,
-    observeRequestParticipants: async () => ({
-      sourceVisible: true,
-      targetVisible: true,
-      targetStatus: "busy" as const,
-    }),
-    observeParticipantActivities: async () => [],
+    readCurrentRoots: async () => {
+      onObserve();
+      return { sourceVisible: true, targetVisible: true, sourceTitle: "Source" };
+    },
+    readVisibleRoots: async () => {
+      onObserve();
+      return [];
+    },
+    readParticipantPresence: async () => {
+      onObserve();
+      return "present" as const;
+    },
+    observeRequestParticipants: async () => {
+      onObserve();
+      return { sourceVisible: true, targetVisible: true, targetStatus: "busy" as const };
+    },
+    observeParticipantActivities: async () => {
+      onObserve();
+      return [];
+    },
     queueMessage: async () => {
       onQueue();
       throw new Error("Submitting recovery must never replay native admission.");
@@ -207,6 +215,7 @@ function generation(
     drainInvocations: () => invocations.drain(),
     settleInvocations: () => invocations.settled(),
     ownershipTakeoverDelayMs: () => store.ownershipTakeoverDelayMs(),
+    shutdownUnpublished: () => invocations.closeAdmission("unpublished_shutdown"),
     disposeResources: async () => store.close(),
   };
 }
@@ -223,11 +232,16 @@ function invoke(manager: CommunicatorGenerationManager): Promise<string> {
 function controlledDelay(clock: ReturnType<typeof controlledClock>) {
   let complete: (() => void) | undefined;
   let requestedMs: number | undefined;
+  let announce!: (delayMs: number) => void;
+  const started = new Promise<number>((resolve) => {
+    announce = resolve;
+  });
   return {
     port: {
       nowMs: clock.wall,
       wait(delayMs: number, abort: AbortSignal) {
         requestedMs = delayMs;
+        announce(delayMs);
         return new Promise<"completed" | "aborted">((resolve) => {
           complete = () => {
             if (abort.aborted) return resolve("aborted");
@@ -238,11 +252,196 @@ function controlledDelay(clock: ReturnType<typeof controlledClock>) {
       },
     },
     requested: () => requestedMs,
+    started: () => started,
     elapse: () => complete?.(),
   };
 }
 
+function controlledSchedulerTimers() {
+  let nextHandle = 0;
+  const callbacks = new Map<number, () => void>();
+  return {
+    port: {
+      set(_delayMs: number, callback: () => void) {
+        const handle = ++nextHandle;
+        callbacks.set(handle, callback);
+        return handle;
+      },
+      clear(handle: unknown) {
+        callbacks.delete(handle as number);
+      },
+    },
+    fireArmed() {
+      const armed = [...callbacks.values()];
+      callbacks.clear();
+      for (const callback of armed) callback();
+    },
+  };
+}
+
+async function bounded<Value>(promise: Promise<Value>, diagnostic: string): Promise<Value> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(diagnostic)), 1_000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function awaitDelayRequest(
+  delay: ReturnType<typeof controlledDelay>,
+  invocation: Promise<string>,
+): Promise<number> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      delay.started(),
+      invocation.then(
+        () => Promise.reject(new Error("Invocation completed before recovery delay admission.")),
+        (cause: unknown) => Promise.reject(cause),
+      ),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Recovery delay barrier was not reached.")),
+          1_000,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 describe("real SQLite composition ownership recovery", () => {
+  test("production scheduler expiry recovers through the public managed tool bridge once", async () => {
+    const path = stateDirectory();
+    const clock = controlledClock();
+    const schedulerTimers = controlledSchedulerTimers();
+    const recoveryDelay = controlledDelay(clock);
+    let nativeSubmissions = 0;
+    let nativeObservations = 0;
+    const native = nativeFixture(
+      () => {
+        nativeSubmissions += 1;
+      },
+      () => {
+        nativeObservations += 1;
+      },
+    );
+    const stores: LinuxBunSqliteStore[] = [];
+    const lifecycles: Array<{
+      observeStop(observer: (state: { cause: string }) => void): () => void;
+    }> = [];
+    const dependencies = generationDependencies(path, clock, native, stores);
+    const binding = {
+      workspaceKey: workspace,
+      projectId: "project",
+      directory: "/",
+      worktree: "/",
+    };
+    const plugin = createCompositionFactory({
+      ...dependencies,
+      deriveWorkspace: () => binding,
+      generationSchedulerTimers: schedulerTimers.port,
+      generationRecoveryDelay: recoveryDelay.port,
+      recoverStartup: async (...arguments_) => {
+        const result = await recoverCommunicatorStartup(...arguments_);
+        if (result.ok) lifecycles.push(result.value);
+        return result;
+      },
+    });
+    const hooks = await Reflect.apply(plugin, undefined, [
+      {},
+      { stateDirectory: path, startupDeadlineMs: 5_000 },
+    ]);
+    const initialStore = stores[0];
+    const sessionList = hooks.tool?.session_list;
+    if (!initialStore || !sessionList)
+      throw new Error("Managed composition fixture was not built.");
+    const initialToken = 1 as Awaited<ReturnType<LinuxBunSqliteStore["acquire"]>>;
+    expect(await initialStore.isCurrent(initialToken)).toBeTrue();
+    const startupObservations = nativeObservations;
+    await sessionList.execute(
+      {},
+      {
+        sessionID: source,
+        messageID: "baseline",
+        agent: "build",
+        directory: "/",
+        worktree: "/",
+        abort: new AbortController().signal,
+        metadata: () => undefined,
+        ask: async () => undefined,
+      },
+    );
+    const callbackObservations = nativeObservations - startupObservations;
+    expect(callbackObservations).toBeGreaterThan(0);
+    await initialStore.createPrepared(delivery(initialToken));
+    await initialStore.claimPrepared({
+      fencingToken: initialToken,
+      workspaceKey: workspace,
+      deliveryId,
+      nowMs: clock.wall(),
+    });
+
+    const schedulerStopped = new Promise<string>((resolve) => {
+      lifecycles[0]?.observeStop((state) => resolve(state.cause));
+    });
+    clock.advance(1_001);
+    schedulerTimers.fireArmed();
+    expect(await bounded(schedulerStopped, "Scheduler expiry did not stop ownership.")).toBe(
+      "ownership_lost",
+    );
+    const observationsBeforeRecovery = nativeObservations;
+
+    const invocation = Promise.resolve(
+      sessionList.execute(
+        {},
+        {
+          sessionID: source,
+          messageID: "message",
+          agent: "build",
+          directory: "/",
+          worktree: "/",
+          abort: new AbortController().signal,
+          metadata: () => undefined,
+          ask: async () => undefined,
+        },
+      ),
+    ).then(String);
+    expect(await awaitDelayRequest(recoveryDelay, invocation)).toBe(99);
+    recoveryDelay.elapse();
+    expect(
+      JSON.parse(await bounded(invocation, "Managed recovery invocation did not settle.")),
+    ).toEqual({
+      ok: true,
+      value: [],
+    });
+    expect(stores).toHaveLength(2);
+    const successorStore = stores[1];
+    const successorToken = 2 as Awaited<ReturnType<LinuxBunSqliteStore["acquire"]>>;
+    expect(await successorStore?.isCurrent(successorToken)).toBeTrue();
+    expect(Number(successorToken)).toBeGreaterThan(Number(initialToken));
+    expect(nativeObservations - observationsBeforeRecovery).toBe(
+      startupObservations + callbackObservations,
+    );
+    expect(nativeSubmissions).toBe(0);
+    const persisted = await successorStore?.getForParticipant({
+      workspaceKey: workspace,
+      deliveryId,
+      participantSessionId: source,
+    });
+    expect(persisted?.delivery.state).toBe("admission_unknown");
+    await hooks.dispose?.();
+  });
+});
+
+describe("real SQLite manager ownership recovery", () => {
   test("waits through grace, advances the epoch, and never replays a submitting delivery", async () => {
     const path = stateDirectory();
     const clock = controlledClock();
@@ -295,7 +494,7 @@ describe("real SQLite composition ownership recovery", () => {
     );
 
     const waitingInvocation = invoke(manager);
-    while (delay.requested() === undefined) await Promise.resolve();
+    expect(await awaitDelayRequest(delay, waitingInvocation)).toBe(99);
     expect(delay.requested()).toBe(99);
     delay.elapse();
     expect(JSON.parse(await waitingInvocation)).toEqual({ ok: true, value: [] });
@@ -351,7 +550,7 @@ describe("real SQLite composition ownership recovery", () => {
       5_000,
     );
     const waitingInvocation = invoke(manager);
-    while (delay.requested() === undefined) await Promise.resolve();
+    await awaitDelayRequest(delay, waitingInvocation);
     delay.elapse();
     const competitor = openStore(path, clock);
     const competitorToken = await competitor.acquire();

@@ -177,4 +177,48 @@ describe("plugin ownership recovery", () => {
       "store-close",
     ]);
   });
+
+  test("disposes an initial generation stopped after construction instead of exposing hooks", async () => {
+    const lifecycle = new LifecycleFixture(1);
+    let storesClosed = 0;
+    const plugin = createCompositionFactory({
+      parseOptions: (value) => parseCommunicatorOptions(value, { HOME: "/home/operator" }),
+      deriveWorkspace: () => ({
+        workspaceKey: workspace.value,
+        projectId: "project",
+        directory: "/",
+        worktree: "/",
+      }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
+      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
+      createNative: () =>
+        ({
+          readParticipantPresence: async () => "present",
+          isEligibleContextTarget: async () => true,
+        }) as never,
+      createStore: () =>
+        ({
+          starts: {},
+          close: () => {
+            storesClosed += 1;
+          },
+        }) as never,
+      createRuntime: () =>
+        ({ effectSignal: new AbortController().signal, stop: () => undefined }) as never,
+      recoverStartup: async () => ({ ok: true, value: lifecycle as never }),
+      recoverContextStartup: async () => undefined,
+      createExporter: () => ({
+        adapter: { writeExport: async () => ({ ok: false, code: "export_unavailable" }) },
+      }),
+      createAdvisoryLockHooks: () => {
+        queueMicrotask(() => lifecycle.stop("ownership_lost"));
+        return { wake: {} as never };
+      },
+    });
+
+    await expect(Reflect.apply(plugin, undefined, [{}, {}])).rejects.toThrow(
+      "Communicator ownership ended.",
+    );
+    expect(storesClosed).toBe(1);
+  });
 });

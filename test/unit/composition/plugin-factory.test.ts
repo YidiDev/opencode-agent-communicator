@@ -267,6 +267,8 @@ describe("composition factory failure cleanup", () => {
         ok: true,
         value: {
           fencingToken: 1 as never,
+          status: "ready",
+          stopState: undefined,
           effectSignal: new AbortController().signal,
           assertReady: () => undefined,
           observeStop: () => () => undefined,
@@ -330,6 +332,8 @@ describe("composition factory failure cleanup", () => {
     const order: string[] = [];
     const lifecycle = {
       fencingToken: 1 as never,
+      status: "ready",
+      stopState: undefined,
       effectSignal: new AbortController().signal,
       assertReady: () => undefined,
       observeStop: () => () => undefined,
@@ -397,6 +401,8 @@ describe("composition factory failure cleanup", () => {
       recoverStartup: async () => ({
         ok: true,
         value: {
+          status: "ready",
+          stopState: undefined,
           effectSignal: new AbortController().signal,
           observeStop: () => () => undefined,
           stop: () => order.push("lifecycle-stop"),

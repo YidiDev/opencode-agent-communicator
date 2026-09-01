@@ -3,6 +3,10 @@ export interface InvocationDrainTimerPort {
   clear(handle: unknown): void;
 }
 
+export type InvocationAdmissionResult<Value> =
+  | { readonly admitted: true; readonly value: Value }
+  | { readonly admitted: false; readonly reason: "closed" | "cancelled" };
+
 const invocationDrainTimers: InvocationDrainTimerPort = {
   set: (delayMs, callback) => setTimeout(callback, delayMs),
   clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
@@ -32,13 +36,38 @@ export class ActiveInvocationRegistry {
     caller: AbortSignal,
     operation: (signal: AbortSignal) => Promise<Value>,
   ): Promise<Value> {
-    if (this.admissionClosed)
+    const result = await this.execute(caller, operation, "ordinary");
+    if (!result.admitted)
       throw new Error("Communicator is shutting down; invocation admission is closed.");
+    return result.value;
+  }
+
+  async runWithAdmission<Value>(
+    caller: AbortSignal,
+    operation: (signal: AbortSignal) => Promise<Value>,
+  ): Promise<InvocationAdmissionResult<Value>> {
+    return this.execute(caller, operation, "managed");
+  }
+
+  private async execute<Value>(
+    caller: AbortSignal,
+    operation: (signal: AbortSignal) => Promise<Value>,
+    mode: "managed" | "ordinary",
+  ): Promise<InvocationAdmissionResult<Value>> {
+    if (mode === "managed" && caller.aborted) return { admitted: false, reason: "cancelled" };
+    if (this.admissionClosed) return { admitted: false, reason: "closed" };
     const controller = new AbortController();
     const relay = (): void => controller.abort(caller.reason);
     caller.addEventListener("abort", relay, { once: true });
     if (caller.aborted) relay();
-    const execution = Promise.resolve().then(() => operation(controller.signal));
+    const execution = Promise.resolve().then(
+      async (): Promise<InvocationAdmissionResult<Value>> => {
+        if (mode === "managed" && caller.aborted) return { admitted: false, reason: "cancelled" };
+        if (mode === "managed" && this.admissionClosed)
+          return { admitted: false, reason: "closed" };
+        return { admitted: true, value: await operation(controller.signal) };
+      },
+    );
     this.active.set(execution, controller);
     try {
       return await execution;
