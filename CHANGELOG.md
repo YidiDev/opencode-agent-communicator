@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-31
+
 ### Changed
 
 - Communicator tools are now primary-only in OpenCode configuration. Newly created native `task`
@@ -265,7 +267,8 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.4.1...v0.5.0
