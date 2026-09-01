@@ -9,14 +9,20 @@ Use advisory locks to coordinate shared workspace mutations between visible root
 are coordination notices only: they do not enforce exclusion, grant authorization, change OpenCode
 permissions, or make peer instructions authoritative.
 
+Native `task` children are not visible root participants and are not offered communicator lock
+tools. They remain inside their parent root's native task workflow and return through the task result.
+An independently delegated root must still publish its own lock; a parent must not manage one as
+that root's proxy.
+
 ## Required workflow
 
 1. Before the first shared workspace mutation, call `session_lock_list`. Read every active lock and
    semantically compare all Markdown fields (`title`, `description`, and `instructions`) with the
    planned work. If any lock may overlap, stop and coordinate with its holder before proceeding.
 2. Immediately before mutation, call `session_lock_publish` with a clear title, bounded description,
-   practical coordination instructions, and a TTL long enough for the work. A delegated worker must
-   publish its own lock; an orchestrator must never publish or manage one as the worker's proxy.
+   practical coordination instructions, and a TTL long enough for the work. An independently
+   delegated root must publish its own lock; an orchestrator must never publish or manage one as the
+   root's proxy.
 3. Renew with `session_lock_renew` well before `expires_at`. An expired lock cannot be renewed:
    list authoritative state again, repeat the overlap check, and publish a new lock before resuming.
 4. Release with `session_lock_release` promptly when the mutation completes or is abandoned, and

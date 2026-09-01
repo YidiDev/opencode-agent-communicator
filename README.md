@@ -112,8 +112,11 @@ filesystem, and SQLite sidecars before use.
 ### 4. Restart and verify
 
 Restart every OpenCode backend that should load the plugin. Configuration and plugin changes are
-read at startup. Open a session and confirm that the tool list contains all 21 names from the table
-below. Registration is atomic: startup exposes all 21 or fails instead of leaving a partial tool set.
+read at startup. Open a primary root session and confirm that the tool list contains all 21 names
+from the table below. Registration is atomic: startup exposes all 21 or fails instead of leaving a
+partial tool set. The config hook marks these tools as primary-only, so newly created native `task`
+children do not receive them. A child returns through the native task result instead of opening a
+second communicator channel to the waiting parent.
 
 If startup fails, run `opencode --version` and verify the installed entry first. OpenCode must report
 a stable version in `>=1.18.21 <1.19.0`; the configured absolute file must exist and remain readable
@@ -237,6 +240,12 @@ The bundled `session-communication`, `session-request-participant`, and `session
 automatically from the published package. They teach peer communication, request lifecycle,
 ambiguous-outcome handling, and safe advisory-lock coordination. Skill and lock content is never
 authorization.
+
+These workflows are for independent visible root sessions. Do not combine a foreground native
+`task` wait with a communicator request to that task child: the parent is already waiting for the
+native result, and newly created children are not offered communicator tools. A child created before
+the plugin upgrade and later resumed may retain its earlier host permission snapshot, but it remains
+outside the visible root set and direct communicator invocation still fails closed.
 
 ### Advisory lock contract
 

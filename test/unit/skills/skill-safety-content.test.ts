@@ -81,6 +81,24 @@ describe("bundled skill safety guidance", () => {
     }
   });
 
+  test("separates native task children from root communicator workflows", async () => {
+    for (const name of communicationSkillNames) {
+      const content = await readSkill(name);
+      expectConcept(
+        content,
+        /native `task` child/,
+        /task[\s\S]{0,20}result channel/,
+        /(do not|never combine)[\s\S]{0,180}foreground task wait[\s\S]{0,240}communicator/,
+      );
+    }
+    const locks = await readSkill("session-locks");
+    expectConcept(
+      locks,
+      /native `task` children[\s\S]{0,180}not offered[\s\S]{0,120}lock[\s\S]{0,20}tools/,
+      /independently delegated root[\s\S]{0,120}publish its own lock/,
+    );
+  });
+
   test("does not make unsafe capability promises", async () => {
     const corpus = `${await readSkill("session-communication")}\n${await readSkill("session-request-participant")}`;
     const dangerousClaims = [
@@ -104,7 +122,7 @@ describe("bundled skill safety guidance", () => {
       /semantically compare all markdown fields[\s\S]{0,180}title[\s\S]{0,100}description[\s\S]{0,100}instructions/,
       /may overlap[\s\S]{0,80}stop and coordinate/,
       /immediately before mutation[\s\S]{0,100}session_lock_publish/,
-      /delegated worker[\s\S]{0,100}publish its own lock/,
+      /delegated root[\s\S]{0,100}publish its own lock/,
       /renew[\s\S]{0,100}well before/,
       /expired[\s\S]{0,180}list[\s\S]{0,180}publish a new lock/,
       /release[\s\S]{0,180}(completes|abandoned)[\s\S]{0,180}failure/,

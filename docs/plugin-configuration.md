@@ -80,6 +80,15 @@ Stop has no configurable bypass and is always narrowed to `ask` by the mandatory
 Explicit start agent/model overrides remain subject to exact allowlists even when start policy is
 `allow`.
 
+The config hook also appends all 21 communicator IDs to
+`experimental.primary_tools`. Existing entries and unrelated `experimental` fields are preserved,
+and repeated hook execution does not add another copy. OpenCode uses this list when creating native
+`task` children, which keeps communicator tools on primary roots while children report through the
+native task result channel. Do not pair a foreground task wait with a separate communicator request
+to that child. The host snapshots child permissions at creation, so a child created before this
+configuration was installed and later resumed may retain its old tool list; visible-root invocation
+authorization still rejects it.
+
 The established `allowManagedSessionRecursion` and `managedSessionsPerWorkspace` names refer to
 sessions created and tracked through `session_start`. This provenance supports idempotency, quotas,
 recovery, and chained-start policy; it does not make one session the supervisor of another. Started

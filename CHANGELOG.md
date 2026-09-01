@@ -6,6 +6,12 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- Communicator tools are now primary-only in OpenCode configuration. Newly created native `task`
+  children keep their ordinary working tools and return through the native task result instead of
+  seeing the 21 root-to-root communicator tools.
+
 ## [0.7.0] - 2026-08-30
 
 ### Added
