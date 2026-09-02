@@ -149,9 +149,16 @@ export class CommunicatorGenerationManager {
     const generation = this.currentValue;
     if (generation.lifecycle.status === "ready") return generation;
     const stop = generation.lifecycle.stopState;
-    const ownershipRecoverable =
-      (stop?.recoverable && stop.cause === "ownership_lost") ||
-      this.expiredLeaseContractFault(stop, generation);
+    const ownershipLost = stop?.recoverable && stop.cause === "ownership_lost";
+    let expiredLeaseFault = false;
+    try {
+      expiredLeaseFault = this.expiredLeaseContractFault(stop, generation);
+    } catch {
+      this.stateValue = "failed";
+      this.setTerminal("storage_failure", "Communicator storage became unavailable.");
+      throw new Error("Communicator storage became unavailable.");
+    }
+    const ownershipRecoverable = ownershipLost || expiredLeaseFault;
     if (!ownershipRecoverable) {
       this.stateValue = "failed";
       const classification =
@@ -196,30 +203,8 @@ export class CommunicatorGenerationManager {
       const takeoverDelayMs = await inspectTakeoverAndDispose(stale);
       if (this.stateValue === "disposed") throw new Error("Communicator has been disposed.");
       await this.waitForTakeover(takeoverDelayMs, deadlineMs);
-      const successor = await this.createGeneration(deadlineMs, this.recoveryAbort.signal);
-      const successorFailure = this.failureForLifecycle(successor);
-      if (successorFailure) {
-        await disposeUnpublishedGeneration(successor);
-        throw successorFailure;
-      }
-      if (successor.fencingToken <= stale.fencingToken) {
-        const failure = new CommunicatorGenerationRecoveryError(
-          "ownership_unavailable",
-          "Communicator recovery did not advance ownership.",
-        );
-        await disposeUnpublishedGeneration(successor);
-        throw failure;
-      }
-      if (this.isDisposed()) {
-        const failure = new Error("Communicator has been disposed.");
-        await disposeUnpublishedGeneration(successor, true);
-        throw failure;
-      }
-      const publicationFailure = this.failureForLifecycle(successor);
-      if (publicationFailure) {
-        await disposeUnpublishedGeneration(successor);
-        throw publicationFailure;
-      }
+      const freeLease = takeoverDelayMs === 0;
+      const successor = await this.buildReplacement(stale, deadlineMs, freeLease);
       this.currentValue = successor;
       this.stateValue = "active";
       return successor;
@@ -277,6 +262,89 @@ export class CommunicatorGenerationManager {
     if (stop?.cause !== "contract_fault") return false;
     if (generation.ownershipTakeoverDelayMs() !== 0) return false;
     return this.stateValue !== "failed" && this.stateValue !== "disposed";
+  }
+
+  /**
+   * Builds and validates the replacement generation, retrying a single successor attempt when it
+   * fails with a contract fault exactly as the takeover began on a free lease. A scheduler or
+   * recovery port-contract violation that recurs while the lease is unowned (for example a timing
+   * contract that trips after a host wakes from sleep) is transient: disposing the failed attempt
+   * releases its lease, and a fresh replacement re-acquires ownership with a higher fencing token.
+   * The retry is bounded to one, preserves fail-closed behavior (a genuine violation, a non-free
+   * lease, or a competitor that takes the lease mid-retry still terminates), and never runs while
+   * the host is disposed.
+   */
+  private async buildReplacement(
+    stale: CommunicatorGenerationHandle,
+    deadlineMs: number,
+    freeLease: boolean,
+  ): Promise<CommunicatorGenerationHandle> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const outcome = await this.buildCandidate(stale, deadlineMs);
+      if (outcome.ok) return outcome.successor;
+      if (attempt === 0 && this.shouldRetrySuccessorContractFault(outcome.failure, freeLease)) {
+        continue;
+      }
+      throw outcome.failure;
+    }
+    throw new CommunicatorGenerationRecoveryError(
+      "recovery_failed",
+      "Communicator recovery could not build a successor.",
+    );
+  }
+
+  private async buildCandidate(
+    stale: CommunicatorGenerationHandle,
+    deadlineMs: number,
+  ): Promise<
+    | { readonly ok: true; readonly successor: CommunicatorGenerationHandle }
+    | { readonly ok: false; readonly failure: CommunicatorGenerationRecoveryError }
+  > {
+    let candidate: CommunicatorGenerationHandle | undefined;
+    try {
+      candidate = await this.createGeneration(deadlineMs, this.recoveryAbort.signal);
+      const candidateFailure = this.failureForLifecycle(candidate);
+      if (candidateFailure) {
+        await disposeUnpublishedGeneration(candidate);
+        return { ok: false, failure: candidateFailure };
+      }
+      if (candidate.fencingToken <= stale.fencingToken) {
+        await disposeUnpublishedGeneration(candidate);
+        return {
+          ok: false,
+          failure: new CommunicatorGenerationRecoveryError(
+            "ownership_unavailable",
+            "Communicator recovery did not advance ownership.",
+          ),
+        };
+      }
+      if (this.isDisposed()) {
+        await disposeUnpublishedGeneration(candidate, true);
+        throw new Error("Communicator has been disposed.");
+      }
+      const publicationFailure = this.failureForLifecycle(candidate);
+      if (publicationFailure) {
+        await disposeUnpublishedGeneration(candidate);
+        return { ok: false, failure: publicationFailure };
+      }
+      return { ok: true, successor: candidate };
+    } catch (cause: unknown) {
+      if (candidate !== undefined) {
+        try {
+          await disposeUnpublishedGeneration(candidate);
+        } catch {}
+      }
+      return { ok: false, failure: classifyGenerationRecoveryFailure(cause) };
+    }
+  }
+
+  private shouldRetrySuccessorContractFault(
+    failure: { readonly classification: CommunicatorTerminalClassification },
+    freeLease: boolean,
+  ): boolean {
+    if (!freeLease) return false;
+    if (this.stateValue === "disposed") return false;
+    return failure.classification === "contract_fault";
   }
 
   private failInvalidTiming(): never {
