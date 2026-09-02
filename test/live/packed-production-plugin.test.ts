@@ -29,6 +29,7 @@ import {
 import { runBlockingRequestJourneys } from "./packed-blocking-request-journeys";
 import { runContextRequestJourney, runContextSendJourney } from "./packed-context-request-journey";
 import { runImmediateRequestJourneys } from "./packed-immediate-request-journeys";
+import { runPackedPrimaryToolsJourney } from "./packed-primary-tools-journey";
 import { runPackedSessionReadJourney } from "./packed-session-read-journey";
 
 setDefaultTimeout(liveDeadlineMs * 12);
@@ -635,6 +636,11 @@ test(`runs the exact packed production plugin through OpenCode ${exactOpenCodeVe
   let failure: unknown;
   try {
     await assertPackedRegistration(fixture);
+    await runPackedPrimaryToolsJourney({
+      client: fixture.client,
+      communicatorToolIds: toolIds,
+      provider: fixture.provider,
+    });
     const invoker = createInvoker(fixture.client);
     await runBasicPackedJourneys(invoker);
     await runLockJourney(invoker);

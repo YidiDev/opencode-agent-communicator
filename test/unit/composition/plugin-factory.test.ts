@@ -210,9 +210,14 @@ describe("composition factory ordering", () => {
     expect(order).toEqual(["recovery"]);
     expect(Object.keys(hooks.tool ?? {})).toEqual([...communicatorToolIds]);
     expect(Object.keys(hooks.tool ?? {})).toHaveLength(21);
-    const config: { permission?: unknown; skills?: { paths: string[] } } = {};
+    const config: {
+      permission?: unknown;
+      experimental?: { primary_tools?: string[] };
+      skills?: { paths: string[] };
+    } = {};
     await hooks.config?.(config as never);
     expect(config.permission).toEqual({ session_stop: "ask", session_read: "ask" });
+    expect(config.experimental?.primary_tools).toEqual([...communicatorToolIds]);
     expect(config.skills?.paths[0]).toEndWith("/skills");
     await hooks.event?.({
       event: {

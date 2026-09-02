@@ -278,6 +278,24 @@ function productionToolResponse(serialized: string): Response | undefined {
   return productionContextResponse(serialized);
 }
 
+function primaryToolsResponse(body: unknown): Response | undefined {
+  const serialized = JSON.stringify(body);
+  if (serialized.includes("production-primary-tools-child")) {
+    return textResponse("production native child result");
+  }
+  if (serialized.includes("production-primary-tools-parent") && advertisesTool(body, "task")) {
+    return toolResponse(
+      "task",
+      JSON.stringify({
+        description: "Verify child tools",
+        prompt: "production-primary-tools-child",
+        subagent_type: "explore",
+      }),
+    );
+  }
+  return undefined;
+}
+
 function communicatorEnvelope(value: unknown): Record<string, unknown> | undefined {
   if (typeof value === "string") {
     try {
@@ -397,6 +415,8 @@ function shouldGateRequest(
 }
 
 function completedProviderResponse(body: unknown): Response {
+  const primaryTools = primaryToolsResponse(body);
+  if (primaryTools) return primaryTools;
   if (hasToolResult(body)) return textResponse();
   const request = productionRequestResponse(body);
   if (request) return request;

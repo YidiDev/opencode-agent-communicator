@@ -14,6 +14,13 @@ All notable changes to this project are documented in this file. The format is b
   are never replayed, disposal aborts partial successor startup, ownership contention stays typed and
   sanitized, timed-out work is quarantined until cleanup, and drain,
   takeover, storage, contract, workflow, disposal, or replacement failures remain terminal.
+## [0.7.1] - 2026-08-31
+
+### Changed
+
+- Communicator tools are now primary-only in OpenCode configuration. Newly created native `task`
+  children keep their ordinary working tools and return through the native task result instead of
+  seeing the 21 root-to-root communicator tools.
 
 ## [0.7.0] - 2026-08-30
 
@@ -268,7 +275,8 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.4.1...v0.5.0

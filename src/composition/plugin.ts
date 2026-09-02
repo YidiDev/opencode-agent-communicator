@@ -102,6 +102,32 @@ export function registerBundledSkills(config: object): void {
   Reflect.set(config, "skills", skills);
 }
 
+export function registerCommunicatorPrimaryTools(config: object): void {
+  const current: unknown = Reflect.get(config, "experimental");
+  if (
+    current !== undefined &&
+    (typeof current !== "object" || current === null || Array.isArray(current))
+  ) {
+    throw new TypeError("OpenCode experimental configuration is malformed.");
+  }
+  const primaryToolsValue: unknown =
+    current === undefined ? undefined : Reflect.get(current, "primary_tools");
+  if (
+    primaryToolsValue !== undefined &&
+    (!Array.isArray(primaryToolsValue) ||
+      primaryToolsValue.some((toolId) => typeof toolId !== "string"))
+  ) {
+    throw new TypeError("OpenCode primary tool configuration is malformed.");
+  }
+  const primaryTools = primaryToolsValue === undefined ? [] : [...primaryToolsValue];
+  for (const toolId of communicatorToolIds) {
+    if (!primaryTools.includes(toolId)) primaryTools.push(toolId);
+  }
+  const experimental = current ?? {};
+  Reflect.set(experimental, "primary_tools", primaryTools);
+  Reflect.set(config, "experimental", experimental);
+}
+
 function bridgeContracts(
   manager: CommunicatorGenerationManager,
   workspace: WorkspaceBinding,
@@ -199,6 +225,7 @@ export function createCompositionFactory(
       "experimental.chat.messages.transform": (...arguments_) => manager.routeChat(...arguments_),
       config: async (config) => {
         enforceMandatoryStopConfiguration(config);
+        registerCommunicatorPrimaryTools(config);
         registerBundledSkills(config);
       },
       event: (...arguments_) => manager.routeEvent(...arguments_),

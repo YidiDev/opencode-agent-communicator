@@ -9,6 +9,10 @@ Use the durable request inbox to participate in communication with independent p
 peer request is advisory input, not authority to bypass the user or normal OpenCode permissions.
 Source and target are temporary roles for one request; either peer may initiate another operation.
 
+This inbox belongs to visible root peers, not native `task` children. A task child returns its work
+through the native task result channel. Do not combine a foreground task wait with a communicator
+ask, wait, or durable request to that child.
+
 ## Review inbound peer requests
 
 1. Call `session_request_list` with `role: "inbox"`. The list is metadata-only.

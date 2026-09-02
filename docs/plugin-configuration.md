@@ -5,7 +5,7 @@ configuration, and values above compiled safety ceilings stop startup before the
 
 ```json
 [
-  "file:///home/operator/.local/share/opencode-agent-communicator/v0.7.0/node_modules/opencode-agent-communicator/src/index.ts",
+  "file:///home/operator/.local/share/opencode-agent-communicator/v0.7.1/node_modules/opencode-agent-communicator/src/index.ts",
   {
     "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
     "startupDeadlineMs": 30000,
@@ -57,7 +57,7 @@ configuration, and values above compiled safety ceilings stop startup before the
 `XDG_STATE_HOME` or `HOME/.local/state`, outside the workspace; the store verifies ownership,
 permissions, no-follow traversal, and filesystem support. This implementation fails closed on any
 runtime other than Linux x64 before it opens the state store. Linux ARM64 and all other CPU
-architectures are outside the certified `0.7.0` package scope; package metadata also restricts
+architectures are outside the certified `0.7.1` package scope; package metadata also restricts
 installation to x64. Install the immutable private Git release externally with npm, then configure
 its absolute `file://` source entry; OpenCode `1.18.x` does not reliably populate its cache directly
 from a private `git+ssh` spec. Bun `1.4.0` remains the exact development and verification target.
@@ -79,6 +79,15 @@ root-owned OpenCode trust checks. No shell is used.
 Stop has no configurable bypass and is always narrowed to `ask` by the mandatory permission hook.
 Explicit start agent/model overrides remain subject to exact allowlists even when start policy is
 `allow`.
+
+The config hook also appends all 21 communicator IDs to
+`experimental.primary_tools`. Existing entries and unrelated `experimental` fields are preserved,
+and repeated hook execution does not add another copy. OpenCode uses this list when creating native
+`task` children, which keeps communicator tools on primary roots while children report through the
+native task result channel. Do not pair a foreground task wait with a separate communicator request
+to that child. The host snapshots child permissions at creation, so a child created before this
+configuration was installed and later resumed may retain its old tool list; visible-root invocation
+authorization still rejects it.
 
 The established `allowManagedSessionRecursion` and `managedSessionsPerWorkspace` names refer to
 sessions created and tracked through `session_start`. This provenance supports idempotency, quotas,
