@@ -15,5 +15,5 @@ FROM source AS packed
 RUN mkdir /package && bun pm pack --ignore-scripts --destination /package
 RUN mkdir /consumer
 WORKDIR /consumer
-RUN bun init -y && bun add /package/opencode-agent-communicator-0.7.1.tgz --ignore-scripts
+RUN bun init -y && bun add /package/opencode-agent-communicator-0.7.2.tgz --ignore-scripts
 RUN bun -e 'import plugin from "opencode-agent-communicator"; if (typeof plugin !== "function") throw new Error("packed entry is not a plugin")'
