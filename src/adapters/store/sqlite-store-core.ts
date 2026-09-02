@@ -44,6 +44,8 @@ import {
   type SqliteDatabaseLifecycle,
   type StoreContext,
   StoreSecurityError,
+  sqliteStoreDefaultLeaseDurationMs,
+  sqliteStoreDefaultTakeoverGraceMs,
 } from "./store-types";
 
 function retainCloseFailure(cause: unknown, pendingError: unknown): unknown {
@@ -89,13 +91,13 @@ export class SqliteStoreCore {
     const ownerGenerationId = randomUUID();
     const leaseDurationMs = integerStoreOption(
       "leaseDurationMs",
-      options.leaseDurationMs ?? 15_000,
+      options.leaseDurationMs ?? sqliteStoreDefaultLeaseDurationMs,
       1_000,
       300_000,
     );
     const takeoverGraceMs = integerStoreOption(
       "takeoverGraceMs",
-      options.takeoverGraceMs ?? 1_000,
+      options.takeoverGraceMs ?? sqliteStoreDefaultTakeoverGraceMs,
       0,
       leaseDurationMs,
     );
@@ -266,6 +268,11 @@ export class SqliteStoreCore {
   async isCurrent(token: FencingToken): Promise<boolean> {
     this.assertOpen();
     return this.access.mutate(() => this.ownershipRepository.isCurrent(token));
+  }
+
+  ownershipTakeoverDelayMs(): number {
+    this.assertOpen();
+    return this.access.inspect(() => this.ownershipRepository.takeoverDelayMs());
   }
 
   async establish(token: FencingToken, control: OperationControl): Promise<StartupRecoveryBarrier> {

@@ -344,7 +344,15 @@ export class ParticipantStopLifecycle {
   private fail(code: ConstructorParameters<typeof RequestDeadlineSchedulerFault>[0]): void {
     const fault = new RequestDeadlineSchedulerFault(code);
     this.abortEffects(`participant_stop_${code}`);
-    this.options.lifecycle.stop(code === "ownership_lost" ? "ownership_lost" : "shutdown", fault);
+    this.options.lifecycle.stop(
+      code === "ownership_lost" ? "ownership_lost" : "shutdown",
+      code === "ownership_lost"
+        ? "ownership_lost"
+        : code === "storage_failure"
+          ? "storage_failure"
+          : "contract_fault",
+      fault,
+    );
   }
 
   private abortEffects(reason: string): void {

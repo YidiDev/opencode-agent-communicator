@@ -62,7 +62,15 @@ export async function startReadyLifecycle(
     ...(input.timers ? { timers: input.timers } : {}),
     ...(input.nowMonotonicMs ? { nowMonotonicMs: input.nowMonotonicMs } : {}),
     onFault: (fault: RequestDeadlineSchedulerFault) => {
-      lifecycle?.stop(fault.code === "ownership_lost" ? "ownership_lost" : "shutdown", fault);
+      lifecycle?.stop(
+        fault.code === "ownership_lost" ? "ownership_lost" : "shutdown",
+        fault.code === "ownership_lost"
+          ? "ownership_lost"
+          : fault.code === "storage_failure"
+            ? "storage_failure"
+            : "contract_fault",
+        fault,
+      );
       return undefined;
     },
   });
@@ -75,7 +83,15 @@ export async function startReadyLifecycle(
   const readiness = await runUntilAborted(signal, () => scheduler.startAndWaitReady());
   if (readiness.kind === "aborted") {
     const fault = scheduler.fault;
-    lifecycle.stop(fault?.code === "ownership_lost" ? "ownership_lost" : "shutdown", fault);
+    lifecycle.stop(
+      fault?.code === "ownership_lost" ? "ownership_lost" : "shutdown",
+      fault?.code === "ownership_lost"
+        ? "ownership_lost"
+        : fault?.code === "storage_failure"
+          ? "storage_failure"
+          : "contract_fault",
+      fault,
+    );
     return fault
       ? startupFailure(
           fault.code === "ownership_lost" ? "ownership_lost" : "storage_unavailable",
@@ -84,12 +100,20 @@ export async function startReadyLifecycle(
       : startupFailure("ownership_lost", "Startup scheduler readiness was interrupted.");
   }
   if (readiness.kind === "rejected") {
-    lifecycle.stop("shutdown", scheduler.fault);
+    lifecycle.stop("shutdown", "contract_fault", scheduler.fault);
     return startupFailure("storage_unavailable", "Request deadline scheduler readiness rejected.");
   }
   if (!readiness.value.ok) {
     const fault = readiness.value.fault;
-    lifecycle.stop(fault.code === "ownership_lost" ? "ownership_lost" : "shutdown", fault);
+    lifecycle.stop(
+      fault.code === "ownership_lost" ? "ownership_lost" : "shutdown",
+      fault.code === "ownership_lost"
+        ? "ownership_lost"
+        : fault.code === "storage_failure"
+          ? "storage_failure"
+          : "contract_fault",
+      fault,
+    );
     return startupFailure(
       fault.code === "ownership_lost" ? "ownership_lost" : "storage_unavailable",
       "Request deadline scheduler failed initial readiness.",
@@ -97,7 +121,7 @@ export async function startReadyLifecycle(
   }
   const nowMs = readSafeClockMs(ports.clock);
   if (signal.aborted || nowMs === undefined || nowMs >= input.deadlineMs) {
-    lifecycle.stop("ownership_lost", scheduler.fault);
+    lifecycle.stop("ownership_lost", "ownership_lost", scheduler.fault);
     return startupFailure("ownership_lost", "Startup readiness was interrupted.");
   }
   const finalOwnership = await runUntilAborted(signal, () =>
@@ -107,6 +131,13 @@ export async function startReadyLifecycle(
     const fault = scheduler.fault;
     lifecycle.stop(
       fault?.code === "ownership_lost" ? "ownership_lost" : fault ? "shutdown" : "ownership_lost",
+      fault?.code === "ownership_lost"
+        ? "ownership_lost"
+        : fault?.code === "storage_failure"
+          ? "storage_failure"
+          : fault
+            ? "contract_fault"
+            : "ownership_lost",
       fault,
     );
     return fault
@@ -118,7 +149,11 @@ export async function startReadyLifecycle(
   }
   if (finalOwnership.kind === "rejected") {
     const ownershipLost = finalOwnership.cause instanceof OwnershipLostFault;
-    lifecycle.stop(ownershipLost ? "ownership_lost" : "shutdown", scheduler.fault);
+    lifecycle.stop(
+      ownershipLost ? "ownership_lost" : "shutdown",
+      ownershipLost ? "ownership_lost" : "storage_failure",
+      scheduler.fault,
+    );
     return startupFailure(
       ownershipLost ? "ownership_lost" : "storage_unavailable",
       ownershipLost
@@ -127,7 +162,7 @@ export async function startReadyLifecycle(
     );
   }
   if (finalOwnership.value !== true) {
-    lifecycle.stop("ownership_lost", scheduler.fault);
+    lifecycle.stop("ownership_lost", "ownership_lost", scheduler.fault);
     return startupFailure("ownership_lost", "Startup ownership was lost.");
   }
   const finalNowMs = readSafeClockMs(ports.clock);
@@ -147,6 +182,13 @@ export async function startReadyLifecycle(
         : storageFault
           ? "shutdown"
           : "ownership_lost",
+      schedulerFault?.code === "ownership_lost"
+        ? "ownership_lost"
+        : schedulerFault?.code === "storage_failure"
+          ? "storage_failure"
+          : storageFault
+            ? "contract_fault"
+            : "ownership_lost",
       schedulerFault,
     );
     return startupFailure(

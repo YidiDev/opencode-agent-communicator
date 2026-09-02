@@ -264,7 +264,13 @@ describe("communicator readiness commit boundary", () => {
   });
 
   test("supports native scheduler timing when no timer adapter is injected", async () => {
-    const ports = startupPorts();
+    const ports = {
+      ...startupPorts(),
+      locks: {
+        cleanupExpired: async () => ({ deleted: 0 }),
+        readNextExpiry: async () => ({ storeObservedAtMs: 1, maximumSleepMs: 10 }),
+      } as never,
+    };
     const { timers: _timers, nowMonotonicMs: _nowMonotonicMs, ...nativeInput } = input();
     const result = await startReadyLifecycle(
       ports,

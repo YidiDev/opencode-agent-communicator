@@ -158,6 +158,7 @@ describe("composition factory ordering", () => {
       status: "ready",
       effectSignal: new AbortController().signal,
       assertReady: () => undefined,
+      observeStop: () => () => undefined,
       stop: () => order.push("lifecycle-stop"),
       scheduler: { drain: async () => order.push("scheduler-drain") },
     };
@@ -271,8 +272,11 @@ describe("composition factory failure cleanup", () => {
         ok: true,
         value: {
           fencingToken: 1 as never,
+          status: "ready",
+          stopState: undefined,
           effectSignal: new AbortController().signal,
           assertReady: () => undefined,
+          observeStop: () => () => undefined,
           stop: () => order.push("lifecycle-stop"),
           scheduler: {
             drain: async () => {
@@ -323,7 +327,9 @@ describe("composition factory failure cleanup", () => {
       recoverStartup: async () => domainFailure("storage_unavailable", "recovery failed", true),
     });
 
-    await expect(Reflect.apply(plugin, undefined, [{}, {}])).rejects.toThrow("recovery failed");
+    await expect(Reflect.apply(plugin, undefined, [{}, {}])).rejects.toThrow(
+      "storage became unavailable during recovery",
+    );
     expect(order).toEqual(["runtime-stop", "store-close"]);
   });
 
@@ -331,8 +337,11 @@ describe("composition factory failure cleanup", () => {
     const order: string[] = [];
     const lifecycle = {
       fencingToken: 1 as never,
+      status: "ready",
+      stopState: undefined,
       effectSignal: new AbortController().signal,
       assertReady: () => undefined,
+      observeStop: () => () => undefined,
       stop: () => {
         order.push("lifecycle-stop");
         throw new Error("first cleanup failure");
@@ -397,7 +406,10 @@ describe("composition factory failure cleanup", () => {
       recoverStartup: async () => ({
         ok: true,
         value: {
+          status: "ready",
+          stopState: undefined,
           effectSignal: new AbortController().signal,
+          observeStop: () => () => undefined,
           stop: () => order.push("lifecycle-stop"),
           scheduler: { drain: async () => order.push("scheduler-drain") },
         } as never,

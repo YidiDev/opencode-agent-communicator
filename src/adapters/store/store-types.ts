@@ -133,6 +133,9 @@ export interface LinuxBunSqliteStoreOptions {
   readonly sqliteDatabaseLifecycle?: SqliteDatabaseLifecycle;
 }
 
+export const sqliteStoreDefaultLeaseDurationMs = 15_000;
+export const sqliteStoreDefaultTakeoverGraceMs = 1_000;
+
 export interface StoreContext {
   readonly database: Database;
   readonly limits: SqliteStoreLimits;
