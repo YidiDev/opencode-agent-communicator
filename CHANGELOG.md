@@ -6,6 +6,18 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-09-02
+
+### Fixed
+
+- The expired-lease recovery from #35 is now complete: a successor generation that itself stops with
+  a port-contract violation exactly while taking over an already-lapsed lease is retried once instead
+  of failing the communicator permanently with "A communicator port contract failed.". The retry only
+  runs on a free lease, is bounded to one attempt, stays fail-closed (a genuine violation, a live
+  contender, or a competitor that takes the lease mid-retry remains terminal), and never runs while
+  the host is disposed. A storage fault while reading the expired-lease takeover delay now also fails
+  closed with a storage-failure terminal instead of leaking an unclassified error.
+
 ## [0.7.2] - 2026-09-01
 
 ### Fixed
@@ -278,7 +290,8 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.6.0...v0.7.0
