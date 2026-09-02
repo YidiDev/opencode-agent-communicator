@@ -11,7 +11,7 @@ import {
   submittingRequestsPerWorkspaceHardCeiling,
   unresolvedStartProvenancePerWorkspaceHardCeiling,
 } from "../../domain/safety-ceilings";
-import { StoreIntegrityError, StoreSecurityError } from "./store-types";
+import { OwnershipUnavailableError, StoreIntegrityError } from "./store-types";
 
 interface Migration {
   readonly version: number;
@@ -1489,7 +1489,7 @@ function assertNoActiveOwnershipLease(
     row.expiresWallMs + takeoverGraceMs > nowMs &&
     (!hasReleased || row.releasedWallMs === null)
   ) {
-    throw new StoreSecurityError("An active SQLite owner prevents schema migration.");
+    throw new OwnershipUnavailableError("An active SQLite owner prevents schema migration.");
   }
 }
 

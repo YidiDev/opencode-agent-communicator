@@ -21,6 +21,7 @@ import {
 import { sqliteStoreMigrations } from "../../../../src/adapters/store/migrations";
 import { LinuxBunSqliteStore } from "../../../../src/adapters/store/sqlite-store";
 import {
+  OwnershipUnavailableError,
   type SqliteStoreLimits,
   StoreIntegrityError,
   StoreSecurityError,
@@ -255,7 +256,7 @@ describe("Linux private SQLite initialization", () => {
     database.close(true);
 
     expect(() => openStore({ state: location.state, ownerId: "blocked-bootstrap", time })).toThrow(
-      StoreSecurityError,
+      OwnershipUnavailableError,
     );
     expect(
       inspect<{ version: number }>(
@@ -272,7 +273,7 @@ describe("Linux private SQLite initialization", () => {
 
     time.advance(1_099);
     expect(() => openStore({ state: location.state, ownerId: "grace-blocked", time })).toThrow(
-      StoreSecurityError,
+      OwnershipUnavailableError,
     );
     time.advance(2);
     const migrated = openStore({ state: location.state, ownerId: "expired-bootstrap", time });

@@ -20,6 +20,11 @@ One full scenario suite is one provider attempt. A transient network or rate-lim
 the second available allowlisted model, for a maximum of two attempts. Behavior failures are never
 retried. The process exits successfully only for the `passed` classification.
 
+The managed-request journey accepts a participant that handles its canonical initial request before
+the scripted follow-up only when that follow-up cleanly observes an empty inbox and the source later
+recovers the exact `[["pass"]]` answer for the same request and acknowledges it. Missing correlation,
+unexpected participant tools, and every other incomplete journey remain behavior failures.
+
 The evaluator uses the exact checkout's OpenCode CLI, but loads the plugin from an `npm pack`
 archive installed with lifecycle scripts disabled in a clean private consumer. Its OpenCode home,
 XDG roots, project, plugin state, and config are temporary and isolated. Authentication content is

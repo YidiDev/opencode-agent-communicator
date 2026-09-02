@@ -70,4 +70,30 @@ describe("active invocation lifecycle", () => {
     rejectLate?.(new Error("late quarantined rejection"));
     await Promise.resolve();
   });
+
+  test("reports a controlled timeout without deleting unresolved work", async () => {
+    let fire: (() => void) | undefined;
+    const registry = new ActiveInvocationRegistry(20, {
+      set(_delay, callback) {
+        fire = callback;
+        return callback;
+      },
+      clear: () => undefined,
+    });
+    let settle!: () => void;
+    const operation = registry.run(
+      new AbortController().signal,
+      () => new Promise<void>((resolve) => (settle = resolve)),
+    );
+    await Promise.resolve();
+    const drain = registry.drain();
+    fire?.();
+    expect(await drain).toBe("timed_out");
+    expect(registry.activeCount).toBe(1);
+    const eventualSettlement = registry.settled();
+    settle();
+    await operation;
+    await eventualSettlement;
+    expect(registry.activeCount).toBe(0);
+  });
 });

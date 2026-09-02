@@ -6,6 +6,20 @@ import { scoreScenario } from "./scorer";
 import type { EvaluationClassification, ProcessCapture, ScenarioScore, ToolCall } from "./types";
 
 const processDeadlineMs = 180_000;
+const participantInitialMessage =
+  "Do not process the attached durable request in this turn. Do not call tools. Wait for a later user follow-up.";
+const workflowRequest = {
+  kind: "ask",
+  timeout_seconds: 120,
+  questions: [
+    {
+      prompt: "Choose the evaluation result",
+      options: ["pass", "fail"],
+      multiple: false,
+      allow_custom: false,
+    },
+  ],
+} as const;
 
 interface AttemptContext {
   readonly cli: string;
@@ -46,6 +60,12 @@ function nestedString(value: unknown, path: readonly string[]): string | undefin
   return typeof current === "string" ? current : undefined;
 }
 
+function nestedNumber(value: unknown, path: readonly string[]): number | undefined {
+  let current = value;
+  for (const key of path) current = record(current)?.[key];
+  return typeof current === "number" && Number.isSafeInteger(current) ? current : undefined;
+}
+
 function correlatedScore(score: ScenarioScore, errors: readonly string[]): ScenarioScore {
   const combined = [...score.errors, ...errors];
   return { ...score, passed: combined.length === 0, errors: combined };
@@ -67,7 +87,7 @@ function lockCorrelation(score: ScenarioScore): ScenarioScore {
   return correlatedScore(score, errors);
 }
 
-function requestStartCorrelation(score: ScenarioScore): {
+export function requestStartCorrelation(score: ScenarioScore): {
   readonly score: ScenarioScore;
   readonly requestId?: string;
   readonly targetSessionId?: string;
@@ -78,6 +98,9 @@ function requestStartCorrelation(score: ScenarioScore): {
   const errors: string[] = [];
   if (requestId === undefined) errors.push("request start returned no request_id");
   if (targetSessionId === undefined) errors.push("request start returned no session_id");
+  if (!hasExactRequestStartJourney(score, requestId, targetSessionId)) {
+    errors.push("request start did not complete the exact correlated tool journey");
+  }
   return {
     score: correlatedScore(score, errors),
     ...(requestId === undefined ? {} : { requestId }),
@@ -88,6 +111,7 @@ function requestStartCorrelation(score: ScenarioScore): {
 function participantCorrelation(
   score: ScenarioScore,
   requestId: string | undefined,
+  sourceScore: ScenarioScore,
 ): ScenarioScore {
   const list = completed(score.tools, "session_request_list");
   const get = completed(score.tools, "session_request_get");
@@ -105,7 +129,14 @@ function participantCorrelation(
   if (JSON.stringify(inputField(respond, "answers")) !== JSON.stringify([["pass"]])) {
     errors.push("participant response did not preserve the required answer shape");
   }
-  return correlatedScore(score, errors);
+  if (!hasExactParticipantJourney(score, requestId)) {
+    errors.push("participant did not complete the exact correlated tool journey");
+  }
+  const correlated = correlatedScore(score, errors);
+  if (correlated.passed || !isProactiveParticipantCompletion(score, sourceScore, requestId)) {
+    return correlated;
+  }
+  return { ...score, passed: true, errors: [] };
 }
 
 function sourceCorrelation(score: ScenarioScore, requestId: string | undefined): ScenarioScore {
@@ -122,7 +153,202 @@ function sourceCorrelation(score: ScenarioScore, requestId: string | undefined):
   if (requestId !== undefined && inputField(ack, "request_id") !== requestId) {
     errors.push("source acknowledgement did not use the durable request_id");
   }
+  if (!hasExpectedSourceResult(get, requestId)) {
+    errors.push("source did not recover the required pass answer");
+  }
+  if (!hasExactSourceJourney(score, requestId)) {
+    errors.push("source did not complete the exact correlated tool journey");
+  }
   return correlatedScore(score, errors);
+}
+
+function hasExactCompletedTools(score: ScenarioScore, names: readonly string[]): boolean {
+  return (
+    score.tools.length === names.length &&
+    score.tools.every((tool, index) => tool.name === names[index] && tool.status === "completed")
+  );
+}
+
+function hasOnlyKeys(value: Record<string, unknown> | undefined, keys: readonly string[]): boolean {
+  return (
+    value !== undefined && Object.keys(value).sort().join("\0") === [...keys].sort().join("\0")
+  );
+}
+
+function hasExpectedWorkflowRequest(value: unknown): boolean {
+  const request = record(value);
+  const questions = request?.questions;
+  if (
+    request === undefined ||
+    !hasOnlyKeys(request, ["kind", "timeout_seconds", "questions"]) ||
+    request.kind !== "ask" ||
+    request.timeout_seconds !== 120 ||
+    !Array.isArray(questions) ||
+    questions.length !== 1
+  ) {
+    return false;
+  }
+  const question = record(questions[0]);
+  if (question === undefined) return false;
+  return (
+    hasOnlyKeys(question, ["prompt", "options", "multiple", "allow_custom"]) &&
+    question.prompt === "Choose the evaluation result" &&
+    JSON.stringify(question.options) === JSON.stringify(["pass", "fail"]) &&
+    question.multiple === false &&
+    question.allow_custom === false
+  );
+}
+
+function hasExactRequestStartJourney(
+  score: ScenarioScore,
+  requestId: string | undefined,
+  targetSessionId: string | undefined,
+): boolean {
+  if (
+    requestId === undefined ||
+    targetSessionId === undefined ||
+    !hasExactCompletedTools(score, ["session_request_start"])
+  ) {
+    return false;
+  }
+  const started = score.tools[0];
+  const operationId = nestedString(started?.output, ["value", "operation", "operation_id"]);
+  const sourceSessionId = nestedString(started?.output, [
+    "value",
+    "operation",
+    "source_session_id",
+  ]);
+  if (operationId === undefined || sourceSessionId === undefined) return false;
+  return (
+    inputField(started, "idempotency_key") === "eval-workflow-target" &&
+    inputField(started, "title") === "Evaluation participant" &&
+    inputField(started, "initial_message") === participantInitialMessage &&
+    hasExpectedWorkflowRequest(inputField(started, "request")) &&
+    nestedString(started?.output, ["value", "operation", "session_id"]) === targetSessionId &&
+    nestedString(started?.output, ["value", "request", "request_id"]) === requestId &&
+    nestedString(started?.output, ["value", "request", "kind"]) === "ask" &&
+    nestedString(started?.output, ["value", "request", "role"]) === "source" &&
+    nestedString(started?.output, ["value", "request", "linked_start_operation_id"]) ===
+      operationId &&
+    nestedString(started?.output, ["value", "request", "source_session_id"]) === sourceSessionId &&
+    nestedString(started?.output, ["value", "request", "target_session_id"]) === targetSessionId
+  );
+}
+
+function listContainsRequest(call: ToolCall | undefined, role: string, requestId: string): boolean {
+  const items = record(record(call?.output)?.value)?.items;
+  return (
+    inputField(call, "role") === role &&
+    record(call?.output)?.ok === true &&
+    Array.isArray(items) &&
+    items.some((item) => record(item)?.request_id === requestId)
+  );
+}
+
+function hasExactParticipantJourney(score: ScenarioScore, requestId: string | undefined): boolean {
+  if (
+    requestId === undefined ||
+    !hasExactCompletedTools(score, [
+      "skill",
+      "session_request_list",
+      "session_request_get",
+      "session_respond",
+    ])
+  ) {
+    return false;
+  }
+  const [, list, get, respond] = score.tools;
+  return (
+    listContainsRequest(list, "inbox", requestId) &&
+    inputField(get, "request_id") === requestId &&
+    nestedString(get?.output, ["value", "outcome"]) === "pending_payload" &&
+    nestedString(get?.output, ["value", "metadata", "request_id"]) === requestId &&
+    hasExpectedWorkflowRequest(record(record(get?.output)?.value)?.payload) &&
+    inputField(respond, "request_id") === requestId &&
+    JSON.stringify(inputField(respond, "answers")) === JSON.stringify([["pass"]]) &&
+    nestedString(respond?.output, ["value", "request_id"]) === requestId &&
+    nestedString(respond?.output, ["value", "state"]) === "answered" &&
+    nestedNumber(respond?.output, ["value", "answered_at_ms"]) !== undefined
+  );
+}
+
+function hasExpectedSourceResult(
+  get: ToolCall | undefined,
+  requestId: string | undefined,
+): boolean {
+  return (
+    requestId !== undefined &&
+    inputField(get, "request_id") === requestId &&
+    nestedString(get?.output, ["value", "outcome"]) === "available_result" &&
+    nestedString(get?.output, ["value", "metadata", "request_id"]) === requestId &&
+    nestedString(get?.output, ["value", "result", "kind"]) === "ask" &&
+    JSON.stringify(record(record(get?.output)?.value)?.result) ===
+      JSON.stringify({ kind: "ask", answers: [["pass"]] })
+  );
+}
+
+function hasExactSourceJourney(score: ScenarioScore, requestId: string | undefined): boolean {
+  if (
+    requestId === undefined ||
+    !hasExactCompletedTools(score, [
+      "skill",
+      "session_request_list",
+      "session_request_get",
+      "session_request_ack",
+    ])
+  ) {
+    return false;
+  }
+  const [, list, get, ack] = score.tools;
+  return (
+    listContainsRequest(list, "outbox", requestId) &&
+    hasExpectedSourceResult(get, requestId) &&
+    inputField(ack, "request_id") === requestId &&
+    nestedString(ack?.output, ["value", "request_id"]) === requestId &&
+    nestedString(ack?.output, ["value", "state"]) === "acknowledged" &&
+    nestedNumber(ack?.output, ["value", "acknowledged_at_ms"]) !== undefined
+  );
+}
+
+function isProactiveParticipantCompletion(
+  participantScore: ScenarioScore,
+  sourceScore: ScenarioScore,
+  requestId: string | undefined,
+): boolean {
+  const expectedIncompleteError =
+    "missing ordered tools: skill, session_request_list, session_request_get, session_respond";
+  if (
+    !sourceScore.passed ||
+    participantScore.errors.some((error) => error !== expectedIncompleteError) ||
+    participantScore.tools.length !== 2
+  ) {
+    return false;
+  }
+  const [skill, list] = participantScore.tools;
+  const items = record(record(list?.output)?.value)?.items;
+  return (
+    skill?.name === "skill" &&
+    skill.status === "completed" &&
+    inputField(skill, "name") === "session-request-participant" &&
+    list?.name === "session_request_list" &&
+    list.status === "completed" &&
+    inputField(list, "role") === "inbox" &&
+    Array.isArray(items) &&
+    items.length === 0 &&
+    hasExpectedSourceResult(completed(sourceScore.tools, "session_request_get"), requestId)
+  );
+}
+
+export function correlateWorkflowScores(
+  participantScore: ScenarioScore,
+  sourceScore: ScenarioScore,
+  requestId: string | undefined,
+): { readonly participant: ScenarioScore; readonly source: ScenarioScore } {
+  const source = sourceCorrelation(sourceScore, requestId);
+  return {
+    participant: participantCorrelation(participantScore, requestId, source),
+    source,
+  };
 }
 
 async function run(
@@ -213,7 +439,7 @@ export async function runScenarios(context: AttemptContext): Promise<AttemptResu
 
   const create = await execute(
     "workflow-create",
-    'Call session_request_start exactly once with idempotency_key eval-workflow-target, title Evaluation participant, and initial_message Wait for a durable request and do not call tools yet. The request argument must be a nested JSON object, never a string or escaped JSON: {"kind":"ask","timeout_seconds":120,"questions":[{"prompt":"Choose the evaluation result","options":["pass","fail"],"multiple":false,"allow_custom":false}]}. After its result, reply EVAL_TARGET_CREATED. The only permitted tool is session_request_start.',
+    `Call session_request_start exactly once with idempotency_key eval-workflow-target, title Evaluation participant, and initial_message ${JSON.stringify(participantInitialMessage)}. The request argument must be a nested JSON object, never a string or escaped JSON: ${JSON.stringify(workflowRequest)}. After its result, reply EVAL_TARGET_CREATED. The only permitted tool is session_request_start.`,
     ["session_request_start"],
   );
   const createFailure = transient(create);
@@ -235,7 +461,6 @@ export async function runScenarios(context: AttemptContext): Promise<AttemptResu
   );
   const participantFailure = transient(participant);
   if (participantFailure !== undefined) return { classification: participantFailure, scores };
-  scores["workflow-participant"] = participantCorrelation(participant.score, started.requestId);
 
   const recover = await execute(
     "workflow-source-recover",
@@ -246,7 +471,9 @@ export async function runScenarios(context: AttemptContext): Promise<AttemptResu
   );
   const recoverFailure = transient(recover);
   if (recoverFailure !== undefined) return { classification: recoverFailure, scores };
-  scores["workflow-source-recover"] = sourceCorrelation(recover.score, started.requestId);
+  const workflow = correlateWorkflowScores(participant.score, recover.score, started.requestId);
+  scores["workflow-participant"] = workflow.participant;
+  scores["workflow-source-recover"] = workflow.source;
 
   return {
     classification: Object.values(scores).every((score) => score.passed)

@@ -67,7 +67,7 @@ function fixture(
     fencingToken: token,
     status: lifecycleInitiallyStopped ? "stopped" : "ready",
     effectSignal: lifecycleEffects.signal,
-    stop(reason: string, fault?: unknown) {
+    stop(reason: string, _cause?: unknown, fault?: unknown) {
       calls.push(`stop:${reason}`);
       stoppedFault = fault;
       this.status = "stopped";

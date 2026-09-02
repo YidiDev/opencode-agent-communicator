@@ -141,6 +141,16 @@ export class OwnershipRepository {
     return true;
   }
 
+  takeoverDelayMs(): number {
+    const row = currentRow(this.context);
+    if (!row || row.releasedWallMs !== null) return 0;
+    const eligibleWallMs = row.expiresWallMs + this.context.takeoverGraceMs;
+    if (!Number.isSafeInteger(eligibleWallMs)) {
+      throw new StoreIntegrityError("Stored ownership takeover timing is invalid.");
+    }
+    return Math.max(0, eligibleWallMs - this.context.nowWallMs());
+  }
+
   assertCurrent(token: FencingToken): void {
     if (!this.isCurrent(token)) throw new OwnershipLostFault("SQLite ownership was lost.");
   }

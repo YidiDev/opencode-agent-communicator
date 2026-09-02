@@ -5,6 +5,15 @@ interface TextPart {
   text: string;
 }
 
+export interface ChatMessagesTransformBookkeeping {
+  readonly inFlight: WeakMap<object, Promise<void>>;
+  readonly injectedText: WeakMap<object, string>;
+}
+
+export function createChatMessagesTransformBookkeeping(): ChatMessagesTransformBookkeeping {
+  return { inFlight: new WeakMap(), injectedText: new WeakMap() };
+}
+
 function textParts(messages: unknown): TextPart[] {
   if (!Array.isArray(messages)) return [];
   const result: TextPart[] = [];
@@ -34,9 +43,9 @@ function removeOwnedText(part: TextPart, previous: string): void {
 export function createChatMessagesTransform(
   ports: Parameters<typeof injectCommunicatorContext>[0],
   context: Omit<Parameters<typeof injectCommunicatorContext>[1], "messages">,
+  bookkeeping = createChatMessagesTransformBookkeeping(),
 ): NonNullable<Hooks["experimental.chat.messages.transform"]> {
-  const inFlight = new WeakMap<object, Promise<void>>();
-  const injectedText = new WeakMap<object, string>();
+  const { inFlight, injectedText } = bookkeeping;
   return async (_input, output) => {
     if (typeof output.messages !== "object" || output.messages === null) return;
     const existing = inFlight.get(output.messages);
