@@ -7,7 +7,11 @@ import {
   CommunicatorGenerationManager,
 } from "../../../src/composition/communicator-generation-manager";
 
-function generation(token: number, stopped = false): CommunicatorGenerationHandle {
+function generation(
+  token: number,
+  stopped = false,
+  ownershipTakeoverDelayMs = 0,
+): CommunicatorGenerationHandle {
   const invocations = new ActiveInvocationRegistry();
   const lifecycle = {
     fencingToken: token,
@@ -37,7 +41,7 @@ function generation(token: number, stopped = false): CommunicatorGenerationHandl
     quiesce: () => invocations.closeAdmission(),
     drainInvocations: () => invocations.drain(),
     settleInvocations: () => invocations.settled(),
-    ownershipTakeoverDelayMs: () => 0,
+    ownershipTakeoverDelayMs: () => ownershipTakeoverDelayMs,
     shutdownUnpublished: () => invocations.closeAdmission(),
     disposeResources: async () => undefined,
   };
@@ -83,7 +87,7 @@ describe("communicator generation typed terminal diagnostics", () => {
     ["contract_fault", "A communicator port contract failed."],
     ["workflow_fault", "A communicator workflow faulted."],
   ] as const)("repeats the sanitized %s stop diagnostic", async (cause, diagnostic) => {
-    const stopped = generation(30, true);
+    const stopped = generation(30, true, 500);
     (stopped.lifecycle as { stopState?: unknown }).stopState = {
       cause,
       reason: "shutdown",
