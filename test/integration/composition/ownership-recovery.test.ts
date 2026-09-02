@@ -188,6 +188,19 @@ function stoppedLifecycle(token: number) {
   } as never;
 }
 
+function contractFaultLifecycle(token: number) {
+  return {
+    fencingToken: token,
+    status: "stopped",
+    stopState: {
+      cause: "contract_fault",
+      reason: "shutdown",
+      recoverable: false,
+      diagnostic: "A communicator port contract failed.",
+    },
+  } as never;
+}
+
 function readyLifecycle(token: number) {
   return { fencingToken: token, status: "ready", stopState: undefined } as never;
 }
@@ -196,10 +209,16 @@ function generation(
   store: LinuxBunSqliteStore,
   token: number,
   status: "ready" | "stopped",
+  cause: "ownership_lost" | "contract_fault" = "ownership_lost",
 ): CommunicatorGenerationHandle {
   const invocations = new ActiveInvocationRegistry();
   return {
-    lifecycle: status === "ready" ? readyLifecycle(token) : stoppedLifecycle(token),
+    lifecycle:
+      status === "ready"
+        ? readyLifecycle(token)
+        : cause === "contract_fault"
+          ? contractFaultLifecycle(token)
+          : stoppedLifecycle(token),
     invocations,
     fencingToken: token as never,
     contracts: {
@@ -507,6 +526,53 @@ describe("real SQLite manager ownership recovery", () => {
       participantSessionId: source,
     });
     expect(persisted?.delivery.state).toBe("admission_unknown");
+    expect(await successorStore?.isCurrent(manager.current.fencingToken)).toBeTrue();
+    await manager.dispose();
+  });
+
+  test("recovers a contract-fault stop when the expired lease is free to retake", async () => {
+    const path = stateDirectory();
+    const clock = controlledClock();
+    const staleStore = openStore(path, clock);
+    const staleToken = await staleStore.acquire();
+    clock.advance(1_101);
+    expect(await staleStore.isCurrent(staleToken)).toBeFalse();
+    expect(await staleStore.ownershipTakeoverDelayMs()).toBe(0);
+
+    const stores: LinuxBunSqliteStore[] = [];
+    const native = nativeFixture(() => undefined);
+    const dependencies = generationDependencies(path, clock, native, stores);
+    const options = parseCommunicatorOptions(
+      { stateDirectory: path, startupDeadlineMs: 5_000 },
+      { HOME: "/home/operator" },
+    );
+    const manager = new CommunicatorGenerationManager(
+      generation(staleStore, Number(staleToken), "stopped", "contract_fault"),
+      async (deadlineMs, abort) =>
+        createCommunicatorGeneration({
+          pluginInput: {} as never,
+          options,
+          workspace: {
+            workspaceKey: workspace,
+            projectId: "project",
+            directory: "/",
+            worktree: "/",
+          },
+          native,
+          dependencies,
+          chatBookkeeping: createChatMessagesTransformBookkeeping(),
+          startupDeadlineMs: deadlineMs,
+          startupAbort: abort,
+        }),
+      { nowMs: clock.wall, wait: async () => "completed" },
+      5_000,
+    );
+
+    const waitingInvocation = invoke(manager);
+    expect(JSON.parse(await waitingInvocation)).toEqual({ ok: true, value: [] });
+    expect(Number(manager.current.fencingToken)).toBe(Number(staleToken) + 1);
+    expect(manager.terminalState).toBeUndefined();
+    const successorStore = stores[0];
     expect(await successorStore?.isCurrent(manager.current.fencingToken)).toBeTrue();
     await manager.dispose();
   });

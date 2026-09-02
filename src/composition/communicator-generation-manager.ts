@@ -149,7 +149,10 @@ export class CommunicatorGenerationManager {
     const generation = this.currentValue;
     if (generation.lifecycle.status === "ready") return generation;
     const stop = generation.lifecycle.stopState;
-    if (!stop?.recoverable || stop.cause !== "ownership_lost") {
+    const ownershipRecoverable =
+      (stop?.recoverable && stop.cause === "ownership_lost") ||
+      this.expiredLeaseContractFault(stop, generation);
+    if (!ownershipRecoverable) {
       this.stateValue = "failed";
       const classification =
         stop?.cause === "storage_failure"
@@ -257,6 +260,23 @@ export class CommunicatorGenerationManager {
     generation: CommunicatorGenerationHandle,
   ): CommunicatorGenerationRecoveryError | undefined {
     return recoveryErrorForLifecycle(generation.lifecycle);
+  }
+
+  /**
+   * A contract-fault stop on a generation whose ownership lease has already lapsed is an
+   * ownership-recovery situation rather than a genuine port-contract violation: the expired
+   * lease means no live contender owns the communicator, so a transient scheduler or recovery
+   * port-contract violation during takeover must be retried by re-acquiring ownership instead of
+   * failing the communicator permanently. Genuine contract violations and live contender
+   * holdings (a positive takeover delay) remain terminal.
+   */
+  private expiredLeaseContractFault(
+    stop: CommunicatorGenerationHandle["lifecycle"]["stopState"],
+    generation: CommunicatorGenerationHandle,
+  ): boolean {
+    if (stop?.cause !== "contract_fault") return false;
+    if (generation.ownershipTakeoverDelayMs() !== 0) return false;
+    return this.stateValue !== "failed" && this.stateValue !== "disposed";
   }
 
   private failInvalidTiming(): never {
