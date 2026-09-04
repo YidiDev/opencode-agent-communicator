@@ -33,6 +33,10 @@ async function makePrivateDirectory(path: string): Promise<void> {
   await chmod(path, 0o700);
 }
 
+function isolatedNpmEnvironment(cache: string): Record<string, string> {
+  return { npm_config_cache: cache, npm_config_offline: "true" };
+}
+
 async function initializeIsolatedOpenCodeState(
   root: string,
   options: IsolationOptions,
@@ -213,7 +217,7 @@ async function initializeIsolatedOpenCodeState(
     OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
     OPENCODE_AUTH_CONTENT: "{}",
     LIVE_TEST_API_KEY: "local-test-key",
-    npm_config_cache: paths.npmCache,
+    ...isolatedNpmEnvironment(paths.npmCache),
     NO_COLOR: "1",
     LANG: "C.UTF-8",
     PATH: "/usr/bin:/bin",
