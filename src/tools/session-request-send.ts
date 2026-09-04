@@ -42,7 +42,7 @@ export function createSessionRequestSendTool(
 ): InternalToolContract<SessionRequestSendToolArguments> {
   return {
     description:
-      "Queue work to a visible root and establish a durable ask or wait request. Returns immediately with recoverable request metadata and may wake an idle target.",
+      "Queue work to a visible active root and establish a durable ask or wait request. Returns immediately with recoverable request metadata; it never wakes an idle target.",
     args: sessionRequestSendArgumentsSchema,
     async execute(arguments_, context) {
       const adapted = requestToolContext(scope, context);

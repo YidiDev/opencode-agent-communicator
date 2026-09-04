@@ -4,8 +4,17 @@ import type {
   ExportApprovalKind,
   SessionExportApprovalPort,
 } from "../application/session-export-ports";
+import { validateExportDestination } from "../domain/session-export";
+import { validateSessionId } from "../domain/sessions";
+import { validateWorkspaceKey } from "../domain/workspaces";
 import type { StructuralToolContext } from "./contracts";
 import { ToolContractFault } from "./contracts";
+import { exactApprovalRecord, hasExactApprovalControl } from "./invocation-approval-contracts";
+
+export interface InvocationExportApprovalExpected extends ExportApprovalBinding {
+  readonly abort: AbortSignal;
+  readonly deadlineMs: number;
+}
 
 function approvalResource(
   kind: ExportApprovalKind,
@@ -27,6 +36,7 @@ function approvalResource(
 
 export function invocationExportApproval(
   context: StructuralToolContext,
+  expected: InvocationExportApprovalExpected,
 ): SessionExportApprovalPort {
   const requested = new Set<ExportApprovalKind>();
   return Object.freeze({
@@ -35,7 +45,39 @@ export function invocationExportApproval(
       binding: ExportApprovalBinding,
       control: Parameters<SessionExportApprovalPort["requestExportApproval"]>[2],
     ) {
-      if (requested.has(kind) || typeof context.ask !== "function") throw new ToolContractFault();
+      const inspected = exactApprovalRecord(binding, [
+        "workspaceKey",
+        "sourceSessionId",
+        "targetSessionId",
+        "destination",
+        "isSanitized",
+        "shouldOverwrite",
+      ]);
+      const validKind = kind === "mode" || kind === "overwrite";
+      if (
+        !validKind ||
+        (kind === "overwrite" && expected.shouldOverwrite !== true) ||
+        requested.has(kind) ||
+        inspected === undefined ||
+        expected.abort !== context.abort ||
+        expected.sourceSessionId !== context.sessionID ||
+        !validateWorkspaceKey(inspected.workspaceKey).ok ||
+        !validateSessionId(inspected.sourceSessionId).ok ||
+        !validateSessionId(inspected.targetSessionId).ok ||
+        !validateExportDestination(inspected.destination).ok ||
+        typeof inspected.isSanitized !== "boolean" ||
+        typeof inspected.shouldOverwrite !== "boolean" ||
+        inspected.workspaceKey !== expected.workspaceKey ||
+        inspected.sourceSessionId !== expected.sourceSessionId ||
+        inspected.targetSessionId !== expected.targetSessionId ||
+        inspected.destination !== expected.destination ||
+        inspected.isSanitized !== expected.isSanitized ||
+        inspected.shouldOverwrite !== expected.shouldOverwrite ||
+        !hasExactApprovalControl(control, expected.abort, expected.deadlineMs) ||
+        typeof context.ask !== "function"
+      ) {
+        throw new ToolContractFault();
+      }
       requested.add(kind);
       if (control.abort.aborted) return "rejected";
       try {

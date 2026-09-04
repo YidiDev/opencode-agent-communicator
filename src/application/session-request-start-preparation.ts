@@ -127,6 +127,7 @@ export type CanonicalPendingPayload = Extract<
 export async function prepareAuthorizedComposite(
   ports: SessionRequestStartPorts,
   context: SessionStartContext,
+  approvalAbort: AbortSignal,
   token: FencingToken,
   validated: ValidatedStartArguments,
   payload: CanonicalPendingPayload,
@@ -165,7 +166,11 @@ export async function prepareAuthorizedComposite(
     return domainFailure("permission_denied", "Request permission was denied.", false);
   if (authorization.kind !== "allow")
     return domainFailure("approval_rejected", "Request approval was rejected.", false);
-  const approval = await approveCompositeStart(ports, context, idempotencyArgumentsSha256);
+  const approval = await approveCompositeStart(
+    ports,
+    { ...context, abort: approvalAbort },
+    idempotencyArgumentsSha256,
+  );
   if (!approval.ok) return approval;
   const workBytes = new TextEncoder().encode(validated.initialMessage);
   const pending: PendingRequestMetadata & { readonly deliveryState: "prepared" } = {

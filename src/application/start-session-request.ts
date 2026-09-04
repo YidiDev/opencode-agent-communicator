@@ -107,6 +107,7 @@ export async function startSessionRequest(
       const created = await prepareAuthorizedComposite(
         ports,
         linkedContext,
+        context.abort,
         token.value,
         validated.value,
         payload,
@@ -131,7 +132,15 @@ export async function startSessionRequest(
       token.value,
       prepared.operation,
     );
-    if (!reconciled.ok) return reconciled;
+    if (!reconciled.ok) {
+      if (reconciled.error.code !== "native_outcome_unknown") return reconciled;
+      return domainFailure(
+        reconciled.error.code,
+        reconciled.error.message,
+        reconciled.error.retryable,
+        { operation: prepared.operation, request: prepared.request },
+      );
+    }
     let request = prepared.request;
     const operation = reconciled.value;
     if (request.resolutionState === "pending" && request.deliveryState === "prepared") {

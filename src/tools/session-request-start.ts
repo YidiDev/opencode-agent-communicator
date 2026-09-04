@@ -1,24 +1,113 @@
 import {
   type SessionRequestStartPorts,
+  type SessionRequestStartResult,
   startSessionRequest,
 } from "../application/start-session-request";
 import type { PolicyDecision } from "../domain/authorization-policy";
-import { isCoherentRequestMetadata } from "../domain/request-metadata";
 import type { PendingRequestPayload } from "../domain/request-types";
-import { isCoherentStartOperation } from "../domain/session-start";
+import type { DomainFailureCode, DomainResult } from "../domain/results";
 import type { WorkspaceKey } from "../domain/workspaces";
 import {
   type InternalToolContract,
   type SessionRequestStartToolArguments,
-  serializeDomainResult,
   sessionRequestStartArgumentsSchema,
   sessionStartFailureCodes,
+  ToolContractFault,
 } from "./contracts";
 import { invocationRequestAuthorization } from "./invocation-authorization";
 import { invocationStartApproval } from "./invocation-start-approval";
 import { publicCreatedRequest, publicStartOperation } from "./public-values";
 import { sessionBlockingRequestFailureCodes } from "./request-contracts";
 import { requestToolContext } from "./request-tool-context";
+import {
+  exactRecordWithOptionalKeys,
+  exactRequestMetadata,
+  exactStartOperation,
+  exactToolFailure,
+  exactToolSuccess,
+} from "./session-result-contracts";
+
+const sessionRequestStartFailureCodes = [
+  ...new Set([...sessionStartFailureCodes, ...sessionBlockingRequestFailureCodes]),
+] as readonly DomainFailureCode[];
+
+export function serializeSessionRequestStartResult(
+  result: DomainResult<SessionRequestStartResult>,
+  expected: {
+    readonly workspaceKey: WorkspaceKey;
+    readonly sourceSessionId: string;
+    readonly idempotencyKey: string;
+  },
+): string {
+  const success = exactToolSuccess(result);
+  if (success) {
+    const value = exactRecordWithOptionalKeys(success.value, ["operation", "request"], []);
+    const operation = exactStartOperation(value?.operation);
+    const request = exactRequestMetadata(value?.request);
+    if (!operation || !request || !isExpectedComposite(operation, request, expected)) {
+      throw new ToolContractFault();
+    }
+    return JSON.stringify({
+      ok: true,
+      value: {
+        operation: publicStartOperation(operation),
+        request: publicCreatedRequest(request),
+      },
+    });
+  }
+  const failure = exactToolFailure(result, sessionRequestStartFailureCodes);
+  if (!failure) throw new ToolContractFault();
+  const publicError = {
+    code: failure.code,
+    message: failure.message,
+    retryable: failure.retryable,
+  };
+  if (failure.details === undefined) return JSON.stringify({ ok: false, error: publicError });
+  const details = exactRecordWithOptionalKeys(failure.details, ["operation", "request"], []);
+  if (!details) throw new ToolContractFault();
+  try {
+    const operation = exactStartOperation(details.operation);
+    const request = exactRequestMetadata(details.request);
+    if (!operation || !request || !isExpectedComposite(operation, request, expected)) {
+      throw new ToolContractFault();
+    }
+    return JSON.stringify({
+      ok: false,
+      error: {
+        ...publicError,
+        details: {
+          operation: publicStartOperation(operation),
+          request: publicCreatedRequest(request),
+        },
+      },
+    });
+  } catch (cause: unknown) {
+    if (cause instanceof ToolContractFault) throw cause;
+    throw new ToolContractFault();
+  }
+}
+
+function isExpectedComposite(
+  operation: import("../domain/session-start").StartOperation,
+  request: import("../domain/request-types").RequestMetadata,
+  expected: {
+    readonly workspaceKey: WorkspaceKey;
+    readonly sourceSessionId: string;
+    readonly idempotencyKey: string;
+  },
+): boolean {
+  return (
+    operation.workspaceKey === expected.workspaceKey &&
+    operation.sourceSessionId === expected.sourceSessionId &&
+    operation.idempotencyKey === expected.idempotencyKey &&
+    request.workspaceKey === expected.workspaceKey &&
+    request.sourceSessionId === expected.sourceSessionId &&
+    request.targetSessionId === operation.sessionId &&
+    request.linkedStartOperationId === operation.id &&
+    request.nativeMessageId === operation.nativeMessageId &&
+    request.deliveryMode === "initial"
+  );
+}
 
 function payload(request: SessionRequestStartToolArguments["request"]): PendingRequestPayload {
   return request.kind === "ask"
@@ -57,7 +146,13 @@ export function createSessionRequestStartTool(
         ? await startSessionRequest(
             {
               ...ports,
-              approval: invocationStartApproval(context),
+              approval: invocationStartApproval(context, {
+                workspaceKey: scope.workspaceKey,
+                sourceSessionId: adapted.value.sourceSessionId,
+                abort: context.abort,
+                deadlineMs: adapted.value.deadlineMs,
+                clock: ports.clock,
+              }),
               requestAuthorization: invocationRequestAuthorization(policies, context),
             },
             adapted.value,
@@ -67,30 +162,11 @@ export function createSessionRequestStartTool(
             },
           )
         : adapted;
-      if (!result.ok && result.error.details) {
-        const operation = result.error.details.operation;
-        const request = result.error.details.request;
-        if (isCoherentStartOperation(operation) && isCoherentRequestMetadata(request)) {
-          return JSON.stringify({
-            ok: false,
-            error: {
-              ...result.error,
-              details: {
-                operation: publicStartOperation(operation),
-                request: publicCreatedRequest(request),
-              },
-            },
-          });
-        }
-      }
-      return serializeDomainResult(
-        result,
-        (value) => ({
-          operation: publicStartOperation(value.operation),
-          request: publicCreatedRequest(value.request),
-        }),
-        [...new Set([...sessionStartFailureCodes, ...sessionBlockingRequestFailureCodes])],
-      );
+      return serializeSessionRequestStartResult(result, {
+        workspaceKey: scope.workspaceKey,
+        sourceSessionId: adapted.ok ? adapted.value.sourceSessionId : context.sessionID,
+        idempotencyKey: arguments_.idempotency_key,
+      });
     },
   };
 }
