@@ -34,10 +34,11 @@ function textParts(messages: unknown): TextPart[] {
 }
 
 function removeOwnedText(part: TextPart, previous: string): void {
-  const offset = part.text.indexOf(previous);
-  if (offset >= 0 && offset === part.text.lastIndexOf(previous)) {
-    part.text = part.text.slice(0, offset) + part.text.slice(offset + previous.length);
+  const offset = part.text.length - previous.length;
+  if (offset < 0 || !part.text.endsWith(previous) || part.text.indexOf(previous) !== offset) {
+    throw new Error("Prior communicator context ownership is ambiguous.");
   }
+  part.text = part.text.slice(0, offset);
 }
 
 export function createChatMessagesTransform(
@@ -55,8 +56,10 @@ export function createChatMessagesTransform(
       const parts = textParts(output.messages);
       for (const part of parts) {
         const previous = injectedText.get(part);
-        if (previous) removeOwnedText(part, previous);
-        injectedText.delete(part);
+        if (previous) {
+          removeOwnedText(part, previous);
+          injectedText.delete(part);
+        }
       }
       const before = new Map(parts.map((part) => [part, part.text]));
       await injectCommunicatorContext(ports, { ...context, messages: output.messages });

@@ -4,6 +4,7 @@ import {
   type Sha256Digest,
   serializeVerifiedMessageEnvelope,
 } from "../domain/message-payload";
+import { type FencingToken, OwnershipLostFault } from "../domain/ownership";
 import { type DomainResult, domainFailure } from "../domain/results";
 import { sanitizeDisplayTitle } from "../domain/sanitize-display";
 import { runUntilAborted } from "./abortable-operation";
@@ -34,6 +35,11 @@ function participantOperationFailure(cause: unknown): DomainResult<never> {
     return domainFailure("quota_exceeded", "Participant operation capacity is exhausted.", false);
   }
   return unavailable();
+}
+
+function ownershipLost(ports: SessionSendPorts): DomainResult<never> {
+  stopCommunicatorForOwnershipLoss(ports.readiness);
+  return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
 }
 
 async function authorizeContextMessage(
@@ -73,6 +79,7 @@ async function authorizeContextMessage(
   return { ok: true, value: undefined };
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: authorization, fenced persistence, and lifecycle loss must remain visibly ordered.
 export async function sendContextSessionMessage(
   ports: SessionSendPorts,
   context: SessionSendContext,
@@ -115,6 +122,15 @@ export async function sendContextSessionMessage(
     return domainFailure("deadline_expired", "Message invocation deadline expired.", false);
   }
   if (envelopeDigest.kind !== "settled") return unavailable();
+  let fencingToken: FencingToken;
+  try {
+    fencingToken = communicatorLifecycleFencingToken(ports.readiness);
+  } catch (cause: unknown) {
+    if (cause instanceof OwnershipLostFault) {
+      return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+    }
+    throw cause;
+  }
   let registration: ContextAdmissionRegistration;
   try {
     registration = runtime.attach({
@@ -126,7 +142,6 @@ export async function sendContextSessionMessage(
   } catch {
     return domainFailure("quota_exceeded", "Context delivery waiter capacity is exhausted.", false);
   }
-  const fencingToken = communicatorLifecycleFencingToken(ports.readiness);
   let persisted: Awaited<ReturnType<typeof contexts.createContextMessage>>;
   try {
     const gated = await participantOperations.run(
@@ -164,8 +179,7 @@ export async function sendContextSessionMessage(
           return domainFailure("target_status_unknown", "Target activity is unknown.", true);
         }
         if ((await ports.ownership.isCurrent(fencingToken)) !== true) {
-          stopCommunicatorForOwnershipLoss(ports.readiness);
-          return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+          return ownershipLost(ports);
         }
         return contexts.createContextMessage({
           fencingToken,
@@ -187,15 +201,17 @@ export async function sendContextSessionMessage(
     persisted = gated as Awaited<ReturnType<typeof contexts.createContextMessage>>;
   } catch (cause: unknown) {
     registration.detach();
+    if (cause instanceof OwnershipLostFault) return ownershipLost(ports);
     return participantOperationFailure(cause);
   }
   if (!persisted.ok) {
     registration.detach();
+    if (persisted.code === "ownership_lost") return ownershipLost(ports);
     return persisted.code === "quota_exceeded" || persisted.code === "rate_limited"
       ? domainFailure(persisted.code, "Context delivery capacity is exhausted.", true)
       : unavailable();
   }
-  return waitForContextAdmission(
+  const admission = await waitForContextAdmission(
     { contexts },
     {
       fencingToken,
@@ -206,4 +222,6 @@ export async function sendContextSessionMessage(
       ...(context.deadlineMs === undefined ? {} : { deadlineMs: context.deadlineMs }),
     },
   );
+  if (!admission.ok && admission.error.code === "ownership_lost") return ownershipLost(ports);
+  return admission;
 }

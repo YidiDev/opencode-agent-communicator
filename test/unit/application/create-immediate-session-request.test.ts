@@ -15,7 +15,7 @@ import {
   validateRequestId,
   validateStartOperationId,
 } from "../../../src/domain/generated-ids";
-import { validateFencingToken } from "../../../src/domain/ownership";
+import { OwnershipLostFault, validateFencingToken } from "../../../src/domain/ownership";
 import type { RequestMetadata } from "../../../src/domain/request-types";
 import { validateSessionId } from "../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
@@ -52,6 +52,7 @@ interface Fixture {
   createResult?: RequestStoreResult;
   contextReadThrows: boolean;
   requestMetadataMissing: boolean;
+  lifecycleStops: number;
   readonly events: string[];
   readonly prepared: PrepareRequestInput[];
   readonly controls: Array<{ abort: AbortSignal; deadlineMs?: number }>;
@@ -72,6 +73,7 @@ function fixture(): Fixture {
     attachThrows: false,
     contextReadThrows: false,
     requestMetadataMissing: false,
+    lifecycleStops: 0,
     events: [] as string[],
     prepared: [] as PrepareRequestInput[],
     controls: [] as Array<{ abort: AbortSignal; deadlineMs?: number }>,
@@ -100,7 +102,13 @@ function fixture(): Fixture {
     };
   };
   result.ports = {
-    readiness: { fencingToken: token, assertReady() {} },
+    readiness: {
+      fencingToken: token,
+      assertReady() {},
+      ownershipLost() {
+        result.lifecycleStops += 1;
+      },
+    },
     membership: {
       async readCurrentRoots() {
         result.events.push("visibility");
@@ -406,6 +414,39 @@ describe("createImmediateSessionRequest durable admission", () => {
     });
     expect(stale.prepared).toEqual([]);
     expect(stale.nativeCalls).toEqual([]);
+    expect(stale.lifecycleStops).toBe(1);
+  });
+
+  test.each(["returned", "thrown"] as const)(
+    "preserves %s prepared-context ownership loss and stops immediately",
+    async (fault) => {
+      const current = fixture();
+      current.ports.requests.createPrepared = async () => {
+        if (fault === "thrown") throw new OwnershipLostFault();
+        return { ok: false, code: "ownership_lost" };
+      };
+      expect(await createImmediateSessionRequest(current.ports, context(), args)).toMatchObject({
+        ok: false,
+        error: { code: "ownership_lost" },
+      });
+      expect(current.lifecycleStops).toBe(1);
+      expect(current.events).not.toContain("context-read");
+    },
+  );
+
+  test("preserves a thrown context read ownership fault and stops before admission wait", async () => {
+    const current = fixture();
+    const contexts = current.ports.contexts;
+    if (!contexts) throw new Error("missing context fixture");
+    contexts.getContextAdmission = async () => {
+      throw new OwnershipLostFault();
+    };
+    expect(await createImmediateSessionRequest(current.ports, context(), args)).toMatchObject({
+      ok: false,
+      error: { code: "ownership_lost" },
+    });
+    expect(current.lifecycleStops).toBe(1);
+    expect(current.events.filter((event) => event === "context-read")).toHaveLength(0);
   });
 
   test("an already-expired invocation deadline never persists or admits context", async () => {
