@@ -12,6 +12,12 @@ import { requestFixture } from "../../support/request-store";
 
 const token = 1 as FencingToken;
 
+function interruptedAdmission(): AbortController {
+  const controller = new AbortController();
+  controller.abort("controlled_background_reconciliation");
+  return controller;
+}
+
 async function harness() {
   const prepared = (await requestFixture(token, 1_000)).request;
   const submitting = {
@@ -28,6 +34,10 @@ async function harness() {
   };
   const runtime = new RequestRuntime();
   const calls: string[] = [];
+  let resolveWake!: () => void;
+  const woken = new Promise<void>((resolve) => {
+    resolveWake = resolve;
+  });
   const ports = {
     requests: {
       claimPrepared: async () => ({ ok: true, request: submitting, envelopeJson: "{}" }),
@@ -43,7 +53,12 @@ async function harness() {
     workflowFault: { fault: () => calls.push("fault") },
     deadlineTimer: { arm: () => ({ cancel: () => undefined }) },
     clock: { nowMs: () => 1_001 },
-    scheduler: { wake: () => calls.push("wake") },
+    scheduler: {
+      wake: () => {
+        calls.push("wake");
+        resolveWake();
+      },
+    },
     runtime,
     notifications: runtime,
   } as unknown as SessionBlockingRequestPorts;
@@ -54,11 +69,7 @@ async function harness() {
     abort: new AbortController().signal,
     deadlineMs: prepared.deadlineAtMs,
   };
-  return { calls, context, ports, prepared, submitting, unknown };
-}
-
-async function drain(): Promise<void> {
-  for (let index = 0; index < 20; index += 1) await Promise.resolve();
+  return { calls, context, ports, prepared, submitting, unknown, woken };
 }
 
 test("classifies an already-submitting current claim by durably recording ambiguity", async () => {
@@ -108,7 +119,7 @@ test("faults an unresolved submitting claim only while ownership remains current
         value.ports,
         value.context,
         value.submitting,
-        new AbortController(),
+        interruptedAdmission(),
       ),
     ).toMatchObject({ ok: false, error: { code: "storage_unavailable" } });
     expect(value.calls).toContain("wake");
@@ -133,10 +144,9 @@ test("retries a still-prepared ambiguous claim through the common claim boundary
       value.ports,
       value.context,
       value.prepared,
-      new AbortController(),
+      interruptedAdmission(),
     ),
   ).toEqual({ ok: true, value: undefined });
-  await drain();
   expect(claims).toBe(2);
 });
 
@@ -179,7 +189,7 @@ test("background admission cleanup handles non-submitting and repeated current c
         new AbortController(),
       ),
     ).toEqual({ ok: true, value: undefined });
-    await drain();
+    await value.woken;
     expect(value.calls).toContain("wake");
   }
 
@@ -196,10 +206,10 @@ test("background admission cleanup handles non-submitting and repeated current c
       repeated.ports,
       repeated.context,
       repeated.prepared,
-      new AbortController(),
+      interruptedAdmission(),
     ),
   ).toEqual({ ok: true, value: undefined });
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await repeated.woken;
   expect(repeated.calls).toContain("wake");
 
   const rejected = await harness();
@@ -215,6 +225,6 @@ test("background admission cleanup handles non-submitting and repeated current c
       new AbortController(),
     ),
   ).toEqual({ ok: true, value: undefined });
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await rejected.woken;
   expect(rejected.calls).toContain("wake");
 });

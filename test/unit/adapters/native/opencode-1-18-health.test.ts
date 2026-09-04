@@ -61,7 +61,8 @@ describe("pinned startup health adapter", () => {
     const port = createOpenCode118HealthPort(input as never, {
       createClient(configuration) {
         expect(configuration.baseUrl).toBe("http://127.0.0.1:4321/");
-        expect(configuration.fetch).toBe(inProcessFetch);
+        expect(configuration.fetch).not.toBe(inProcessFetch);
+        expect(configuration.fetch).toBeFunction();
         expect(configuration.headers.authorization).toBe("Basic pinned");
         expect(configuration.headers["x-opencode-directory"]).toBeUndefined();
         expect(configuration.headers["x-opencode-workspace"]).toBeUndefined();
@@ -102,6 +103,23 @@ describe("pinned startup health adapter", () => {
     expect(healthReads).toBe(2);
   });
 
+  test("rejects a generated error envelope without exposing its transport cause", async () => {
+    const port = createOpenCode118HealthPort(pluginInput() as never, {
+      createClient: () => ({
+        global: {
+          health: async () => ({ error: new Error("credential-bearing transport detail") }),
+        },
+      }),
+    });
+
+    await expect(port.readHealth()).rejects.toThrow("Pinned OpenCode health request failed.");
+    try {
+      await port.readHealth();
+    } catch (error: unknown) {
+      expect(error instanceof Error ? error.message : "").not.toContain("credential-bearing");
+    }
+  });
+
   test("preserves authentication when V2 adds directory routing", async () => {
     let request: Request | undefined;
     const inProcessFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -125,6 +143,63 @@ describe("pinned startup health adapter", () => {
     expect(new URL(request?.url ?? "http://invalid").searchParams.get("directory")).toBe(
       input.directory,
     );
+  });
+
+  test("cancels a stalled health response body through the supplied operation signal", async () => {
+    const controller = new AbortController();
+    let cancellations = 0;
+    let started: (() => void) | undefined;
+    const reading = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const port = createOpenCode118HealthPort(
+      pluginInput(
+        (async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull() {
+                started?.();
+              },
+              cancel() {
+                cancellations += 1;
+              },
+            }),
+            { headers: { "content-type": "application/json" } },
+          )) as unknown as typeof globalThis.fetch,
+      ) as never,
+    );
+
+    const pending = port.readHealth(controller.signal);
+    await reading;
+    controller.abort("deadline");
+
+    await expect(pending).rejects.toThrow("response read was aborted");
+    expect(cancellations).toBe(1);
+  });
+
+  test("rejects an oversized health response before SDK deserialization", async () => {
+    let cancellations = 0;
+    const port = createOpenCode118HealthPort(
+      pluginInput(
+        (async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(stream) {
+                stream.enqueue(new Uint8Array(16 * 1_024 + 1));
+              },
+              cancel() {
+                cancellations += 1;
+              },
+            }),
+            { headers: { "content-type": "application/json" } },
+          )) as unknown as typeof globalThis.fetch,
+      ) as never,
+    );
+
+    await expect(port.readHealth(new AbortController().signal)).rejects.toThrow(
+      "exceeded its byte ceiling",
+    );
+    expect(cancellations).toBe(1);
   });
 
   test.each([

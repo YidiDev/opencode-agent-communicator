@@ -3,6 +3,18 @@ import type { NativeSteerAdmission } from "../../application/request-ports";
 import type { NativeMessageId } from "../../domain/generated-ids";
 import type { SessionId } from "../../domain/sessions";
 
+export interface ClientRejectionCorrelation {
+  readonly abort?: AbortSignal;
+  readonly method: "GET" | "POST" | "PATCH";
+  readonly serverUrl: URL;
+  readonly endpointPath: string;
+  readonly directory: string;
+  readonly targetSessionId?: SessionId;
+  readonly messageId?: NativeMessageId;
+  readonly messageIdBodyKey?: "id" | "messageID";
+  readonly exactRequestBody?: Readonly<Record<string, string>>;
+}
+
 interface AdmissionTarget {
   readonly targetSessionId: SessionId;
   readonly nativeMessageId: NativeMessageId;
@@ -68,8 +80,111 @@ function genuineResponseStatus(value: unknown): number | undefined {
   }
 }
 
-function hasValidOptionalRequest(envelope: Record<string, unknown>): boolean {
-  return !Object.hasOwn(envelope, "request") || genuineRequest(envelope.request);
+function exactWorkspaceBinding(request: Request, url: URL, directory: string): boolean {
+  const directoryValues = url.searchParams.getAll("directory");
+  const locationValues = url.searchParams.getAll("location[directory]");
+  const keys = [...url.searchParams.keys()];
+  const exactQuery =
+    directoryValues.length === 1 &&
+    directoryValues[0] === directory &&
+    locationValues.length <= 1 &&
+    locationValues.every((value) => value === directory) &&
+    keys.every((key) => key === "directory" || key === "location[directory]") &&
+    keys.length === 1 + locationValues.length;
+  const header = request.headers.get("x-opencode-directory");
+  const exactHeader =
+    header === null || header === directory || header === encodeURIComponent(directory);
+  if (!exactHeader) return false;
+  if (exactQuery) return true;
+  return keys.length === 0 && header !== null;
+}
+
+async function boundedRequestJson(
+  request: Request,
+  abort: AbortSignal,
+): Promise<Record<string, unknown> | undefined> {
+  const clone = request.clone();
+  if (clone.body === null) return undefined;
+  const reader = clone.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  const cancel = (): void => {
+    void reader.cancel().catch(() => undefined);
+  };
+  abort.addEventListener("abort", cancel, { once: true });
+  try {
+    if (abort.aborted) {
+      void reader.cancel().catch(() => undefined);
+      return undefined;
+    }
+    while (true) {
+      const result = await reader.read();
+      if (abort.aborted) return undefined;
+      if (result.done) break;
+      if (!(result.value instanceof Uint8Array) || result.value.byteLength > 65_536 - bytes) {
+        void reader.cancel().catch(() => undefined);
+        return undefined;
+      }
+      bytes += result.value.byteLength;
+      chunks.push(result.value);
+    }
+  } catch {
+    void reader.cancel().catch(() => undefined);
+    return undefined;
+  } finally {
+    abort.removeEventListener("abort", cancel);
+  }
+  const body = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
+    return isRecord(value) && Object.getPrototypeOf(value) === Object.prototype ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function matchesRequest(
+  value: unknown,
+  expected: ClientRejectionCorrelation,
+): Promise<boolean> {
+  if (!genuineRequest(value)) return false;
+  try {
+    const request = value as Request;
+    const url = new URL(request.url);
+    if (
+      request.method !== expected.method ||
+      url.origin !== expected.serverUrl.origin ||
+      url.pathname !== expected.endpointPath ||
+      url.hash !== "" ||
+      !exactWorkspaceBinding(request, url, expected.directory)
+    ) {
+      return false;
+    }
+    if (expected.messageId === undefined && expected.exactRequestBody === undefined) return true;
+    const body = await boundedRequestJson(request, expected.abort ?? request.signal);
+    if (!body) return false;
+    if (
+      expected.messageId !== undefined &&
+      (!expected.messageIdBodyKey || body[expected.messageIdBodyKey] !== expected.messageId)
+    ) {
+      return false;
+    }
+    const exactRequestBody = expected.exactRequestBody;
+    if (exactRequestBody === undefined) return true;
+    const expectedKeys = Object.keys(exactRequestBody);
+    const bodyKeys = Object.keys(body);
+    return (
+      bodyKeys.length === expectedKeys.length &&
+      expectedKeys.every((key) => Object.hasOwn(body, key) && body[key] === exactRequestBody[key])
+    );
+  } catch {
+    return false;
+  }
 }
 
 function supportedRejectionStatus(value: unknown): 400 | 401 | 404 | undefined {
@@ -128,14 +243,19 @@ export function parseAdmissionResponse(
   };
 }
 
-export function isAuthoritativeClientRejection(
+export async function isAuthoritativeClientRejection(
   response: unknown,
   aborted: boolean,
-  expectedTargetSessionId?: SessionId,
-): boolean {
+  expected: ClientRejectionCorrelation,
+): Promise<boolean> {
   if (aborted) return false;
   const envelope = snapshotExactData(response, ["error", "request", "response"]);
-  if (!envelope || envelope.error === undefined || !hasValidOptionalRequest(envelope)) return false;
+  if (
+    !envelope ||
+    envelope.error === undefined ||
+    !(await matchesRequest(envelope.request, expected))
+  )
+    return false;
   const status = supportedRejectionStatus(envelope.response);
   if (status === undefined) return false;
   const allowed =
@@ -156,7 +276,7 @@ export function isAuthoritativeClientRejection(
   if (status === 401) return error._tag === "UnauthorizedError";
   return (
     error._tag === "SessionNotFoundError" &&
-    expectedTargetSessionId !== undefined &&
-    error.sessionID === expectedTargetSessionId
+    expected.targetSessionId !== undefined &&
+    error.sessionID === expected.targetSessionId
   );
 }

@@ -5,6 +5,33 @@ export interface OpenCode118Transport {
   readonly headers: Readonly<Record<string, string>>;
 }
 
+export const openCode118ResponseByteCeilings = Object.freeze({
+  health: 16 * 1_024,
+  sessionList: 1_024 * 1_024,
+  sessionStatus: 256 * 1_024,
+  admission: 64 * 1_024,
+  sessionStart: 64 * 1_024,
+  sessionTitle: 64 * 1_024,
+  sessionInterrupt: 16 * 1_024,
+});
+
+export interface OpenCode118RequestOptions {
+  readonly signal: AbortSignal;
+  readonly fetch: typeof globalThis.fetch;
+}
+
+/** Supplies both cancellation and a pre-deserialization body bound to a generated endpoint. */
+export function boundedOpenCode118RequestOptions(
+  transport: OpenCode118Transport,
+  signal: AbortSignal,
+  maximumResponseBytes: number,
+): OpenCode118RequestOptions {
+  return Object.freeze({
+    signal,
+    fetch: createBoundedOpenCode118Fetch(transport.fetch, maximumResponseBytes),
+  });
+}
+
 const ABORTED_MESSAGE = "Pinned OpenCode response read was aborted.";
 const MALFORMED_BODY_MESSAGE = "Pinned OpenCode response body is unreadable.";
 const OVERSIZED_BODY_MESSAGE = "Pinned OpenCode response exceeded its byte ceiling.";
@@ -38,12 +65,12 @@ async function readNextChunk(
   try {
     result = await reader.read();
   } catch (_cause: unknown) {
-    await cancelReader();
+    void cancelReader();
     if (signal?.aborted) throw new NativeAdapterFault(ABORTED_MESSAGE);
     throw new NativeAdapterFault(MALFORMED_BODY_MESSAGE);
   }
   if (signal?.aborted) {
-    await cancelReader();
+    void cancelReader();
     throw new NativeAdapterFault(ABORTED_MESSAGE);
   }
   return result;
@@ -95,18 +122,18 @@ async function readBoundedBody(
   let byteLength = 0;
   try {
     if (signal?.aborted) {
-      await cancelReader();
+      void cancelReader();
       throw new NativeAdapterFault(ABORTED_MESSAGE);
     }
     while (true) {
       const result = await readNextChunk(reader, signal, cancelReader);
       if (result.done) break;
       if (!(result.value instanceof Uint8Array)) {
-        await cancelReader();
+        void cancelReader();
         throw new NativeAdapterFault(MALFORMED_BODY_MESSAGE);
       }
       if (result.value.byteLength > maximumResponseBytes - byteLength) {
-        await cancelReader();
+        void cancelReader();
         throw new NativeAdapterFault(OVERSIZED_BODY_MESSAGE);
       }
       byteLength += result.value.byteLength;

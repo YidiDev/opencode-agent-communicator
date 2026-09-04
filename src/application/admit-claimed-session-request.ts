@@ -9,7 +9,6 @@ import {
   dataRecord,
   expectedCommitted,
   inspectNativeAdmission,
-  linkedEffectSignal,
   publicAdmissionOutcome,
   requestAdmissionFailure,
   validAdmissionInput,
@@ -34,6 +33,7 @@ import {
   notifyTerminalSafely,
 } from "./request-terminal-notification";
 import { operationControlStopped } from "./safe-clock";
+import { createLinkedEffectControl } from "./startup-effect-control";
 
 export interface ClaimedSessionRequestAdmissionPorts {
   readonly requests: RequestAdmissionPersistencePort;
@@ -78,13 +78,11 @@ async function performNativeSteer(
 ): Promise<NativeSteerAdmission | undefined> {
   if (signal.aborted) return undefined;
   const nativeQueue = ports.nativeQueue;
-  if (input.request.deliveryMode === "queue" && !nativeQueue) return undefined;
   try {
     let submit: () => Promise<NativeSteerAdmission>;
     if (input.request.deliveryMode === "queue") {
-      if (!nativeQueue) return undefined;
       submit = () =>
-        nativeQueue
+        (nativeQueue as NativeQueueAdmissionPort)
           .queueMessage({
             targetSessionId: input.request.targetSessionId,
             nativeMessageId: input.request.nativeMessageId,
@@ -147,7 +145,12 @@ async function admitClaimedSessionRequestInternal(
   const abortedBeforeNative = stopped(ports, input.control);
   if (abortedBeforeNative && input.callerAbortPersistsUnknown !== true)
     return failure("ownership_lost");
-  const linked = linkedEffectSignal(input.control.abort, input.effectSignal);
+  const linked = createLinkedEffectControl({
+    signals: [input.control.abort, input.effectSignal],
+    ...(input.control.deadlineMs === undefined ? {} : { deadlineMs: input.control.deadlineMs }),
+    clock: ports.clock,
+  });
+  if (!linked) return failure("ownership_lost");
   let native: NativeSteerAdmission | undefined;
   try {
     native = abortedBeforeNative

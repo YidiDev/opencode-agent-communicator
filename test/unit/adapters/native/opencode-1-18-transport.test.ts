@@ -146,6 +146,35 @@ describe("bounded OpenCode 1.18 transport", () => {
     expect(cancellations).toBe(1);
   });
 
+  test("does not wait for an uncooperative source cancellation after aborting a stalled body", async () => {
+    const controller = new AbortController();
+    let cancellationStarted = false;
+    let notifyReadStarted: (() => void) | undefined;
+    const readStarted = new Promise<void>((resolve) => {
+      notifyReadStarted = resolve;
+    });
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull() {
+          notifyReadStarted?.();
+        },
+        cancel() {
+          cancellationStarted = true;
+          return new Promise(() => {});
+        },
+      }),
+    );
+    const pending = createBoundedOpenCode118Fetch(hostFetch(response), 32)(requestUrl, {
+      signal: controller.signal,
+    });
+
+    await readStarted;
+    controller.abort();
+
+    await expect(pending).rejects.toThrow("Pinned OpenCode response read was aborted.");
+    expect(cancellationStarted).toBe(true);
+  });
+
   test("fails closed when an expected body is absent but permits bodyless HEAD responses", async () => {
     await expect(
       createBoundedOpenCode118Fetch(hostFetch(new Response(null)), 0)(requestUrl),

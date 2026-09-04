@@ -63,3 +63,13 @@ test("claimed admission contains a malformed persistence promise", async () => {
     error: { code: "storage_unavailable" },
   });
 });
+
+test("queue admission fails closed when no native queue surface is available", async () => {
+  const setup = await harness();
+  setup.input.request = { ...setup.input.request, deliveryMode: "queue" };
+
+  expect(await admitClaimedSessionRequest(setup.ports, setup.input)).toMatchObject({
+    ok: false,
+    error: { code: "storage_unavailable" },
+  });
+});

@@ -18,6 +18,7 @@ import type { HostHealthPort } from "../../domain/host";
 import { type VisibleRootSessionPort, validateSessionId } from "../../domain/sessions";
 import type { WorkspaceKey } from "../../domain/workspaces";
 import { validateWorkspaceKey } from "../../domain/workspaces";
+import { legacySurface } from "./opencode-1-18-legacy";
 import { createAdmissionOperations, createObservationOperations } from "./opencode-1-18-operations";
 import {
   createDirectContextTargetEligibilityPort,
@@ -31,11 +32,20 @@ import {
   reconcileDeterministicRootSession,
   updateAndVerifySessionTitle,
 } from "./opencode-1-18-start";
-import { envelopeData, method, NativeAdapterFault, requireRecord } from "./opencode-1-18-surface";
-import { readOpenCode118Transport } from "./opencode-1-18-transport";
+import { envelopeData, method, NativeAdapterFault } from "./opencode-1-18-surface";
+import {
+  boundedOpenCode118RequestOptions,
+  openCode118ResponseByteCeilings,
+  readOpenCode118Transport,
+} from "./opencode-1-18-transport";
 
 interface V2ClientSurface {
-  readonly global: { health(): Promise<unknown> };
+  readonly global: {
+    health(options?: {
+      readonly signal?: AbortSignal;
+      readonly fetch?: typeof globalThis.fetch;
+    }): Promise<unknown>;
+  };
   readonly experimental?: {
     readonly session: {
       list(
@@ -44,7 +54,7 @@ interface V2ClientSurface {
           readonly archived: boolean;
           readonly directory: string;
         },
-        options?: { readonly signal?: AbortSignal },
+        options?: { readonly signal?: AbortSignal; readonly fetch?: typeof globalThis.fetch },
       ): Promise<unknown>;
     };
   };
@@ -55,12 +65,15 @@ interface V2ClientSurface {
         readonly directory: string;
         readonly title: string;
       },
-      options: { readonly signal: AbortSignal },
+      options: { readonly signal: AbortSignal; readonly fetch?: typeof globalThis.fetch },
     ): Promise<unknown>;
   };
   readonly v2: {
     readonly session: {
-      active(options?: { readonly signal?: AbortSignal }): Promise<unknown>;
+      active(options?: {
+        readonly signal?: AbortSignal;
+        readonly fetch?: typeof globalThis.fetch;
+      }): Promise<unknown>;
       create?(
         parameters: {
           readonly id: string;
@@ -68,11 +81,11 @@ interface V2ClientSurface {
           readonly model?: { readonly providerID: string; readonly id: string };
           readonly location: { readonly directory: string };
         },
-        options: { readonly signal: AbortSignal },
+        options: { readonly signal: AbortSignal; readonly fetch?: typeof globalThis.fetch },
       ): Promise<unknown>;
       get?(
         parameters: { readonly sessionID: string },
-        options: { readonly signal: AbortSignal },
+        options: { readonly signal: AbortSignal; readonly fetch?: typeof globalThis.fetch },
       ): Promise<unknown>;
       message?(
         parameters: { readonly sessionID: string; readonly messageID: string },
@@ -95,11 +108,14 @@ interface V2ClientSurface {
           readonly throwOnError: false;
         },
       ): Promise<unknown>;
-      list(parameters: {
-        readonly directory: string;
-        readonly limit: number;
-        readonly order: "desc";
-      }): Promise<unknown>;
+      list(
+        parameters: {
+          readonly directory: string;
+          readonly limit: number;
+          readonly order: "desc";
+        },
+        options?: { readonly signal?: AbortSignal; readonly fetch?: typeof globalThis.fetch },
+      ): Promise<unknown>;
       prompt(
         parameters: {
           readonly sessionID: string;
@@ -108,25 +124,10 @@ interface V2ClientSurface {
           readonly delivery: "queue" | "steer";
           readonly resume: true;
         },
-        options: { readonly signal: AbortSignal },
+        options: { readonly signal: AbortSignal; readonly fetch?: typeof globalThis.fetch },
       ): Promise<unknown>;
     };
   };
-}
-
-interface LegacyClientSurface {
-  listRoots(
-    parameters: { readonly roots: true; readonly directory: string },
-    options?: { readonly signal?: AbortSignal },
-  ): Promise<unknown>;
-  readStatus(
-    parameters: { readonly directory: string },
-    options?: { readonly signal?: AbortSignal },
-  ): Promise<unknown>;
-  interrupt(
-    parameters: { readonly sessionID: string; readonly directory: string },
-    options: { readonly signal: AbortSignal },
-  ): Promise<unknown>;
 }
 
 export interface OpenCodeNativeAdapterDependencies {
@@ -160,26 +161,16 @@ export type OpenCodeNativeAdapter = HostHealthPort &
   NativeParticipantStopActivityPort &
   ContextTargetEligibilityPort;
 
-function legacySurface(client: unknown): LegacyClientSurface {
-  const legacyClient = requireRecord(client, "Injected legacy client is unavailable.");
-  const session = legacyClient.session;
-  // Supported 1.18 runtimes expose this endpoint although the legacy generated type omits it.
-  const status = method(session, "status", "Legacy session status");
-  const abort = method(session, "abort", "Legacy session interrupt");
-  return {
-    async listRoots(parameters, options): Promise<unknown> {
-      return method(session, "list", "Pinned legacy root listing")(parameters, options);
-    },
-    async readStatus(parameters, options): Promise<unknown> {
-      return status(parameters, options);
-    },
-    async interrupt(parameters, options): Promise<unknown> {
-      return abort(parameters, options);
-    },
-  };
-}
-
-function startSessionSurface(session: V2ClientSurface["v2"]["session"]) {
+function startSessionSurface(
+  session: V2ClientSurface["v2"]["session"],
+  requestOptions: (
+    signal: AbortSignal,
+    maximumResponseBytes: number,
+  ) => {
+    readonly signal: AbortSignal;
+    readonly fetch: typeof globalThis.fetch;
+  },
+) {
   return {
     async create(
       parameters: {
@@ -191,15 +182,76 @@ function startSessionSurface(session: V2ClientSurface["v2"]["session"]) {
       options: { readonly signal: AbortSignal },
     ) {
       if (!session.create) throw new NativeAdapterFault("V2 session creation is unavailable.");
-      return session.create(parameters, options);
+      return session.create(
+        parameters,
+        requestOptions(options.signal, openCode118ResponseByteCeilings.sessionStart),
+      );
     },
     async get(
       parameters: { readonly sessionID: string },
       options: { readonly signal: AbortSignal },
     ) {
       if (!session.get) throw new NativeAdapterFault("V2 session read-back is unavailable.");
-      return session.get(parameters, options);
+      return session.get(
+        parameters,
+        requestOptions(options.signal, openCode118ResponseByteCeilings.sessionStart),
+      );
     },
+  };
+}
+
+type BoundedOptionsFactory = (
+  signal: AbortSignal,
+  maximumResponseBytes: number,
+) => { readonly signal: AbortSignal; readonly fetch: typeof globalThis.fetch };
+
+function publicStartSurface(
+  session: V2ClientSurface["session"],
+  requestOptions: BoundedOptionsFactory,
+) {
+  return {
+    updateTitle: async (
+      parameters: {
+        readonly sessionID: string;
+        readonly directory: string;
+        readonly title: string;
+      },
+      options: { readonly signal: AbortSignal },
+    ) =>
+      method(
+        session,
+        "update",
+        "Public session title update",
+      )(parameters, requestOptions(options.signal, openCode118ResponseByteCeilings.sessionTitle)),
+    promptAsync: async (
+      parameters: {
+        readonly sessionID: string;
+        readonly directory: string;
+        readonly messageID: string;
+        readonly model?: { readonly providerID: string; readonly modelID: string };
+        readonly agent?: string;
+        readonly parts: [{ readonly type: "text"; readonly text: string }];
+      },
+      options: { readonly signal: AbortSignal },
+    ) =>
+      method(
+        session,
+        "promptAsync",
+        "Public asynchronous session prompt",
+      )(parameters, requestOptions(options.signal, openCode118ResponseByteCeilings.admission)),
+    message: async (
+      parameters: {
+        readonly sessionID: string;
+        readonly directory: string;
+        readonly messageID: string;
+      },
+      options: { readonly signal: AbortSignal },
+    ) =>
+      method(
+        session,
+        "message",
+        "Public session message read-back",
+      )(parameters, requestOptions(options.signal, openCode118ResponseByteCeilings.admission)),
   };
 }
 
@@ -221,46 +273,25 @@ export function createOpenCode118NativeAdapter(
     ? dependencies.createV2Client(configuration)
     : createOpencodeClient({ ...configuration, ...transport });
   const legacy = legacySurface(input.client);
+  const requestTransport = Object.freeze({
+    fetch: dependencies.hostFetch ?? transport?.fetch ?? failClosedFetch,
+    headers: transport?.headers ?? Object.freeze({}),
+  });
+  const requestOptions = (signal: AbortSignal, maximumResponseBytes: number) =>
+    boundedOpenCode118RequestOptions(requestTransport, signal, maximumResponseBytes);
+  const optionalRequestOptions = (signal: AbortSignal | undefined, maximumResponseBytes: number) =>
+    requestOptions(signal ?? new AbortController().signal, maximumResponseBytes);
   const listArchivedRoots = (
     parameters: { readonly roots: true; readonly archived: boolean; readonly directory: string },
-    options?: { readonly signal?: AbortSignal },
+    options?: { readonly signal?: AbortSignal; readonly fetch?: typeof globalThis.fetch },
   ): Promise<unknown> =>
     method(
       v2.experimental?.session,
       "list",
       "Pinned root/archive listing",
     )(parameters, options) as Promise<unknown>;
-  const startSession = startSessionSurface(v2.v2.session);
-  const publicStartSession = {
-    updateTitle: async (
-      parameters: {
-        readonly sessionID: string;
-        readonly directory: string;
-        readonly title: string;
-      },
-      options: { readonly signal: AbortSignal },
-    ) => method(v2.session, "update", "Public session title update")(parameters, options),
-    promptAsync: async (
-      parameters: {
-        readonly sessionID: string;
-        readonly directory: string;
-        readonly messageID: string;
-        readonly model?: { readonly providerID: string; readonly modelID: string };
-        readonly agent?: string;
-        readonly parts: [{ readonly type: "text"; readonly text: string }];
-      },
-      options: { readonly signal: AbortSignal },
-    ) =>
-      method(v2.session, "promptAsync", "Public asynchronous session prompt")(parameters, options),
-    message: async (
-      parameters: {
-        readonly sessionID: string;
-        readonly directory: string;
-        readonly messageID: string;
-      },
-      options: { readonly signal: AbortSignal },
-    ) => method(v2.session, "message", "Public session message read-back")(parameters, options),
-  };
+  const startSession = startSessionSurface(v2.v2.session, requestOptions);
+  const publicStartSession = publicStartSurface(v2.session, requestOptions);
   const participantPresence = createDirectParticipantPresencePort(startSession);
   const sessionRead = createOpenCode118SessionReadPort(
     {
@@ -273,7 +304,7 @@ export function createOpenCode118NativeAdapter(
     },
     {
       workspaceKey: input.workspaceKey,
-      hostFetch: dependencies.hostFetch ?? transport?.fetch ?? failClosedFetch,
+      hostFetch: requestTransport.fetch,
       serverUrl: input.serverUrl,
       directory: input.directory,
     },
@@ -294,21 +325,44 @@ export function createOpenCode118NativeAdapter(
     directory: input.directory,
   });
   const observations = createObservationOperations({
-    active: (options) => v2.v2.session.active(options),
+    active: (signal) =>
+      v2.v2.session.active(
+        optionalRequestOptions(signal, openCode118ResponseByteCeilings.sessionStatus),
+      ),
     configuredWorkspace: configuredWorkspace.value,
-    health: () => v2.global.health(),
-    listArchivedRoots: () =>
-      listArchivedRoots({ roots: true, archived: true, directory: input.directory }),
-    listMetadata: () =>
-      v2.v2.session.list({ directory: input.directory, limit: 100, order: "desc" }),
-    listVisibleRoots: (options) =>
-      legacy.listRoots({ roots: true, directory: input.directory }, options),
+    health: (signal) =>
+      v2.global.health(optionalRequestOptions(signal, openCode118ResponseByteCeilings.health)),
+    listArchivedRoots: (signal) =>
+      listArchivedRoots(
+        { roots: true, archived: true, directory: input.directory },
+        optionalRequestOptions(signal, openCode118ResponseByteCeilings.sessionList),
+      ),
+    listMetadata: (signal) =>
+      v2.v2.session.list(
+        { directory: input.directory, limit: 100, order: "desc" },
+        optionalRequestOptions(signal, openCode118ResponseByteCeilings.sessionList),
+      ),
+    listVisibleRoots: (signal) =>
+      legacy.listRoots(
+        { roots: true, directory: input.directory },
+        optionalRequestOptions(signal, openCode118ResponseByteCeilings.sessionList),
+      ),
     now,
-    readStatus: (options) => legacy.readStatus({ directory: input.directory }, options),
+    readStatus: (signal) =>
+      legacy.readStatus(
+        { directory: input.directory },
+        optionalRequestOptions(signal, openCode118ResponseByteCeilings.sessionStatus),
+      ),
   });
   const admissions = createAdmissionOperations({
+    directory: input.directory,
     now,
-    prompt: (parameters, options) => v2.v2.session.prompt(parameters, options),
+    prompt: (parameters, options) =>
+      v2.v2.session.prompt(
+        parameters,
+        requestOptions(options.signal, openCode118ResponseByteCeilings.admission),
+      ),
+    serverUrl: input.serverUrl,
   });
 
   return {
@@ -328,6 +382,7 @@ export function createOpenCode118NativeAdapter(
           abort: request.abort,
         },
         { now },
+        input.serverUrl,
       );
       return result.kind === "observed"
         ? { kind: "public_message", observedAtMs: result.observedAtMs }
@@ -340,7 +395,7 @@ export function createOpenCode118NativeAdapter(
       try {
         const response = await legacy.interrupt(
           { sessionID: request.targetSessionId, directory: input.directory },
-          { signal: request.abort },
+          requestOptions(request.abort, openCode118ResponseByteCeilings.sessionInterrupt),
         );
         if (request.abort.aborted) return "unknown";
         return envelopeData(response, "Legacy session interrupt") === true
@@ -351,16 +406,32 @@ export function createOpenCode118NativeAdapter(
       }
     },
     async createRootSession(request) {
-      return createDeterministicRootSession(startSession, input.directory, request);
+      return createDeterministicRootSession(
+        startSession,
+        input.directory,
+        request,
+        input.serverUrl,
+      );
     },
     async reconcileRootSession(request) {
       return reconcileDeterministicRootSession(startSession, input.directory, request);
     },
     async updateSessionTitle(request) {
-      return updateAndVerifySessionTitle(publicStartSession, input.directory, request);
+      return updateAndVerifySessionTitle(
+        publicStartSession,
+        input.directory,
+        request,
+        input.serverUrl,
+      );
     },
     async admitInitialMessage(request) {
-      return admitLegacyInitialMessage(publicStartSession, input.directory, request);
+      return admitLegacyInitialMessage(
+        publicStartSession,
+        input.directory,
+        request,
+        {},
+        input.serverUrl,
+      );
     },
   };
 }

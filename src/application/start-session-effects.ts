@@ -10,6 +10,7 @@ import {
   StartEffectContractFault,
   startStoreFailure,
 } from "./start-session-effect-results";
+import { createLinkedEffectControl } from "./startup-effect-control";
 
 export {
   partialStartFailure,
@@ -17,6 +18,18 @@ export {
   StartEffectContractFault,
   startStoreFailure,
 } from "./start-session-effect-results";
+
+function startEffectControl(ports: SessionStartPorts, context: SessionStartContext) {
+  const linked = createLinkedEffectControl({
+    signals: [context.abort],
+    deadlineMs: context.deadlineMs,
+    clock: ports.clock,
+  });
+  if (linked) return linked;
+  const controller = new AbortController();
+  controller.abort("invalid start effect control");
+  return { signal: controller.signal, dispose() {} };
+}
 
 export async function runStartCreation(
   ports: SessionStartPorts,
@@ -27,14 +40,15 @@ export async function runStartCreation(
   if (operation.creationState !== "prepared") return { ok: true, value: operation };
   const claim = await prepareStartEffect(ports, context, token, operation, "creation");
   if (!claim.ok) return claim;
-  const called = await runUntilAborted(context.abort, () =>
+  const effect = startEffectControl(ports, context);
+  const called = await runUntilAborted(effect.signal, () =>
     ports.nativeStart.createRootSession({
       sessionId: operation.sessionId,
       ...(claim.value.arguments.agent === undefined ? {} : { agent: claim.value.arguments.agent }),
       ...(claim.value.arguments.model === undefined ? {} : { model: claim.value.arguments.model }),
-      abort: context.abort,
+      abort: effect.signal,
     }),
-  );
+  ).finally(effect.dispose);
   const native = called.kind === "settled" ? called.value : "unknown";
   if (!["created", "collision", "definitive_rejection", "unknown"].includes(native as string))
     throw new StartEffectContractFault("The native create adapter returned an unknown outcome.");
@@ -77,14 +91,15 @@ export async function reconcileStartCreation(
   operation: StartOperation,
 ): Promise<DomainResult<StartOperation>> {
   if (operation.creationState !== "outcome_unknown") return { ok: true, value: operation };
-  const observed = await runUntilAborted(context.abort, () =>
+  const effect = startEffectControl(ports, context);
+  const observed = await runUntilAborted(effect.signal, () =>
     ports.nativeStart.reconcileRootSession({
       sessionId: operation.sessionId,
       ...(operation.requestedAgent === undefined ? {} : { agent: operation.requestedAgent }),
       ...(operation.requestedModel === undefined ? {} : { model: operation.requestedModel }),
-      abort: context.abort,
+      abort: effect.signal,
     }),
-  );
+  ).finally(effect.dispose);
   const native = observed.kind === "settled" ? observed.value : "unknown";
   if (!["matching", "absent", "collision", "unknown"].includes(native as string)) {
     throw new StartEffectContractFault(
@@ -125,13 +140,14 @@ export async function runStartTitle(
   const title = claim.value.arguments.title;
   if (title === undefined)
     throw new StartEffectContractFault("A prepared title operation has no title.");
-  const called = await runUntilAborted(context.abort, () =>
+  const effect = startEffectControl(ports, context);
+  const called = await runUntilAborted(effect.signal, () =>
     ports.nativeStart.updateSessionTitle({
       sessionId: operation.sessionId,
       title,
-      abort: context.abort,
+      abort: effect.signal,
     }),
-  );
+  ).finally(effect.dispose);
   const native = called.kind === "settled" ? called.value : "unknown";
   if (!["updated", "definitive_rejection", "unknown"].includes(native as string))
     throw new StartEffectContractFault("The native title adapter returned an unknown outcome.");
@@ -175,16 +191,17 @@ export async function runStartAdmission(
   if (operation.admissionState !== "prepared") return { ok: true, value: operation };
   const claim = await prepareStartEffect(ports, context, token, operation, "admission");
   if (!claim.ok) return claim;
-  const called = await runUntilAborted(context.abort, () =>
+  const effect = startEffectControl(ports, context);
+  const called = await runUntilAborted(effect.signal, () =>
     ports.nativeStart.admitInitialMessage({
       sessionId: operation.sessionId,
       nativeMessageId: operation.nativeMessageId,
       message: claim.value.arguments.initialMessage,
       ...(claim.value.arguments.agent === undefined ? {} : { agent: claim.value.arguments.agent }),
       ...(claim.value.arguments.model === undefined ? {} : { model: claim.value.arguments.model }),
-      abort: context.abort,
+      abort: effect.signal,
     }),
-  );
+  ).finally(effect.dispose);
   const native: unknown = called.kind === "settled" ? called.value : "unknown";
   if (!new Set(["admitted", "definitive_rejection", "unknown"]).has(native as string))
     throw new StartEffectContractFault("The native start adapter returned a malformed outcome.");

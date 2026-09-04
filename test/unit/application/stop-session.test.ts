@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import { createHash } from "node:crypto";
 
 import { ParticipantOperationGate } from "../../../src/application/participant-operation-gate";
@@ -221,25 +221,45 @@ describe("stop session application workflow", () => {
   test("bounds never-settling and stale approvals without authorizing effects", async () => {
     for (const late of [false, true]) {
       const fake = fixture(["busy"]);
-      fake.ports.approval.requestStopApproval = () =>
-        late
-          ? new Promise((resolve) => setTimeout(() => resolve("approved"), 30))
-          : new Promise(() => undefined);
-      const result = await stopSession(
-        fake.ports,
-        {
-          workspaceKey,
-          sourceSessionId,
-          abort: new AbortController().signal,
-          deadlineMs: Date.now() + 5,
-        },
-        { session_id: targetSessionId },
-      );
-      expect(result).toMatchObject({ ok: false, error: { code: "deadline_expired" } });
-      await new Promise((resolve) => setTimeout(resolve, 35));
-      expect(fake.calls).not.toContain("acquire");
-      expect(fake.calls).not.toContain("commit");
-      expect(fake.calls).not.toContain("interrupt");
+      let approvalStarted!: () => void;
+      let settleApproval!: (value: "approved") => void;
+      const started = new Promise<void>((resolve) => {
+        approvalStarted = resolve;
+      });
+      const approval = new Promise<"approved">((resolve) => {
+        settleApproval = resolve;
+      });
+      fake.ports.approval.requestStopApproval = () => {
+        approvalStarted();
+        return approval;
+      };
+      jest.useFakeTimers();
+      try {
+        jest.setSystemTime(10_000);
+        const pending = stopSession(
+          fake.ports,
+          {
+            workspaceKey,
+            sourceSessionId,
+            abort: new AbortController().signal,
+            deadlineMs: 10_005,
+          },
+          { session_id: targetSessionId },
+        );
+        await started;
+        jest.advanceTimersByTime(5);
+        const result = await pending;
+        expect(result).toMatchObject({ ok: false, error: { code: "deadline_expired" } });
+        if (late) {
+          settleApproval("approved");
+          await approval;
+        }
+        expect(fake.calls).not.toContain("acquire");
+        expect(fake.calls).not.toContain("commit");
+        expect(fake.calls).not.toContain("interrupt");
+      } finally {
+        jest.useRealTimers();
+      }
     }
   });
 });

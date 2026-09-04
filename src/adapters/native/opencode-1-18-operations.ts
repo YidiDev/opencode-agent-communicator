@@ -25,14 +25,14 @@ import {
 import { envelopeData, NativeAdapterFault } from "./opencode-1-18-surface";
 
 interface ObservationContext {
-  readonly active: (options?: { readonly signal?: AbortSignal }) => Promise<unknown>;
+  readonly active: (signal?: AbortSignal) => Promise<unknown>;
   readonly configuredWorkspace: WorkspaceKey;
-  readonly health: () => Promise<unknown>;
-  readonly listArchivedRoots: () => Promise<unknown>;
-  readonly listMetadata: () => Promise<unknown>;
-  readonly listVisibleRoots: (options?: { readonly signal?: AbortSignal }) => Promise<unknown>;
+  readonly health: (signal?: AbortSignal) => Promise<unknown>;
+  readonly listArchivedRoots: (signal?: AbortSignal) => Promise<unknown>;
+  readonly listMetadata: (signal?: AbortSignal) => Promise<unknown>;
+  readonly listVisibleRoots: (signal?: AbortSignal) => Promise<unknown>;
   readonly now: () => number;
-  readonly readStatus: (options?: { readonly signal?: AbortSignal }) => Promise<unknown>;
+  readonly readStatus: (signal?: AbortSignal) => Promise<unknown>;
 }
 
 export function createObservationOperations(
@@ -44,18 +44,18 @@ export function createObservationOperations(
   RequestParticipantActivityPort &
   NativeParticipantStopActivityPort {
   return {
-    async readHealth(): Promise<unknown> {
-      return envelopeData(await context.health(), "Host health");
+    async readHealth(signal?: AbortSignal): Promise<unknown> {
+      return envelopeData(await context.health(signal), "Host health");
     },
-    async readVisibleRoots(includeArchived) {
-      const archivedRequest = includeArchived ? context.listArchivedRoots() : undefined;
+    async readVisibleRoots(includeArchived, signal?: AbortSignal) {
+      const archivedRequest = includeArchived ? context.listArchivedRoots(signal) : undefined;
       const [listedResult, visibleRootsResult, archivedRootsResult, statusResult, activeResult] =
         await Promise.all([
-          context.listMetadata(),
-          context.listVisibleRoots(),
+          context.listMetadata(signal),
+          context.listVisibleRoots(signal),
           archivedRequest,
-          context.readStatus(),
-          context.active(),
+          context.readStatus(signal),
+          context.active(signal),
         ]);
       const listed = parseV2SessionArray(listedResult);
       const visibleRoots = parseSessionArray(
@@ -92,10 +92,10 @@ export function createObservationOperations(
         };
       });
     },
-    async readCurrentRoots(workspaceKey, sourceSessionId, targetSessionId) {
+    async readCurrentRoots(workspaceKey, sourceSessionId, targetSessionId, abort?: AbortSignal) {
       assertWorkspaceBinding(workspaceKey, context.configuredWorkspace);
       const roots = parseSessionArray(
-        envelopeData(await context.listVisibleRoots(), "Legacy current root listing"),
+        envelopeData(await context.listVisibleRoots(abort), "Legacy current root listing"),
         "Current root listing",
       );
       const byId = new Map(roots.map((root) => [root.id, root]));
@@ -114,13 +114,13 @@ export function createObservationOperations(
         throw new NativeAdapterFault("Session read presence observation was aborted.");
       }
       const [statusResult, activeResult] = await Promise.all([
-        context.readStatus({ signal: abort }),
-        context.active({ signal: abort }),
+        context.readStatus(abort),
+        context.active(abort),
       ]);
       if (abort.aborted) {
         throw new NativeAdapterFault("Session read presence observation was aborted.");
       }
-      const rootsResult = await context.listVisibleRoots({ signal: abort });
+      const rootsResult = await context.listVisibleRoots(abort);
       if (abort.aborted) {
         throw new NativeAdapterFault("Session read presence observation was aborted.");
       }
@@ -153,9 +153,9 @@ export function createObservationOperations(
       if (abort.aborted)
         throw new NativeAdapterFault("Request participant observation was aborted.");
       const [rootsResult, statusResult, activeResult] = await Promise.all([
-        context.listVisibleRoots({ signal: abort }),
-        context.readStatus({ signal: abort }),
-        context.active({ signal: abort }),
+        context.listVisibleRoots(abort),
+        context.readStatus(abort),
+        context.active(abort),
       ]);
       const roots = parseSessionArray(
         envelopeData(rootsResult, "Legacy current root listing"),
@@ -189,9 +189,9 @@ export function createObservationOperations(
         return participantSessionIds.map((sessionId) => ({ sessionId, activity: "unknown" }));
       }
       const [rootsResult, statusResult, activeResult] = await Promise.all([
-        context.listVisibleRoots({ signal: abort }),
-        context.readStatus({ signal: abort }),
-        context.active({ signal: abort }),
+        context.listVisibleRoots(abort),
+        context.readStatus(abort),
+        context.active(abort),
       ]);
       if (abort.aborted) {
         return participantSessionIds.map((sessionId) => ({ sessionId, activity: "unknown" }));
@@ -228,6 +228,7 @@ function assertWorkspaceBinding(supplied: WorkspaceKey, configured: WorkspaceKey
 }
 
 interface AdmissionContext {
+  readonly directory?: string;
   readonly now: () => number;
   readonly prompt: (
     parameters: {
@@ -237,8 +238,9 @@ interface AdmissionContext {
       readonly delivery: "queue" | "steer";
       readonly resume: true;
     },
-    options: { readonly signal: AbortSignal },
+    options: { readonly signal: AbortSignal; readonly fetch?: typeof globalThis.fetch },
   ) => Promise<unknown>;
+  readonly serverUrl?: URL;
 }
 
 export function createAdmissionOperations(
@@ -264,7 +266,20 @@ export function createAdmissionOperations(
     } catch (_cause: unknown) {
       return { kind: "unknown" } as const;
     }
-    if (isAuthoritativeClientRejection(response, request.abort.aborted, request.targetSessionId)) {
+    if (
+      context.serverUrl !== undefined &&
+      context.directory !== undefined &&
+      (await isAuthoritativeClientRejection(response, request.abort.aborted, {
+        abort: request.abort,
+        method: "POST",
+        serverUrl: context.serverUrl,
+        endpointPath: `/api/session/${encodeURIComponent(request.targetSessionId)}/prompt`,
+        directory: context.directory,
+        targetSessionId: request.targetSessionId,
+        messageId: request.nativeMessageId,
+        messageIdBodyKey: "id",
+      }))
+    ) {
       return { kind: "definitive_rejection" } as const;
     }
     return delivery === "steer"

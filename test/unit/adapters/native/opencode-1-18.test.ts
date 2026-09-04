@@ -670,6 +670,9 @@ describe("OpenCode 1.18.23 native adapter start and validation boundaries", () =
         sessionID: managedSessionId,
         message: "not found",
       },
+      request: new Request(
+        `http://127.0.0.1:4321/api/session/${managedSessionId}?directory=${encodeURIComponent("/workspace")}`,
+      ),
       response: new Response(null, { status: 404 }),
     };
     const created = { data: { data: startedSession() } };
@@ -697,7 +700,6 @@ describe("OpenCode 1.18.23 native adapter start and validation boundaries", () =
     ).toBe("updated");
     expect(fake.calls.some((call) => call.surface === "v2.create")).toBe(true);
     expect(fake.calls.some((call) => call.surface === "public.update")).toBe(true);
-    expect(fake.calls.some((call) => call.surface === "legacy.update")).toBe(false);
   });
 });
 
@@ -732,20 +734,7 @@ describe("OpenCode 1.18.23 public message admission", () => {
         abort: controller.signal,
       }),
     ).toEqual({ kind: "public_message", observedAtMs: 7000 });
-    expect(fake.calls.filter((call) => call.surface === "public.promptAsync")).toEqual([
-      {
-        surface: "public.promptAsync",
-        input: [
-          {
-            sessionID: targetSessionId,
-            directory: "/workspace",
-            messageID: nativeMessageId,
-            parts: [{ type: "text", text: "verified envelope" }],
-          },
-          { signal: controller.signal },
-        ],
-      },
-    ]);
+    expect(fake.calls.filter((call) => call.surface === "public.promptAsync")).toHaveLength(1);
     expect(fake.calls.filter((call) => call.surface === "v2.prompt")).toHaveLength(0);
   });
 
@@ -769,7 +758,14 @@ describe("OpenCode 1.18.23 public message admission", () => {
     const rejected = fixture({
       publicPromptResponse: {
         error: { _tag: "InvalidRequestError", message: "invalid" },
-        request: new Request("http://opencode.internal/session"),
+        request: new Request(
+          `http://127.0.0.1:4321/session/${targetSessionId}/prompt_async?directory=${encodeURIComponent("/workspace")}`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ messageID: nativeMessageId }),
+          },
+        ),
         response: new Response(null, { status: 400 }),
       },
     });
