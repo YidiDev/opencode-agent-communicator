@@ -356,6 +356,100 @@ test("an over-ceiling current-owner close invokes checkpointing before release",
   expect(() => store.close()).toThrow("configured byte ceiling");
 });
 
+test("stale-token ownership inspection never checkpoints an over-ceiling store", async () => {
+  const root = mkdtempSync(join(tmpdir(), "communicator-stale-inspection-"));
+  roots.push(root);
+  const workspace = validateWorkspaceKey("workspace:stale-inspection");
+  if (!workspace.ok) throw new Error("invalid fixture");
+  const descriptors = new Map<number, string>();
+  let oversized = false;
+  const store = new LinuxBunSqliteStore({
+    stateDirectory: join(root, "state"),
+    workspaceKey: workspace.value,
+    ownerId: "stale-inspection",
+    limits: { databaseBytes: 8 * 1024 * 1024 },
+    linuxPathSyscalls: {
+      ...nodeLinuxPathSyscalls,
+      open: (path, flags, mode) => {
+        const descriptor = nodeLinuxPathSyscalls.open(path, flags, mode);
+        descriptors.set(descriptor, path);
+        return descriptor;
+      },
+      fstat: (descriptor) => {
+        const value = nodeLinuxPathSyscalls.fstat(descriptor);
+        return oversized && descriptors.get(descriptor)?.endsWith("/communicator.sqlite3")
+          ? { ...value, size: 9 * 1024 * 1024 }
+          : value;
+      },
+    },
+  });
+  const token = await store.acquire();
+  oversized = true;
+  const blocker = new Database(store.databasePath, { strict: true });
+  blocker.exec("BEGIN IMMEDIATE");
+  expect(await store.isCurrent((Number(token) + 1) as typeof token)).toBeFalse();
+  blocker.exec("ROLLBACK");
+  blocker.close(true);
+  oversized = false;
+  store.close();
+});
+
+test("current-token renewal retains fail-closed capacity protection", async () => {
+  const root = mkdtempSync(join(tmpdir(), "communicator-renewal-capacity-"));
+  roots.push(root);
+  const workspace = validateWorkspaceKey("workspace:renewal-capacity");
+  if (!workspace.ok) throw new Error("invalid fixture");
+  const descriptors = new Map<number, string>();
+  let oversized = false;
+  let now = 10_000;
+  const store = new LinuxBunSqliteStore({
+    stateDirectory: join(root, "state"),
+    workspaceKey: workspace.value,
+    ownerId: "renewal-capacity",
+    leaseDurationMs: 1_000,
+    takeoverGraceMs: 100,
+    nowWallMs: () => now,
+    nowMonotonicMs: () => now,
+    limits: { databaseBytes: 8 * 1024 * 1024 },
+    linuxPathSyscalls: {
+      ...nodeLinuxPathSyscalls,
+      open: (path, flags, mode) => {
+        const descriptor = nodeLinuxPathSyscalls.open(path, flags, mode);
+        descriptors.set(descriptor, path);
+        return descriptor;
+      },
+      fstat: (descriptor) => {
+        const value = nodeLinuxPathSyscalls.fstat(descriptor);
+        return oversized && descriptors.get(descriptor)?.endsWith("/communicator.sqlite3")
+          ? { ...value, size: 9 * 1024 * 1024 }
+          : value;
+      },
+    },
+  });
+  const token = await store.acquire();
+  const initialInspection = new Database(store.databasePath, { readonly: true, strict: true });
+  const before = initialInspection
+    .query<{ readonly renewedAtMs: number }, []>(
+      "SELECT renewed_wall_ms AS renewedAtMs FROM ownership WHERE singleton = 1",
+    )
+    .get();
+  initialInspection.close(true);
+  now += 400;
+  oversized = true;
+  await expect(store.isCurrent(token)).rejects.toThrow("configured byte ceiling");
+  const inspection = new Database(store.databasePath, { readonly: true, strict: true });
+  expect(
+    inspection
+      .query<{ readonly renewedAtMs: number }, []>(
+        "SELECT renewed_wall_ms AS renewedAtMs FROM ownership WHERE singleton = 1",
+      )
+      .get(),
+  ).toEqual(before);
+  inspection.close(true);
+  oversized = false;
+  store.close();
+});
+
 test("an explicit release permits migration immediately without waiting for grace", async () => {
   const root = mkdtempSync(join(tmpdir(), "communicator-release-migration-"));
   roots.push(root);

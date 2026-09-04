@@ -43,6 +43,13 @@ export const sqliteStoreHardCeilings = {
   rateWindowMs: 60_000,
 } as const;
 
+/** Immutable provider-context collection ceilings enforced again at the persistence boundary. */
+export const sqliteContextCollectionHardCeilings = {
+  pendingEnvelopes: 32,
+  claimedEnvelopes: 32,
+  resultReminders: 20,
+} as const;
+
 export interface SqliteStoreLimits {
   readonly databaseBytes: number;
   readonly deliveryRecordsPerSource: number;

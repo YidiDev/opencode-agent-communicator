@@ -248,9 +248,11 @@ export class SqliteStoreCore {
     try {
       const token = this.ownershipRepository.acquire();
       try {
+        this.ownershipRepository.assertCurrent(token);
         this.privateState.assertMutationCapacity(this.maximumDatabaseBytes, () =>
           checkpointDatabase(this.database),
         );
+        this.ownershipRepository.assertCurrent(token);
         const maximumPages = configureOwnedDatabase(this.database, this.maximumDatabaseBytes);
         this.ownershipRepository.assertCurrent(token);
         this.context.maximumPageCount = maximumPages;
@@ -267,7 +269,9 @@ export class SqliteStoreCore {
 
   async isCurrent(token: FencingToken): Promise<boolean> {
     this.assertOpen();
-    return this.access.mutate(() => this.ownershipRepository.isCurrent(token));
+    return this.context.localToken === token
+      ? this.access.mutate(() => this.ownershipRepository.isCurrent(token))
+      : this.access.inspect(() => this.ownershipRepository.isCurrent(token));
   }
 
   ownershipTakeoverDelayMs(): number {
@@ -292,9 +296,11 @@ export class SqliteStoreCore {
 
   private accessOperation<Value>(operation: () => Value): Value {
     try {
-      this.privateState.assertMutationCapacity(this.maximumDatabaseBytes, () =>
-        checkpointDatabase(this.database),
-      );
+      if (this.ownershipRepository.hasCurrentLease()) {
+        this.privateState.assertMutationCapacity(this.maximumDatabaseBytes, () =>
+          checkpointDatabase(this.database),
+        );
+      }
       const result = operation();
       this.privateState.verifySqliteFiles();
       return result;

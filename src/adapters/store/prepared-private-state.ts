@@ -54,8 +54,11 @@ export class PreparedPrivateState implements Disposable {
     if (this.exceedsCeiling(sizes, maximumDatabaseBytes)) {
       try {
         checkpoint();
-      } catch {
-        throw new StoreSecurityError("SQLite growth could not be checkpointed safely.");
+      } catch (cause: unknown) {
+        throw new StoreSecurityError(
+          "SQLite growth could not be checkpointed safely.",
+          cause instanceof Error ? { cause } : undefined,
+        );
       }
       this.verifySqliteFiles();
       sizes = this.readSizes();

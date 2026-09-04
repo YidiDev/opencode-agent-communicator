@@ -32,10 +32,33 @@ export function isLegalDeliveryCompletion(
   return from === "admitted" && to === "promoted";
 }
 
+export function validDeliveryEvidenceChronology(
+  before: DeliveryMetadata,
+  input: CompleteSubmissionInput,
+  storeNowMs: number,
+): boolean {
+  if (
+    storeNowMs < before.updatedAtMs ||
+    (before.submittedAtMs !== undefined && storeNowMs < before.submittedAtMs) ||
+    (before.admissionEvidence !== undefined && storeNowMs < before.admissionEvidence.observedAtMs)
+  ) {
+    return false;
+  }
+  if (!("evidenceObservedAtMs" in input)) return true;
+  return (
+    Number.isSafeInteger(input.evidenceObservedAtMs) &&
+    before.submittedAtMs !== undefined &&
+    input.evidenceObservedAtMs >= before.submittedAtMs &&
+    input.evidenceObservedAtMs <= storeNowMs &&
+    (before.admittedAtMs === undefined || input.evidenceObservedAtMs >= before.admittedAtMs)
+  );
+}
+
 export function writeDeliveryCompletion(
   context: StoreContext,
   input: CompleteSubmissionInput,
   expectedState: DeliveryMetadata["state"],
+  storeNowMs: number,
 ): void {
   let changes: number;
   if (!("evidenceObservedAtMs" in input)) {
@@ -44,19 +67,19 @@ export function writeDeliveryCompletion(
         `UPDATE deliveries SET state = 'failed', updated_at_ms = ?, failed_at_ms = ?,
            admission_unknown_at_ms = NULL
          WHERE workspace_key = ? AND id = ? AND state = ?`,
-        [input.nowMs, input.nowMs, input.workspaceKey, input.deliveryId, expectedState],
+        [storeNowMs, storeNowMs, input.workspaceKey, input.deliveryId, expectedState],
       ).changes;
     } else {
       changes = context.database.run(
         `UPDATE deliveries SET state = 'admission_unknown', updated_at_ms = ?,
            admission_unknown_at_ms = ? WHERE workspace_key = ? AND id = ? AND state = ?`,
-        [input.nowMs, input.nowMs, input.workspaceKey, input.deliveryId, expectedState],
+        [storeNowMs, storeNowMs, input.workspaceKey, input.deliveryId, expectedState],
       ).changes;
     }
     if (changes !== 1) throw new StoreIntegrityError("The delivery completion CAS failed.");
     return;
   }
-  const transitionAtMs = Math.max(input.nowMs, input.evidenceObservedAtMs);
+  const transitionAtMs = Math.max(storeNowMs, input.evidenceObservedAtMs);
   if (input.state === "admitted") {
     changes = context.database.run(
       `UPDATE deliveries SET state = 'admitted', updated_at_ms = ?, admitted_at_ms = ?,

@@ -21,7 +21,13 @@ export class SqliteStoreOperationAccess {
   }
 
   inspect<Value>(operation: () => Value): Value {
-    return this.access(operation);
+    try {
+      const result = operation();
+      this.privateState.verifySqliteFiles();
+      return result;
+    } catch (cause: unknown) {
+      rethrowSanitizedStorageError(cause, "SQLite storage inspection failed.");
+    }
   }
 
   close(ownership: OwnershipRepository, databaseLifecycle: SqliteDatabaseLifecycle): void {
