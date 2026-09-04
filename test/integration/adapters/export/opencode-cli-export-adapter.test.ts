@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -10,6 +11,7 @@ import type {
 } from "../../../../src/adapters/export/bounded-bun-process";
 import { LinuxExportRoot } from "../../../../src/adapters/export/linux-export-destination";
 import { ExportPathError } from "../../../../src/adapters/export/linux-export-install";
+import { nativeJsonHardLimits } from "../../../../src/adapters/export/native-json-limits";
 import { OpenCodeCliExportAdapter } from "../../../../src/adapters/export/opencode-cli-export-adapter";
 import { hasLinuxDescriptorInstall } from "../../../support/linux-export-capability";
 
@@ -298,6 +300,14 @@ describe("exact OpenCode CLI export adapter", () => {
           mutate: (spawn) => (spawn.exported = new Uint8Array(4_097)),
           code: "export_limit_exceeded",
         },
+        {
+          mutate: (spawn) => {
+            const levels = nativeJsonHardLimits.maximumNestingDepth + 1;
+            const nested = `${'{"child":'.repeat(levels)}null${"}".repeat(levels)}`;
+            spawn.exported = new TextEncoder().encode(nested);
+          },
+          code: "export_limit_exceeded",
+        },
         { mutate: (spawn) => (spawn.stderr = new Uint8Array(129)), code: "export_limit_exceeded" },
       ];
       for (const item of cases) {
@@ -364,11 +374,12 @@ describe("OpenCode CLI export staging", () => {
   test("streams validated bytes to a temporary and installs only after all guards pass", async () => {
     const fake = adapterFixture();
     const result = await fake.adapter.writeExport(fake.input);
-    expect(result).toEqual({
-      ok: true,
-      byteCount: fake.spawn.exported.byteLength,
-      contentSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
-    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected successful export fixture");
+    expect(result.byteCount).toBe(fake.spawn.exported.byteLength);
+    expect(result.contentSha256).toBe(
+      createHash("sha256").update(fake.spawn.exported).digest("hex") as never,
+    );
     expect(Buffer.concat(fake.root.chunks.map((chunk) => Buffer.from(chunk)))).toEqual(
       Buffer.from(fake.spawn.exported),
     );
@@ -411,6 +422,22 @@ describe("OpenCode CLI export staging", () => {
       expect(fake.root.installOverwrite).toBeUndefined();
       expect(fake.root.discarded).toBe(true);
     }
+  });
+
+  test("classifies JSON beyond the immutable nesting ceiling as an export limit", async () => {
+    const fake = adapterFixture();
+    using adapter = fake.adapter;
+    const levels = nativeJsonHardLimits.maximumNestingDepth + 1;
+    fake.spawn.exported = new TextEncoder().encode(
+      `${'{"child":'.repeat(levels)}null${"}".repeat(levels)}`,
+    );
+
+    expect(await adapter.writeExport(fake.input)).toEqual({
+      ok: false,
+      code: "export_limit_exceeded",
+    });
+    expect(fake.root.installOverwrite).toBeUndefined();
+    expect(fake.root.discarded).toBe(true);
   });
 
   test("fails closed when executable identity or visibility changes during verification", async () => {
