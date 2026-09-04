@@ -6,6 +6,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 
 import { cleanupAll } from "./harness/cleanup";
 import { resolveExactProjectCli } from "./harness/cli";
+import { waitForCommunicatorOwnershipTakeover } from "./harness/communicator-restart";
 import {
   exactOpenCodeVersion,
   liveDeadlineMs,
@@ -42,8 +43,8 @@ interface PackedFixture {
   readonly entryPath: string;
   readonly isolation: IsolatedOpenCodeState;
   readonly provider: ProviderHarness;
-  readonly stateDirectory: string;
   exportSession(sessionID: string): Promise<{ readonly exitCode: number; readonly stdout: string }>;
+  restart(requestID: string): Promise<void>;
   close(initialFailure?: unknown): Promise<void>;
 }
 
@@ -282,18 +283,18 @@ async function launchPackedFixture(): Promise<PackedFixture> {
     });
     const cliPath = await resolveExactProjectCli(repository);
     await assertPinnedCli(cliPath, isolation);
-    const running = await startPackedServer(cliPath, isolation);
+    let running = await startPackedServer(cliPath, isolation);
     serve = running.serve;
     await initializeLiveProject(running.client, running.baseUrl, isolation.project);
     const state = isolation;
-    const activeServe = serve;
     return {
       cliPath,
-      client: running.client,
+      get client() {
+        return running.client;
+      },
       entryPath,
       isolation: state,
       provider,
-      stateDirectory,
       async exportSession(sessionID) {
         return runBoundedProcess({
           command: cliPath,
@@ -302,10 +303,23 @@ async function launchPackedFixture(): Promise<PackedFixture> {
           environment: state.environment,
         });
       },
+      async restart(requestID: string): Promise<void> {
+        await running.serve.terminate();
+        await waitForCommunicatorOwnershipTakeover(stateDirectory, requestID);
+        running = await startPackedServer(cliPath, state);
+        await initializeLiveProject(running.client, running.baseUrl, state.project);
+        const deadline = performance.now() + liveDeadlineMs;
+        while (performance.now() < deadline) {
+          const ids = successful(await running.client.tool.ids(), "post-restart tool IDs");
+          if (ids.some((id) => id.startsWith("session_"))) return;
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        throw new Error("packed production tools were absent after restart");
+      },
       async close(initialFailure?: unknown): Promise<void> {
         await cleanupAll(
           [
-            () => activeServe.terminate(),
+            () => running.serve.terminate(),
             () => provider.stop(),
             () => state.remove(),
             () => rm(staging, { recursive: true, force: true }),
@@ -685,6 +699,10 @@ test(`runs packed initial request journey through OpenCode ${exactOpenCodeVersio
     await runImmediateRequestJourneys(
       {
         waitForIdle: (sessionID) => waitForIdleTarget(fixture.client, sessionID, "request target"),
+        restart: async (requestID) => {
+          await fixture.restart(requestID);
+          return createInvoker(fixture.client);
+        },
       },
       createInvoker(fixture.client),
     );

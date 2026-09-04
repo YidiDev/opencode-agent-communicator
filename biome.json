@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!!node_modules", "!!coverage", "!!dist"]
+    "includes": ["**", "!!node_modules", "!!coverage", "!!dist", "!!opencode/tmp/worktrees"]
   },
   "formatter": {
     "enabled": true,

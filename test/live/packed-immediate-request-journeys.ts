@@ -14,6 +14,7 @@ interface Invoker {
 
 interface InitialRequestFixture {
   waitForIdle(sessionID: string): Promise<void>;
+  restart(requestID: string): Promise<Invoker>;
 }
 
 async function withinLiveDeadline<T>(promise: Promise<T>, label: string): Promise<T> {
@@ -87,8 +88,9 @@ export async function runImmediateRequestJourneys(
       "request-start signal completion",
     ),
   ).toMatchObject({ ok: true, value: { request_id: startedRequestID, state: "reached" } });
+  const restartedInvoker = await fixture.restart(startedRequestID);
   expect(
-    await invoker.invoke(
+    await restartedInvoker.invoke(
       "session_request_get",
       `production-request-get:${startedRequestID}`,
       started.sessionID,
@@ -106,7 +108,7 @@ export async function runImmediateRequestJourneys(
     },
   });
   expect(
-    await invoker.invoke(
+    await restartedInvoker.invoke(
       "session_request_ack",
       `production-request-ack:${startedRequestID}`,
       started.sessionID,
