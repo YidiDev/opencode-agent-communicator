@@ -1,9 +1,6 @@
 name: OpenCode free-model evaluation
 
 on:
-  pull_request:
-    branches:
-      - main
   schedule:
     - cron: "23 5 * * 1"
   workflow_dispatch:
