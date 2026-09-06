@@ -50,7 +50,6 @@ jobs:
     timeout-minutes: 40
     env:
       OPENCODE_COMPAT_VERSION: ${{ matrix.opencode }}
-      OPENCODE_COMMUNICATOR_PACKED_RUNTIME_DEPENDENCIES_ROOT: ${{ runner.temp }}/opencode-communicator-packed-runtime
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -63,6 +62,8 @@ jobs:
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
       - name: Snapshot packed build runtime dependencies
+        env:
+          OPENCODE_COMMUNICATOR_PACKED_RUNTIME_DEPENDENCIES_ROOT: ${{ runner.temp }}/opencode-communicator-packed-runtime
         run: node tools/snapshot-runtime-dependencies.mjs
       - name: Select matrix OpenCode packages
         run: |
@@ -97,4 +98,6 @@ jobs:
           NODE
           test "$(./node_modules/.bin/opencode --version)" = "$OPENCODE_COMPAT_VERSION"
       - name: Run isolated compatibility harness
+        env:
+          OPENCODE_COMMUNICATOR_PACKED_RUNTIME_DEPENDENCIES_ROOT: ${{ runner.temp }}/opencode-communicator-packed-runtime
         run: bun run test:live

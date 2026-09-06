@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { packedRuntimeDependenciesRootEnvironmentVariable } from "../../live/harness/packed-plugin";
 
 interface WorkflowStep {
+  readonly env?: Record<string, unknown>;
   readonly name?: string;
   readonly run?: string;
 }
@@ -13,27 +14,28 @@ interface WorkflowStep {
 test("snapshots build runtime dependencies before selecting the minimum host matrix packages", async () => {
   const source = await Bun.file(".github/workflows/live-opencode.yml").text();
   const workflow = Bun.YAML.parse(source) as {
-    readonly jobs?: Record<
-      string,
-      { readonly env?: Record<string, unknown>; readonly steps?: readonly WorkflowStep[] }
-    >;
+    readonly jobs?: Record<string, { readonly steps?: readonly WorkflowStep[] }>;
   };
   const job = workflow.jobs?.["opencode-1-18"];
   const steps = job?.steps ?? [];
   const names = steps.map((step) => step.name);
 
-  expect(job?.env?.OPENCODE_COMMUNICATOR_PACKED_RUNTIME_DEPENDENCIES_ROOT).toBe(
-    "$" + "{{ runner.temp }}/opencode-communicator-packed-runtime",
-  );
+  const dependencyRoot = "$" + "{{ runner.temp }}/opencode-communicator-packed-runtime";
   expect(names.indexOf("Install locked dependencies")).toBeLessThan(
     names.indexOf("Snapshot packed build runtime dependencies"),
   );
   expect(names.indexOf("Snapshot packed build runtime dependencies")).toBeLessThan(
     names.indexOf("Select matrix OpenCode packages"),
   );
-  expect(
-    steps.find((step) => step.name === "Snapshot packed build runtime dependencies")?.run,
-  ).toBe("node tools/snapshot-runtime-dependencies.mjs");
+  const snapshot = steps.find((step) => step.name === "Snapshot packed build runtime dependencies");
+  const liveHarness = steps.find((step) => step.name === "Run isolated compatibility harness");
+  expect(snapshot?.run).toBe("node tools/snapshot-runtime-dependencies.mjs");
+  expect(snapshot?.env?.OPENCODE_COMMUNICATOR_PACKED_RUNTIME_DEPENDENCIES_ROOT).toBe(
+    dependencyRoot,
+  );
+  expect(liveHarness?.env?.OPENCODE_COMMUNICATOR_PACKED_RUNTIME_DEPENDENCIES_ROOT).toBe(
+    dependencyRoot,
+  );
 });
 
 async function writePackage(directory: string, name: string, version: string): Promise<void> {
