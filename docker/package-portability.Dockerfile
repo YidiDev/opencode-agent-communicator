@@ -16,5 +16,5 @@ RUN mkdir /package && bun pm pack --ignore-scripts --destination /package
 RUN apk add --no-cache npm
 RUN mkdir /consumer
 WORKDIR /consumer
-RUN npm install --ignore-scripts --no-audit --no-fund /package/opencode-agent-communicator-0.7.3.tgz
+RUN npm install --ignore-scripts --no-audit --no-fund /package/opencode-agent-communicator-0.7.4.tgz
 RUN bun -e 'import plugin from "opencode-agent-communicator"; if (typeof plugin !== "function") throw new Error("packed entry is not a plugin")'
