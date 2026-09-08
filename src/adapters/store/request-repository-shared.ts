@@ -4,13 +4,7 @@ import { classifyDeliveryStorageError } from "./delivery-repository";
 import { hydrateRequest, type RequestRow, requestMetadataColumns } from "./request-rows";
 import { type StoreContext, StoreIntegrityError } from "./store-types";
 
-export function requestStoreNowMs(context: StoreContext): number {
-  const nowMs = context.nowWallMs();
-  if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
-    throw new StoreIntegrityError("The request store clock was malformed.");
-  }
-  return nowMs;
-}
+export { storeNowMs as requestStoreNowMs } from "./store-clock";
 
 export function selectRequest(
   context: StoreContext,

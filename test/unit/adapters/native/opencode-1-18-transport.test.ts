@@ -146,6 +146,35 @@ describe("bounded OpenCode 1.18 transport", () => {
     expect(cancellations).toBe(1);
   });
 
+  test("does not wait for an uncooperative source cancellation after aborting a stalled body", async () => {
+    const controller = new AbortController();
+    let cancellationStarted = false;
+    let notifyReadStarted: (() => void) | undefined;
+    const readStarted = new Promise<void>((resolve) => {
+      notifyReadStarted = resolve;
+    });
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull() {
+          notifyReadStarted?.();
+        },
+        cancel() {
+          cancellationStarted = true;
+          return new Promise(() => {});
+        },
+      }),
+    );
+    const pending = createBoundedOpenCode118Fetch(hostFetch(response), 32)(requestUrl, {
+      signal: controller.signal,
+    });
+
+    await readStarted;
+    controller.abort();
+
+    await expect(pending).rejects.toThrow("Pinned OpenCode response read was aborted.");
+    expect(cancellationStarted).toBe(true);
+  });
+
   test("fails closed when an expected body is absent but permits bodyless HEAD responses", async () => {
     await expect(
       createBoundedOpenCode118Fetch(hostFetch(new Response(null)), 0)(requestUrl),
@@ -166,6 +195,43 @@ describe("bounded OpenCode 1.18 transport", () => {
       createBoundedOpenCode118Fetch(hostFetch(fixture.response), 1024)(requestUrl),
     ).rejects.toThrow("Pinned OpenCode response body is unreadable.");
     expect(fixture.cancellations()).toBe(1);
+  });
+});
+
+describe("bounded OpenCode 1.18 transport adversarial storage", () => {
+  test.each([
+    ["zero-length flood", Array.from({ length: 4_097 }, () => new Uint8Array())],
+    ["fragment flood", Array.from({ length: 4_097 }, () => new Uint8Array([1]))],
+  ])("rejects a %s within the immutable read ceiling and cancels", async (_label, chunks) => {
+    const fixture = streamingResponse(chunks);
+
+    await expect(
+      createBoundedOpenCode118Fetch(hostFetch(fixture.response), 8_192)(requestUrl),
+    ).rejects.toThrow("Pinned OpenCode response body is unreadable.");
+    expect(fixture.cancellations()).toBe(1);
+  });
+
+  test("copies tiny caller views from a large backing buffer as each chunk arrives", async () => {
+    const backing = new Uint8Array(1024 * 1024);
+    backing.set([1, 2, 3], 512_000);
+    let next = 1;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (next > 3) {
+            backing.fill(9, 512_000, 512_002);
+            controller.close();
+            return;
+          }
+          const tinyView = backing.subarray(511_999 + next, 512_000 + next);
+          next += 1;
+          controller.enqueue(tinyView);
+        },
+      }),
+    );
+
+    const bounded = await createBoundedOpenCode118Fetch(hostFetch(response), 3)(requestUrl);
+    expect(new Uint8Array(await bounded.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
   });
 
   test("uses payload-free NativeAdapterFault messages for transport and body failures", async () => {

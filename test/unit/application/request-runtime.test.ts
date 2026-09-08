@@ -64,12 +64,7 @@ function event(requestId = id("1"), kind: "ask" | "wait" = "wait"): CommittedReq
 }
 
 async function stillPending(promise: Promise<unknown>): Promise<boolean> {
-  let settled = false;
-  void promise.then(() => {
-    settled = true;
-  });
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
-  return !settled;
+  return Promise.race([promise.then(() => false), Promise.resolve(true)]);
 }
 
 test("provisional and normal attachments observe committed terminal events", async () => {

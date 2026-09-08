@@ -511,7 +511,7 @@ describe("delivery persistence and authorization", () => {
   });
 });
 
-describe("workspace scope and admission evidence", () => {
+describe("workspace scope", () => {
   test("scopes every operation and recovery scan to one configured workspace", async () => {
     const location = temporaryState();
     const time = clock();
@@ -573,19 +573,24 @@ describe("workspace scope and admission evidence", () => {
     ).toBeUndefined();
     second.close();
   });
+});
 
+describe("admission evidence", () => {
   test("records promoted admission timestamps and evidence in one coherent mutation", async () => {
     const location = temporaryState();
-    const store = openStore({ state: location.state });
+    const time = clock();
+    const store = openStore({ state: location.state, time });
     const token = await store.acquire();
     const input = prepared(token, 6, 10_000);
     await store.createPrepared(input);
+    time.advance(1);
     await store.claimPrepared({
       fencingToken: token,
       workspaceKey: workspace,
       deliveryId: input.id,
       nowMs: 10_001,
     });
+    time.advance(2);
     const result = await store.completeSubmission({
       fencingToken: token,
       workspaceKey: workspace,
@@ -610,16 +615,19 @@ describe("workspace scope and admission evidence", () => {
 
   test("records public message admission without fabricated sequence evidence", async () => {
     const location = temporaryState();
-    const store = openStore({ state: location.state });
+    const time = clock();
+    const store = openStore({ state: location.state, time });
     const token = await store.acquire();
     const input = prepared(token, 59, 10_000);
     await store.createPrepared(input);
+    time.advance(1);
     await store.claimPrepared({
       fencingToken: token,
       workspaceKey: workspace,
       deliveryId: input.id,
       nowMs: 10_001,
     });
+    time.advance(1);
     const result = await store.completeSubmission({
       fencingToken: token,
       workspaceKey: workspace,
@@ -652,16 +660,19 @@ describe("workspace scope and admission evidence", () => {
 
   test("preserves admitted history during promotion and rejects sequence mismatch", async () => {
     const location = temporaryState();
-    const store = openStore({ state: location.state });
+    const time = clock();
+    const store = openStore({ state: location.state, time });
     const token = await store.acquire();
     const input = prepared(token, 58, 10_000);
     await store.createPrepared(input);
+    time.advance(1);
     await store.claimPrepared({
       fencingToken: token,
       workspaceKey: workspace,
       deliveryId: input.id,
       nowMs: 10_001,
     });
+    time.advance(1);
     await store.completeSubmission({
       fencingToken: token,
       workspaceKey: workspace,
@@ -683,6 +694,7 @@ describe("workspace scope and admission evidence", () => {
         nowMs: 10_003,
       }),
     ).toEqual({ ok: false, code: "state_conflict" });
+    time.advance(2);
     const promoted = await store.completeSubmission({
       fencingToken: token,
       workspaceKey: workspace,
@@ -708,7 +720,7 @@ describe("workspace scope and admission evidence", () => {
 describe("delivery row hydration", () => {
   test("strictly hydrates admitted, unknown, and failed delivery states", async () => {
     const location = temporaryState();
-    const store = openStore({ state: location.state });
+    const store = openStore({ state: location.state, time: clock(11_000) });
     const token = await store.acquire();
     for (const [index, state] of [
       [7, "admitted"],

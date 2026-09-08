@@ -125,6 +125,7 @@ export async function collect(
   maximumBytes: number,
   onChunk?: (chunk: Uint8Array) => void,
   readers?: ReadableStreamDefaultReader<Uint8Array>[],
+  shouldRetain = true,
 ): Promise<Uint8Array> {
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -138,12 +139,12 @@ export async function collect(
       total += next.value.byteLength;
       if (total > maximumBytes) throw new StreamLimitFault();
       onChunk?.(next.value);
-      chunks.push(next.value.slice());
+      if (shouldRetain) chunks.push(next.value.slice());
     }
   } finally {
     reader.releaseLock();
   }
-  const bytes = new Uint8Array(total);
+  const bytes = new Uint8Array(shouldRetain ? total : 0);
   let offset = 0;
   for (const chunk of chunks) {
     bytes.set(chunk, offset);

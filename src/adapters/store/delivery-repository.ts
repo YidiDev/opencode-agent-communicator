@@ -12,11 +12,13 @@ import { OwnershipLostFault } from "../../domain/ownership";
 import {
   assertStaleDeliveryClassification,
   isLegalDeliveryCompletion,
+  validDeliveryEvidenceChronology,
   writeDeliveryCompletion,
 } from "./delivery-completion";
 import { checkDeliveryCreateQuotas, recordDeliveryRateEvent } from "./delivery-quotas";
 import { type DeliveryRow, deliveryMetadataColumns, hydrateDelivery } from "./delivery-rows";
 import type { OwnershipRepository } from "./ownership-repository";
+import { storeNowMs } from "./store-clock";
 import { type StoreContext, StoreIntegrityError } from "./store-types";
 
 interface EnvelopeRow extends DeliveryRow {
@@ -235,6 +237,7 @@ export class DeliveryRepository {
     try {
       const transaction = this.context.database.transaction(() => {
         this.ownership.assertCurrent(input.fencingToken);
+        const trustedNowMs = storeNowMs(this.context);
         const before = selectDelivery(this.context, input.workspaceKey, input.deliveryId);
         if (!before) throw new StoreIntegrityError("The delivery completion target was absent.");
         const classifyingStaleSubmission = this.context.startupBlockedToken === input.fencingToken;
@@ -242,6 +245,12 @@ export class DeliveryRepository {
           assertStaleDeliveryClassification(this.context, input);
         }
         if (!isLegalDeliveryCompletion(before.state, input.state)) {
+          return {
+            result: { ok: false as const, code: "state_conflict" as const },
+            staleClassificationComplete: undefined,
+          };
+        }
+        if (!validDeliveryEvidenceChronology(before, input, trustedNowMs)) {
           return {
             result: { ok: false as const, code: "state_conflict" as const },
             staleClassificationComplete: undefined,
@@ -258,7 +267,7 @@ export class DeliveryRepository {
             staleClassificationComplete: undefined,
           };
         }
-        writeDeliveryCompletion(this.context, input, before.state);
+        writeDeliveryCompletion(this.context, input, before.state, trustedNowMs);
         const delivery = selectDelivery(this.context, input.workspaceKey, input.deliveryId);
         if (!delivery) throw new StoreIntegrityError("The delivery completion result was absent.");
         return {

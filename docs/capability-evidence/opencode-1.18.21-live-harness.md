@@ -25,8 +25,8 @@ The test proves the following surfaces against the live binary:
   identity, exact proven `[redacted:session-title:<id>]` /
   `[redacted:session-directory:<id>]` markers, and a live sanitized `import` round trip;
 - instance disposal reaching the plugin disposer.
-- a separately packed and installed production entry loaded directly, with the exact 14-tool
-  manifest, both bundled skills, and successful production disposal. The test invokes every tool
+- a separately packed and installed production entry loaded directly, with the exact 21-tool
+  manifest, all three bundled skills, and successful production disposal. The test invokes every tool
   through the live host. It proves successful list/send/delivery, ask/respond/get/ack, wait/signal,
   and approved start/stop paths; request listing; an authoritative target-role cancel rejection; and
   the exact configured export-unavailable result. Managed start evidence includes deterministic V2
@@ -35,7 +35,10 @@ The test proves the following surfaces against the live binary:
   user turn before completion. A later packed `session_send` likewise settles before its gated
   assistant response, and both turns appear in the public messages API and pinned CLI export under
   the requested title. Dynamic request, delivery, operation, native message, and session identities are correlated
-  across those exact outputs. This does not claim a successful cancel path or secure export, nor
+  across those exact outputs. A terminal request result is then read and acknowledged through a new
+  backend/plugin process using the same native and communicator state roots after the prior process
+  terminates and its stored ownership lease reaches the exact takeover boundary. This proves packed
+  startup recovery preserves that retained result. It does not claim a successful cancel path or
   exhaustive policy/recovery coverage.
 - production receives the host's unmodified pinned `PluginInput`; there is no test client `Proxy`,
   fabricated health/list result, or loader wrapper. The exact first host effect is global health via
@@ -49,6 +52,20 @@ removed after the test. This is cleanup, not a forensic secure-erasure claim.
 The committed test and this capability summary contain
 no captured transcript, raw workspace path, credential, or generated export.
 Live tests are intentionally excluded from normal tests and coverage.
+
+The ordinary live harness cannot produce a successful packed `session_export`. Production requires
+an exact root-owned, non-group/world-writable direct ELF OpenCode executable on a fully root-owned
+ancestor chain, outside the workspace and plugin tree. The isolated project-selected CLI is
+intentionally installed under the unprivileged checkout, so configuring it makes production fail
+closed during secure export initialization. Installing the captured bytes also requires the Linux
+`O_TMPFILE` / `linkat(AT_EMPTY_PATH)` capability exercised in the dedicated secure-export container,
+which grants only `DAC_READ_SEARCH`; ordinary live-test processes do not have it. Substituting a fake
+spawn or relaxing either trust check would no longer exercise the packed production plugin. The
+packed live test therefore retains the exact `export_unavailable` public result, while the required
+secure-export container supplies positive file, digest, byte-count, sanitizer, and containment
+evidence at the production adapter boundary. The application and tool suites separately prove exact
+approval behavior. A successful packed-tool journey remains residual until that capability container
+also hosts the isolated OpenCode server.
 
 The V2 prompt error declaration/source pins definitive pre-admission rejection to exact 400
 `InvalidRequestError`, 401 `UnauthorizedError`, and target-correlated 404

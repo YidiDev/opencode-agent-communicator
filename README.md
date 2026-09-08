@@ -826,8 +826,10 @@ the exact build-time patch:
 bun run test:live
 ```
 
-The live suite preserves the diagnostic Phase 0 capability tests and separately packs, installs,
-and loads the production entry without a loader shim or modified `PluginInput`. Packed acceptance
+The live suite preserves the diagnostic Phase 0 capability tests and separately packs the archive,
+extracts it into an isolated harness, wires its declared runtime dependencies from a reviewed local
+snapshot, and loads the production entry by absolute `file://` URL without a loader shim or modified
+`PluginInput`. Packed acceptance
 invokes all 21 tools through OpenCode, including a real `session_read` self-read and exact-approved
 cross-session read with pagination, append, and projection.
 Deterministic adversarial suites provide visibility-race and bounded-response evidence. Acceptance must also retain the established lock,
@@ -837,7 +839,8 @@ The supported-range live harness exercises this packed journey at both compatibi
 the exact manifest (so partial registration fails), all three bundled skills, correlated outputs,
 consumed permissions, and disposal before that compatibility evidence is claimed. Even then, the
 matrix is boundary evidence for the supported minor line, not proof of every failure, recovery,
-retention, or secure-export branch.
+retention, or secure-export branch. Actual consumer installation evidence comes from the black-box
+packed-package test and the package-portability acceptance suite.
 
 ### Tokenless free-model evaluation
 

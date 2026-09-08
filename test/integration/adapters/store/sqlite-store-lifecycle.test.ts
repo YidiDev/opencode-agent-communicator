@@ -10,6 +10,7 @@ import {
   type LinuxBunSqliteStoreOptions,
   StoreIntegrityError,
 } from "../../../../src/adapters/store/store-types";
+import { OwnershipLostFault } from "../../../../src/domain/ownership";
 import { validateWorkspaceKey } from "../../../../src/domain/workspaces";
 
 const temporaryRoots: string[] = [];
@@ -148,5 +149,61 @@ describe("deterministic SQLite lifecycle cleanup", () => {
         }),
     ).toThrow("Published SQLite migration history does not match.");
     expect(openDescriptors.size).toBe(0);
+  });
+
+  test("acquire rejects ownership takeover during mutable database configuration", async () => {
+    const state = temporaryState();
+    let now = 10_000;
+    let armed = false;
+    let takeover: Promise<unknown> | undefined;
+    let second: LinuxBunSqliteStore | undefined;
+    const first = new LinuxBunSqliteStore({
+      stateDirectory: state,
+      workspaceKey: workspace,
+      ownerId: "configuration-owner",
+      leaseDurationMs: 1_000,
+      takeoverGraceMs: 100,
+      nowWallMs: () => now,
+      nowMonotonicMs: () => now,
+      sqliteDatabaseLifecycle: {
+        open: (path, flags) => {
+          const database = new Database(path, flags);
+          return new Proxy(database, {
+            get(target, property) {
+              if (property === "exec") {
+                return (sql: string) => {
+                  const result = target.exec(sql);
+                  if (armed && sql === "PRAGMA wal_autocheckpoint = 256") {
+                    armed = false;
+                    now += 1_101;
+                    takeover = second?.acquire();
+                  }
+                  return result;
+                };
+              }
+              const value = Reflect.get(target, property, target) as unknown;
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          }) as Database;
+        },
+        close: (database) => database.close(true),
+      },
+    });
+    second = new LinuxBunSqliteStore({
+      stateDirectory: state,
+      workspaceKey: workspace,
+      ownerId: "takeover-owner",
+      leaseDurationMs: 1_000,
+      takeoverGraceMs: 100,
+      nowWallMs: () => now,
+      nowMonotonicMs: () => now,
+    });
+    armed = true;
+    await expect(first.acquire()).rejects.toThrow(OwnershipLostFault);
+    if (!takeover) throw new Error("takeover hook did not run");
+    await expect(takeover).resolves.toBe(2);
+    expect(await first.isCurrent(1 as never)).toBeFalse();
+    second.close();
+    first.close();
   });
 });

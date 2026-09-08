@@ -41,7 +41,11 @@ import {
   requestPageLimitReached,
   requestStoreNowMs,
 } from "./request-repository-shared";
-import { type StoreContext, StoreIntegrityError } from "./store-types";
+import {
+  type StoreContext,
+  StoreIntegrityError,
+  sqliteContextCollectionHardCeilings,
+} from "./store-types";
 
 export class ContextAdmissionRepository {
   constructor(
@@ -161,7 +165,7 @@ export class ContextAdmissionRepository {
       !validateSessionId(input.targetSessionId).ok ||
       !Number.isSafeInteger(input.limit) ||
       input.limit < 1 ||
-      input.limit > 100 ||
+      input.limit > sqliteContextCollectionHardCeilings.pendingEnvelopes ||
       !Number.isSafeInteger(input.maximumBytes) ||
       input.maximumBytes < 1 ||
       input.maximumBytes > contextEnvelopeMaximumBytes
@@ -203,7 +207,7 @@ export class ContextAdmissionRepository {
       input.workspaceKey !== this.context.workspaceKey ||
       !validateSessionId(input.targetSessionId).ok ||
       input.items.length < 1 ||
-      input.items.length > 100
+      input.items.length > sqliteContextCollectionHardCeilings.claimedEnvelopes
     ) {
       return [];
     }
@@ -261,7 +265,7 @@ export class ContextAdmissionRepository {
       !validateSessionId(input.targetSessionId).ok ||
       !Number.isSafeInteger(input.resultLimit) ||
       input.resultLimit < 1 ||
-      input.resultLimit > 100
+      input.resultLimit > sqliteContextCollectionHardCeilings.resultReminders
     ) {
       return { activeLockCount: 0, availableResults: [] };
     }

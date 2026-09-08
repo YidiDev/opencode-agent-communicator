@@ -1,11 +1,12 @@
-import { expect, setDefaultTimeout, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 
 import { cleanupAll } from "./harness/cleanup";
 import { resolveExactProjectCli } from "./harness/cli";
+import { waitForCommunicatorOwnershipTakeover } from "./harness/communicator-restart";
 import {
   exactOpenCodeVersion,
   liveDeadlineMs,
@@ -15,6 +16,7 @@ import {
 import { requestJson } from "./harness/http";
 import type { IsolatedOpenCodeState } from "./harness/isolation";
 import { createIsolatedOpenCodeState } from "./harness/isolation";
+import { installPackedPlugin, type PackedPluginInstallation } from "./harness/packed-plugin";
 import {
   launchManagedProcess,
   type ManagedProcess,
@@ -42,8 +44,8 @@ interface PackedFixture {
   readonly entryPath: string;
   readonly isolation: IsolatedOpenCodeState;
   readonly provider: ProviderHarness;
-  readonly stateDirectory: string;
   exportSession(sessionID: string): Promise<{ readonly exitCode: number; readonly stdout: string }>;
+  restart(requestID: string): Promise<void>;
   close(initialFailure?: unknown): Promise<void>;
 }
 
@@ -87,12 +89,25 @@ const toolIds = [
   "session_export",
 ] as const;
 
+let packedInstallation: PackedPluginInstallation | undefined;
+
 function successful<T>(
-  result: { readonly data: T | undefined; readonly error?: unknown; readonly response: Response },
+  result:
+    | {
+        readonly data?: T;
+        readonly error?: unknown;
+        readonly response?: { readonly status?: unknown };
+      }
+    | null
+    | undefined,
   label: string,
 ): NonNullable<T> {
-  if (result.error !== undefined || result.data === undefined) {
-    throw new Error(`${label} failed (${result.response.status}): ${JSON.stringify(result.error)}`);
+  if (result?.error !== undefined || result?.data == null) {
+    const status = result?.response?.status ?? "no response";
+    const failure = new Error(`${label} failed (${String(status)})`, {
+      cause: result?.error ?? new Error("SDK returned no data"),
+    });
+    throw failure;
   }
   return result.data as NonNullable<T>;
 }
@@ -109,32 +124,18 @@ async function withinLiveDeadline<T>(promise: Promise<T>, label: string): Promis
   }
 }
 
-async function installPackedPlugin(repository: string, staging: string): Promise<string> {
-  const packed = Bun.spawnSync({
-    cmd: ["npm", "pack", "--json", "--pack-destination", staging],
-    cwd: repository,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (packed.exitCode !== 0) throw new Error(`npm pack failed: ${packed.stderr.toString()}`);
-  const report = JSON.parse(packed.stdout.toString()) as Array<{ filename?: string }>;
-  const archive = join(staging, report[0]?.filename ?? "missing.tgz");
-  const consumer = join(staging, "consumer");
-  await mkdir(consumer);
-  await Bun.write(
-    join(consumer, "package.json"),
-    `${JSON.stringify({ private: true, dependencies: { "opencode-agent-communicator": archive } })}\n`,
-  );
-  const installed = Bun.spawnSync({
-    cmd: ["npm", "install", "--ignore-scripts"],
-    cwd: consumer,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (installed.exitCode !== 0) {
-    throw new Error(`npm packed install failed: ${installed.stderr.toString()}`);
-  }
-  return realpath(join(consumer, "node_modules/opencode-agent-communicator/src/index.ts"));
+beforeAll(async () => {
+  packedInstallation = await installPackedPlugin(resolve(import.meta.dir, "../.."));
+});
+
+afterAll(async () => {
+  await packedInstallation?.remove();
+});
+
+function sharedPackedEntryPath(): string {
+  if (packedInstallation === undefined)
+    throw new Error("packed plugin installation is unavailable");
+  return packedInstallation.entryPath;
 }
 
 function toolPart(messages: readonly { readonly parts: readonly unknown[] }[], id: string) {
@@ -251,7 +252,7 @@ async function initializeLiveProject(client: Client, baseUrl: string, directory:
 
 async function launchPackedFixture(): Promise<PackedFixture> {
   const repository = resolve(import.meta.dir, "../..");
-  const staging = await mkdtemp(join(tmpdir(), "communicator-packed-live-"));
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "communicator-packed-fixture-"));
   const provider = launchDeterministicProvider({
     gateText: [
       "production-target-active",
@@ -268,9 +269,9 @@ async function launchPackedFixture(): Promise<PackedFixture> {
   let isolation: IsolatedOpenCodeState | undefined;
   let serve: ManagedProcess | undefined;
   try {
-    const entryPath = await installPackedPlugin(repository, staging);
+    const entryPath = sharedPackedEntryPath();
     expect(entryPath).toContain("node_modules/opencode-agent-communicator/src/index.ts");
-    const stateDirectory = join(staging, "production-state");
+    const stateDirectory = join(fixtureRoot, "production-state");
     isolation = await createIsolatedOpenCodeState({
       providerBaseUrl: provider.baseUrl,
       pluginPath: entryPath,
@@ -282,18 +283,18 @@ async function launchPackedFixture(): Promise<PackedFixture> {
     });
     const cliPath = await resolveExactProjectCli(repository);
     await assertPinnedCli(cliPath, isolation);
-    const running = await startPackedServer(cliPath, isolation);
+    let running = await startPackedServer(cliPath, isolation);
     serve = running.serve;
     await initializeLiveProject(running.client, running.baseUrl, isolation.project);
     const state = isolation;
-    const activeServe = serve;
     return {
       cliPath,
-      client: running.client,
+      get client() {
+        return running.client;
+      },
       entryPath,
       isolation: state,
       provider,
-      stateDirectory,
       async exportSession(sessionID) {
         return runBoundedProcess({
           command: cliPath,
@@ -302,13 +303,26 @@ async function launchPackedFixture(): Promise<PackedFixture> {
           environment: state.environment,
         });
       },
+      async restart(requestID: string): Promise<void> {
+        await running.serve.terminate();
+        await waitForCommunicatorOwnershipTakeover(stateDirectory, requestID);
+        running = await startPackedServer(cliPath, state);
+        await initializeLiveProject(running.client, running.baseUrl, state.project);
+        const deadline = performance.now() + liveDeadlineMs;
+        while (performance.now() < deadline) {
+          const ids = successful(await running.client.tool.ids(), "post-restart tool IDs");
+          if (ids.some((id) => id.startsWith("session_"))) return;
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        throw new Error("packed production tools were absent after restart");
+      },
       async close(initialFailure?: unknown): Promise<void> {
         await cleanupAll(
           [
-            () => activeServe.terminate(),
+            () => running.serve.terminate(),
             () => provider.stop(),
             () => state.remove(),
-            () => rm(staging, { recursive: true, force: true }),
+            () => rm(fixtureRoot, { recursive: true, force: true }),
           ],
           initialFailure,
         );
@@ -320,7 +334,7 @@ async function launchPackedFixture(): Promise<PackedFixture> {
         () => serve?.terminate(),
         () => provider.stop(),
         () => isolation?.remove(),
-        () => rm(staging, { recursive: true, force: true }),
+        () => rm(fixtureRoot, { recursive: true, force: true }),
       ],
       error,
     );
@@ -685,6 +699,10 @@ test(`runs packed initial request journey through OpenCode ${exactOpenCodeVersio
     await runImmediateRequestJourneys(
       {
         waitForIdle: (sessionID) => waitForIdleTarget(fixture.client, sessionID, "request target"),
+        restart: async (requestID) => {
+          await fixture.restart(requestID);
+          return createInvoker(fixture.client);
+        },
       },
       createInvoker(fixture.client),
     );
@@ -715,16 +733,16 @@ test(`runs packed context journeys through OpenCode ${exactOpenCodeVersion}`, as
 
 test(`loads the packed production plugin during a direct OpenCode ${exactOpenCodeVersion} run`, async () => {
   const repository = resolve(import.meta.dir, "../..");
-  const staging = await mkdtemp(join(tmpdir(), "communicator-packed-direct-run-"));
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "communicator-packed-direct-run-"));
   const provider = launchDeterministicProvider();
   let isolation: IsolatedOpenCodeState | undefined;
   let failure: unknown;
   try {
-    const entryPath = await installPackedPlugin(repository, staging);
+    const entryPath = sharedPackedEntryPath();
     isolation = await createIsolatedOpenCodeState({
       providerBaseUrl: provider.baseUrl,
       pluginPath: entryPath,
-      pluginOptions: { stateDirectory: join(staging, "direct-run-state") },
+      pluginOptions: { stateDirectory: join(fixtureRoot, "direct-run-state") },
     });
     const cliPath = await resolveExactProjectCli(repository);
     const result = await runBoundedProcess({
@@ -771,7 +789,7 @@ test(`loads the packed production plugin during a direct OpenCode ${exactOpenCod
       [
         () => provider.stop(),
         () => isolation?.remove(),
-        () => rm(staging, { recursive: true, force: true }),
+        () => rm(fixtureRoot, { recursive: true, force: true }),
       ],
       failure,
     );

@@ -23,18 +23,18 @@ interface StartSessionSurface {
       readonly model?: { readonly providerID: string; readonly id: string };
       readonly location: { readonly directory: string };
     },
-    options: { readonly signal: AbortSignal },
+    options: { readonly signal: AbortSignal; readonly fetch?: typeof globalThis.fetch },
   ): Promise<unknown>;
   get(
     input: { readonly sessionID: string },
-    options: { readonly signal: AbortSignal },
+    options: { readonly signal: AbortSignal; readonly fetch?: typeof globalThis.fetch },
   ): Promise<unknown>;
 }
 
 interface PublicStartSurface extends PublicMessageSurface {
   updateTitle(
     input: { readonly sessionID: string; readonly directory: string; readonly title: string },
-    options: { readonly signal: AbortSignal },
+    options: { readonly signal: AbortSignal; readonly fetch?: typeof globalThis.fetch },
   ): Promise<unknown>;
 }
 
@@ -111,6 +111,7 @@ export async function createDeterministicRootSession(
     readonly model?: string;
     readonly abort: AbortSignal;
   },
+  serverUrl?: URL,
 ): Promise<NativeStartCreation> {
   if (input.abort.aborted) return "unknown";
   const model = modelRef(input.model);
@@ -118,7 +119,17 @@ export async function createDeterministicRootSession(
   try {
     const before = await surface.get({ sessionID: input.sessionId }, { signal: input.abort });
     if (sessionInfo(before)) return "collision";
-    if (!isAuthoritativeClientRejection(before, input.abort.aborted, input.sessionId))
+    if (
+      serverUrl === undefined ||
+      !(await isAuthoritativeClientRejection(before, input.abort.aborted, {
+        abort: input.abort,
+        method: "GET",
+        serverUrl,
+        endpointPath: `/api/session/${encodeURIComponent(input.sessionId)}`,
+        directory,
+        targetSessionId: input.sessionId,
+      }))
+    )
       return "unknown";
     const created = await surface.create(
       {
@@ -148,6 +159,7 @@ export async function updateAndVerifySessionTitle(
   surface: Pick<PublicStartSurface, "updateTitle">,
   directory: string,
   input: { readonly sessionId: SessionId; readonly title: string; readonly abort: AbortSignal },
+  serverUrl?: URL,
 ): Promise<NativeTitleUpdate> {
   if (input.abort.aborted) return "unknown";
   try {
@@ -155,7 +167,18 @@ export async function updateAndVerifySessionTitle(
       { sessionID: input.sessionId, directory, title: input.title },
       { signal: input.abort },
     );
-    if (isAuthoritativeClientRejection(response, input.abort.aborted, input.sessionId)) {
+    if (
+      serverUrl !== undefined &&
+      (await isAuthoritativeClientRejection(response, input.abort.aborted, {
+        abort: input.abort,
+        method: "PATCH",
+        serverUrl,
+        endpointPath: `/session/${encodeURIComponent(input.sessionId)}`,
+        directory,
+        targetSessionId: input.sessionId,
+        exactRequestBody: { title: input.title },
+      }))
+    ) {
       return "definitive_rejection";
     }
     const updated = publicSession(response);
@@ -183,6 +206,7 @@ export async function admitLegacyInitialMessage(
     readonly abort: AbortSignal;
   },
   dependencies: PublicMessageAdmissionDependencies = {},
+  serverUrl?: URL,
 ): Promise<NativeInitialMessageAdmission> {
   const result = await admitPublicMessage(
     surface,
@@ -196,6 +220,7 @@ export async function admitLegacyInitialMessage(
       abort: input.abort,
     },
     dependencies,
+    serverUrl,
   );
   return result.kind === "observed" ? "admitted" : result.kind;
 }

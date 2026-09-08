@@ -8,6 +8,7 @@ import {
 } from "../domain/host";
 import { type DomainResult, domainFailure } from "../domain/results";
 import { boundedExternalCall } from "./bounded-external-call";
+import { deadlineLinkedSignal } from "./claimed-message-admission";
 
 function incompatibleHost(): DomainResult<never> {
   return domainFailure(
@@ -39,8 +40,16 @@ export async function checkHostCompatibility(
 ): Promise<DomainResult<CompatibleHost>> {
   try {
     if (!isExactSupportedRuntime(runtimeIdentity.readIdentity())) return incompatibleHost();
+    const abortAwareHealth = healthPort as HostHealthPort & {
+      readHealth(signal?: AbortSignal): Promise<unknown>;
+    };
+    const effect = context ? deadlineLinkedSignal(context.abort, context.deadlineMs) : undefined;
     const health = context
-      ? await boundedExternalCall(() => healthPort.readHealth(), context.abort, context.deadlineMs)
+      ? await boundedExternalCall(
+          () => abortAwareHealth.readHealth(effect?.signal),
+          effect?.signal ?? context.abort,
+          context.deadlineMs,
+        ).finally(() => effect?.dispose())
       : { kind: "value" as const, value: await healthPort.readHealth() };
     const version = health.kind === "value" ? supportedHealthVersion(health.value) : undefined;
     if (!version) return incompatibleHost();

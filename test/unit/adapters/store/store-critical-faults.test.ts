@@ -21,6 +21,7 @@ import { StoreMaintenanceRepository } from "../../../../src/adapters/store/store
 import {
   checkpointDatabase,
   integerStoreOption,
+  rethrowSanitizedStorageError,
 } from "../../../../src/adapters/store/store-runtime-helpers";
 import {
   type StoreContext,
@@ -105,6 +106,27 @@ describe("critical store configuration and helper faults", () => {
       query: () => ({ get: () => ({ busy: "not-a-number" }) }),
     } as unknown as Database;
     expect(() => checkpointDatabase(malformed)).toThrow(StoreSecurityError);
+  });
+
+  test("sanitizes SQLite failures while retaining the original Error as the internal cause", () => {
+    const database = new Database(":memory:", { strict: true });
+    database.close(true);
+    let sqliteFault: Error | undefined;
+    try {
+      checkpointDatabase(database);
+    } catch (cause: unknown) {
+      if (!(cause instanceof Error)) throw cause;
+      sqliteFault = cause;
+    }
+    expect(sqliteFault).toBeInstanceOf(Error);
+    try {
+      rethrowSanitizedStorageError(sqliteFault, "SQLite storage operation failed.");
+    } catch (cause: unknown) {
+      expect(cause).toBeInstanceOf(StoreIntegrityError);
+      expect((cause as Error).message).toBe("SQLite storage operation failed.");
+      expect((cause as Error & { cause?: unknown }).cause).toBe(sqliteFault);
+      expect((cause as Error).message).not.toContain(sqliteFault?.message ?? "closed");
+    }
   });
 
   test("rejects a database already beyond the configured page ceiling", () => {

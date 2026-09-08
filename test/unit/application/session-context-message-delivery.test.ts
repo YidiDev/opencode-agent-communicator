@@ -18,7 +18,7 @@ import type { ValidatedSendInput } from "../../../src/application/session-send-v
 import type { ContextAdmissionMetadata } from "../../../src/domain/context-admissions";
 import { validateDeliveryId, validateNativeMessageId } from "../../../src/domain/generated-ids";
 import type { Sha256Digest } from "../../../src/domain/message-payload";
-import { validateFencingToken } from "../../../src/domain/ownership";
+import { OwnershipLostFault, validateFencingToken } from "../../../src/domain/ownership";
 import { validateSessionId } from "../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 
@@ -73,7 +73,7 @@ function admission(state: "awaiting_context" | "context_admitted" | "cancelled")
 }
 
 interface Fixture {
-  readonly ports: SessionSendPorts;
+  ports: SessionSendPorts;
   readonly persisted: Array<Parameters<ContextAdmissionPersistencePort["createContextMessage"]>[0]>;
   readonly activityCalls: unknown[][];
   readonly authorizationCalls: unknown[][];
@@ -315,6 +315,28 @@ describe("context message delivery", () => {
     });
     expect(capacity.persisted).toEqual([]);
   });
+});
+
+describe("context message persistence and lifecycle", () => {
+  test("stops before waiter attachment when the recovered lifecycle epoch is invalid", async () => {
+    const value = fixture();
+    value.ports = {
+      ...value.ports,
+      readiness: {
+        assertReady() {},
+        ownershipLost() {
+          value.lifecycleStops += 1;
+        },
+      },
+    };
+    expect(await sendContextSessionMessage(value.ports, context(), input)).toMatchObject({
+      ok: false,
+      error: { code: "ownership_lost" },
+    });
+    expect(value.lifecycleStops).toBe(1);
+    expect(value.detached).toBe(0);
+    expect(value.persisted).toEqual([]);
+  });
 
   test.each([
     ["quota_exceeded", "quota_exceeded"],
@@ -341,6 +363,25 @@ describe("context message delivery", () => {
     expect(value.lifecycleStops).toBe(1);
     expect(value.detached).toBe(1);
   });
+
+  test.each(["returned", "thrown"] as const)(
+    "preserves %s persistence ownership loss and stops the lifecycle",
+    async (fault) => {
+      const value = fixture();
+      const contexts = value.ports.contexts;
+      if (!contexts) throw new Error("missing context fixture");
+      contexts.createContextMessage = async () => {
+        if (fault === "thrown") throw new OwnershipLostFault();
+        return { ok: false, code: "ownership_lost" };
+      };
+      expect(await sendContextSessionMessage(value.ports, context(), input)).toMatchObject({
+        ok: false,
+        error: { code: "ownership_lost" },
+      });
+      expect(value.lifecycleStops).toBe(1);
+      expect(value.detached).toBe(1);
+    },
+  );
 
   test.each([
     [new ParticipantOperationAbortedFault("aborted"), "deadline_expired"],

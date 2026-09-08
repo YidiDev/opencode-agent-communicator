@@ -104,7 +104,7 @@ describe("OpenCode 1.18.23 native steer admission", () => {
           delivery: "steer",
           resume: true,
         },
-        { signal: controller.signal },
+        expect.objectContaining({ signal: controller.signal, fetch: expect.any(Function) }),
       ],
     ]);
   });
@@ -226,17 +226,65 @@ describe("OpenCode 1.18.23 native steer admission", () => {
       observedAtMs: 44,
     });
   });
+});
 
+describe("OpenCode 1.18.23 native steer rejection boundaries", () => {
   test("classifies only a known structured non-aborted 4xx response as definitive", async () => {
     const rejected = fixture({
       response: {
         error: { _tag: "InvalidRequestError", message: "invalid prompt" },
+        request: new Request(
+          `http://127.0.0.1:4321/api/session/${targetSessionId}/prompt?directory=${encodeURIComponent("/workspace")}`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ id: nativeMessageId }),
+          },
+        ),
         response: new Response(null, { status: 400 }),
       },
     });
     expect(await rejected.adapter.steerRequest(request())).toEqual({
       kind: "definitive_rejection",
     });
+
+    const mismatchedRoute = fixture({
+      response: {
+        error: { _tag: "InvalidRequestError", message: "invalid prompt" },
+        request: new Request(
+          `http://127.0.0.1:4321/api/session/ses_other/prompt?directory=${encodeURIComponent("/workspace")}`,
+          { method: "POST", body: JSON.stringify({ id: nativeMessageId }) },
+        ),
+        response: new Response(null, { status: 400 }),
+      },
+    });
+    expect(await mismatchedRoute.adapter.steerRequest(request())).toEqual({ kind: "unknown" });
+
+    const expectedUrl = `http://127.0.0.1:4321/api/session/${targetSessionId}/prompt?directory=${encodeURIComponent("/workspace")}`;
+    for (const mismatchedRequest of [
+      new Request(expectedUrl, { method: "GET" }),
+      new Request(expectedUrl.replace("127.0.0.1", "localhost"), {
+        method: "POST",
+        body: JSON.stringify({ id: nativeMessageId }),
+      }),
+      new Request(
+        expectedUrl.replace(encodeURIComponent("/workspace"), encodeURIComponent("/other")),
+        {
+          method: "POST",
+          body: JSON.stringify({ id: nativeMessageId }),
+        },
+      ),
+      new Request(expectedUrl, { method: "POST", body: JSON.stringify({ id: "msg_other" }) }),
+    ]) {
+      const mismatch = fixture({
+        response: {
+          error: { _tag: "InvalidRequestError", message: "invalid prompt" },
+          request: mismatchedRequest,
+          response: new Response(null, { status: 400 }),
+        },
+      });
+      expect(await mismatch.adapter.steerRequest(request())).toEqual({ kind: "unknown" });
+    }
 
     const controller = new AbortController();
     const raced = fixture({

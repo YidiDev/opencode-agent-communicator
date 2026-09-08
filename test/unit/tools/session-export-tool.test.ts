@@ -100,14 +100,7 @@ describe("session_export tool contract", () => {
 
   test("binds separate mode and overwrite asks to every exact resource", async () => {
     const asks: StructuralApprovalInput[] = [];
-    const approval = invocationExportApproval({
-      sessionID: "ses_source",
-      messageID: "msg_call",
-      abort: new AbortController().signal,
-      async ask(input) {
-        asks.push(input);
-      },
-    });
+    const abort = new AbortController().signal;
     const binding = {
       workspaceKey,
       sourceSessionId: "ses_source" as never,
@@ -116,14 +109,27 @@ describe("session_export tool contract", () => {
       isSanitized: false,
       shouldOverwrite: true,
     };
+    const approval = invocationExportApproval(
+      {
+        sessionID: "ses_source",
+        messageID: "msg_call",
+        abort,
+        async ask(input) {
+          asks.push(input);
+        },
+      },
+      { ...binding, abort, deadlineMs: 10_000 },
+    );
     expect(
       await approval.requestExportApproval("mode", binding, {
-        abort: new AbortController().signal,
+        abort,
+        deadlineMs: 10_000,
       }),
     ).toBe("approved");
     expect(
       await approval.requestExportApproval("overwrite", binding, {
-        abort: new AbortController().signal,
+        abort,
+        deadlineMs: 10_000,
       }),
     ).toBe("approved");
     expect(asks.map((item) => item.permission)).toEqual([
@@ -146,7 +152,8 @@ describe("session_export tool contract", () => {
     }
     await expect(
       approval.requestExportApproval("overwrite", binding, {
-        abort: new AbortController().signal,
+        abort,
+        deadlineMs: 10_000,
       }),
     ).rejects.toBeInstanceOf(ToolContractFault);
   });

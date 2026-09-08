@@ -108,6 +108,7 @@ test("rejects malformed context operations before mutation", async () => {
   for (const input of [
     { targetSessionId: "invalid", limit: 1, maximumBytes: 1 },
     { targetSessionId: valid.targetSessionId, limit: 0, maximumBytes: 1 },
+    { targetSessionId: valid.targetSessionId, limit: 33, maximumBytes: 1 },
     { targetSessionId: valid.targetSessionId, limit: 1, maximumBytes: 0 },
   ]) {
     expect(
@@ -118,6 +119,19 @@ test("rejects malformed context operations before mutation", async () => {
       } as never),
     ).toEqual([]);
   }
+
+  expect(
+    await store.claimPendingContext({
+      fencingToken: token,
+      workspaceKey: valid.workspaceKey,
+      targetSessionId: valid.targetSessionId,
+      items: Array.from({ length: 33 }, () => ({
+        id: valid.id,
+        kind: "message" as const,
+        contentSha256: valid.contentSha256,
+      })),
+    }),
+  ).toEqual([]);
   expect(
     await store.claimPendingContext({
       fencingToken: token,
@@ -325,6 +339,14 @@ test("reports active-lock reminders and validates reminder bounds", async () => 
       workspaceKey,
       targetSessionId,
       resultLimit: 0,
+    }),
+  ).toEqual({ activeLockCount: 0, availableResults: [] });
+  expect(
+    await store.readContextReminders({
+      fencingToken: token,
+      workspaceKey,
+      targetSessionId,
+      resultLimit: 21,
     }),
   ).toEqual({ activeLockCount: 0, availableResults: [] });
   store.close();

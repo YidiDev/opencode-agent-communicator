@@ -9,6 +9,7 @@ import type {
 import { validateSessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
 import { boundedExternalCall } from "./bounded-external-call";
+import { deadlineLinkedSignal } from "./claimed-message-admission";
 import {
   assertCommunicatorReady,
   type CommunicatorReadinessPort,
@@ -34,13 +35,18 @@ export interface SessionListContext {
 // biome-ignore format: the explicit union documents every bounded settlement.
 async function invoke<Value>(
   context: SessionListContext,
-  operation: () => Promise<Value>,
+  operation: (signal?: AbortSignal) => Promise<Value>,
 ): Promise<{ readonly kind: "value"; readonly value: Value } | { readonly kind: "expired" } | { readonly kind: "rejected"; readonly cause: unknown }> {
   if (context.abort && context.deadlineMs !== undefined) {
-    return boundedExternalCall(operation, context.abort, context.deadlineMs);
+    const effect = deadlineLinkedSignal(context.abort, context.deadlineMs);
+    return boundedExternalCall(
+      () => operation(effect.signal),
+      effect.signal,
+      context.deadlineMs,
+    ).finally(effect.dispose);
   }
   try {
-    return { kind: "value", value: await operation() };
+    return { kind: "value", value: await operation(undefined) };
   } catch (cause: unknown) {
     return { kind: "rejected", cause };
   }
@@ -49,7 +55,12 @@ async function invoke<Value>(
 export interface SessionListPorts {
   readonly readiness: CommunicatorReadinessPort;
   readonly membership: CurrentWorkspaceMembershipPort;
-  readonly sessions: VisibleRootSessionPort;
+  readonly sessions: VisibleRootSessionPort & {
+    readVisibleRoots(
+      includeArchived: boolean,
+      abort?: AbortSignal,
+    ): ReturnType<VisibleRootSessionPort["readVisibleRoots"]>;
+  };
 }
 
 export interface VisibleRootSession {
@@ -94,10 +105,11 @@ export async function listVisibleRootSessions(
   const includeArchived = query.includeArchived ?? false;
   const status = query.status ?? "all";
   {
-    const membershipCall = await invoke(context, () => ports.membership.readCurrentRoots(
+    const membershipCall = await invoke(context, (signal) => ports.membership.readCurrentRoots(
       context.workspaceKey,
       source.value,
       source.value,
+      signal,
     ));
     if (membershipCall.kind === "expired") {
       return domainFailure("deadline_expired", "Session list invocation deadline expired.", false);
@@ -115,7 +127,9 @@ export async function listVisibleRootSessions(
     }
   }
   {
-    const sessionCall = await invoke(context, () => ports.sessions.readVisibleRoots(includeArchived));
+    const sessionCall = await invoke(context, (signal) =>
+      ports.sessions.readVisibleRoots(includeArchived, signal),
+    );
     if (sessionCall.kind === "expired") {
       return domainFailure("deadline_expired", "Session list invocation deadline expired.", false);
     }

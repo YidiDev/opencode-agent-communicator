@@ -61,6 +61,30 @@ describe("bounded Bun export process", () => {
     expect(chunks).toEqual([new Uint8Array([1, 2])]);
   });
 
+  test("streams stdout without retaining a duplicate process buffer when requested", async () => {
+    const chunks: Uint8Array[] = [];
+    const fake: ExportSpawnPort = {
+      spawn: () => ({
+        pid: 16,
+        stdout: stream(new Uint8Array([1, 2, 3])),
+        stderr: stream(new Uint8Array()),
+        exited: Promise.resolve(0),
+        kill: () => undefined,
+      }),
+      killTree: () => undefined,
+    };
+    expect(
+      await runBoundedBunProcess(
+        fake,
+        boundedInput({
+          onStdout: (value: Uint8Array) => chunks.push(value),
+          shouldRetainStdout: false,
+        }),
+      ),
+    ).toEqual({ kind: "completed", exitCode: 0, stdout: new Uint8Array() });
+    expect(chunks).toEqual([new Uint8Array([1, 2, 3])]);
+  });
+
   test("classifies spawn, malformed-stream, and exit failures without throwing", async () => {
     const spawning: ExportSpawnPort = {
       spawn: () => {

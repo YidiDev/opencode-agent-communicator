@@ -61,6 +61,10 @@ jobs:
           bun-version: 1.4.0
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
+      - name: Snapshot packed build runtime dependencies
+        env:
+          OPENCODE_COMMUNICATOR_PACKED_RUNTIME_DEPENDENCIES_ROOT: ${{ runner.temp }}/opencode-communicator-packed-runtime
+        run: node tools/snapshot-runtime-dependencies.mjs
       - name: Select matrix OpenCode packages
         run: |
           bun add --no-save --exact \
@@ -94,4 +98,6 @@ jobs:
           NODE
           test "$(./node_modules/.bin/opencode --version)" = "$OPENCODE_COMPAT_VERSION"
       - name: Run isolated compatibility harness
+        env:
+          OPENCODE_COMMUNICATOR_PACKED_RUNTIME_DEPENDENCIES_ROOT: ${{ runner.temp }}/opencode-communicator-packed-runtime
         run: bun run test:live

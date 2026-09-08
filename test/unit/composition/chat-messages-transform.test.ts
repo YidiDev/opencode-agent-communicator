@@ -142,7 +142,7 @@ test("removes stale synthetic text when a subsequent invocation has no context",
   expect(output.messages[0]?.parts[0]?.text).toBe("human prompt");
 });
 
-test("removes only owned text after a downstream transform appends content", async () => {
+test("fails closed when downstream content makes the owned suffix non-trailing", async () => {
   const value = fixture();
   const transform = createTransform(value);
   const output = { messages: messages() };
@@ -152,11 +152,14 @@ test("removes only owned text after a downstream transform appends content", asy
   if (!part) throw new Error("missing text part");
   part.text += "\ndownstream reminder";
 
-  await transform({} as never, output as never);
-  expect(part.text).toBe("human prompt\ndownstream reminder");
+  const ambiguous = part.text;
+  await expect(transform({} as never, output as never)).rejects.toThrow(
+    "context ownership is ambiguous",
+  );
+  expect(part.text).toBe(ambiguous);
 });
 
-test("removes owned text after a downstream transform prepends or rewrites the prompt", async () => {
+test("removes a unique exact trailing suffix after downstream prefix or prompt rewriting", async () => {
   const value = fixture();
   const transform = createTransform(value);
   const output = { messages: messages() };
@@ -182,8 +185,11 @@ test("leaves duplicate synthetic text unchanged when cleanup ownership is ambigu
   part.text = `${injected}\nhuman prompt${injected}`;
   const ambiguous = part.text;
 
-  await transform({} as never, output as never);
+  await expect(transform({} as never, output as never)).rejects.toThrow(
+    "context ownership is ambiguous",
+  );
   expect(part.text).toBe(ambiguous);
+  expect(value.claims()).toBe(1);
 });
 
 test("coalesces concurrent hook calls for one in-flight provider invocation", async () => {

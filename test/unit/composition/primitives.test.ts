@@ -33,7 +33,11 @@ describe("production composition primitives", () => {
     });
     cancelled.cancel();
     cancelled.cancel();
-    await Bun.sleep(30);
+    // Exercise the real production timer adapter, but synchronize on a later timer callback rather
+    // than assuming an arbitrary amount of wall time is enough to prove cancellation.
+    await new Promise<void>((resolve) => {
+      productionBlockingTimers.arm(0, resolve);
+    });
     expect(wakes).toBe(1);
     expect(() => productionBlockingTimers.arm(-1, () => undefined)).toThrow("delay");
   });
@@ -41,13 +45,15 @@ describe("production composition primitives", () => {
   test("shares validated set/clear behavior across scheduler and startup timers", async () => {
     for (const timers of [productionSchedulerTimers, productionStartupTimers]) {
       let fired = false;
-      const handle = timers.set(20, () => {
+      const handle = timers.set(0, () => {
         fired = true;
       });
       timers.clear(handle);
       expect(() => timers.set(Number.NaN, () => undefined)).toThrow("delay");
       expect(() => timers.clear({})).toThrow("handle");
-      await Bun.sleep(25);
+      await new Promise<void>((resolve) => {
+        timers.set(0, resolve);
+      });
       expect(fired).toBe(false);
     }
   });

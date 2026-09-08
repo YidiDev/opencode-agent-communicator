@@ -11,7 +11,7 @@ import {
   ToolContractFault,
 } from "../../../src/tools/contracts";
 import { invocationStopApproval } from "../../../src/tools/invocation-stop-approval";
-import { createSessionStopTool } from "../../../src/tools/session-stop";
+import { createSessionStopTool, serializeSessionStopResult } from "../../../src/tools/session-stop";
 
 function valid<Value>(result: { ok: true; value: Value } | { ok: false }): Value {
   if (!result.ok) throw new Error("invalid fixture");
@@ -119,11 +119,18 @@ describe("session_stop tool protocol", () => {
   });
 
   test("cannot bypass or reuse the invocation approval capability", async () => {
-    const expected = { workspaceKey, sourceSessionId: "ses_source" as never };
+    const noAskAbort = new AbortController().signal;
+    const expected = {
+      workspaceKey,
+      sourceSessionId: "ses_source" as never,
+      targetSessionId: "ses_target" as never,
+      abort: noAskAbort,
+      deadlineMs: 10_000,
+    };
     const noAsk = invocationStopApproval(
       {
         sessionID: "ses_source",
-        abort: new AbortController().signal,
+        abort: noAskAbort,
       },
       expected,
     );
@@ -135,17 +142,18 @@ describe("session_stop tool protocol", () => {
           targetSessionId: "ses_target" as never,
           reasonSha256: "a".repeat(64) as never,
         },
-        { abort: new AbortController().signal },
+        { abort: noAskAbort, deadlineMs: 10_000 },
       ),
     ).rejects.toBeInstanceOf(ToolContractFault);
 
+    const abort = new AbortController().signal;
     const capability = invocationStopApproval(
       {
         sessionID: "ses_source",
-        abort: new AbortController().signal,
+        abort,
         ask: async () => undefined,
       },
-      expected,
+      { ...expected, abort },
     );
     const binding = {
       workspaceKey,
@@ -153,12 +161,44 @@ describe("session_stop tool protocol", () => {
       targetSessionId: "ses_target" as never,
       reasonSha256: "b".repeat(64) as never,
     };
-    expect(
-      await capability.requestStopApproval(binding, { abort: new AbortController().signal }),
-    ).toBe("approved");
+    expect(await capability.requestStopApproval(binding, { abort, deadlineMs: 10_000 })).toBe(
+      "approved",
+    );
     await expect(
-      capability.requestStopApproval(binding, { abort: new AbortController().signal }),
+      capability.requestStopApproval(binding, { abort, deadlineMs: 10_000 }),
     ).rejects.toBeInstanceOf(ToolContractFault);
+  });
+
+  test("rejects mismatched targets, invalid counters, outcomes, and extra result keys", () => {
+    const targetSessionId = "ses_target" as never;
+    const value = {
+      sessionId: targetSessionId,
+      communicatorState: {
+        outcome: "applied" as const,
+        requestsTerminalized: 2,
+        targetStopped: 1,
+        sourceStopped: 1,
+      },
+      nativeOutcome: "interrupted" as const,
+    };
+    expect(
+      JSON.parse(serializeSessionStopResult({ ok: true, value }, targetSessionId)),
+    ).toMatchObject({
+      ok: true,
+      value: { session_id: "ses_target", communicator_state: { requests_terminalized: 2 } },
+    });
+    for (const forged of [
+      { ...value, sessionId: "ses_other" },
+      { ...value, communicatorState: { ...value.communicatorState, requestsTerminalized: -1 } },
+      { ...value, communicatorState: { ...value.communicatorState, targetStopped: 3 } },
+      { ...value, communicatorState: { ...value.communicatorState, extra: true } },
+      { ...value, nativeOutcome: "unknown" },
+      { ...value, extra: true },
+    ]) {
+      expect(() =>
+        serializeSessionStopResult({ ok: true, value: forged } as never, targetSessionId),
+      ).toThrow(ToolContractFault);
+    }
   });
 
   test("maps host approval rejection without applying communicator state", async () => {

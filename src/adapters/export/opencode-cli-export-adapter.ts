@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 
 import type { SessionExportAdapterPort } from "../../application/session-export-ports";
 import { isSupportedOpenCodeVersion } from "../../domain/host";
@@ -15,7 +15,7 @@ import {
   type SessionExportLimits,
 } from "./export-limits";
 import { ExportPathError, type LinuxExportRoot } from "./linux-export-destination";
-import { validateNativeExport } from "./native-export-validation";
+import { NativeExportCapture } from "./native-export-capture";
 import {
   closeOptionalDescriptor,
   type ExecutableIdentity,
@@ -174,13 +174,20 @@ export class OpenCodeCliExportAdapter implements SessionExportAdapterPort, Dispo
         readonly ok: false;
         readonly code: "native_outcome_unknown" | "export_limit_exceeded" | "export_unavailable";
       }
-    | { readonly ok: true; readonly bytes: Uint8Array; readonly digest: Sha256Digest }
+    | { readonly ok: true; readonly byteCount: number; readonly digest: Sha256Digest }
   > {
+    const capture = new NativeExportCapture({
+      temporary,
+      sessionId: input.sessionId,
+      isSanitized: input.isSanitized,
+      deadlineMs: input.deadlineMs,
+    });
     const exported = await this.runProcess({
       ...this.processInput(input, executable.command),
       arguments: ["export", input.sessionId, ...(input.isSanitized ? ["--sanitize"] : [])],
       stdoutLimit: this.limits.maximumOutputBytes,
-      onStdout: (chunk) => temporary.write(chunk),
+      onStdout: (chunk) => capture.write(chunk),
+      shouldRetainStdout: false,
     });
     if (exported.kind === "ambiguous") return { ok: false, code: "native_outcome_unknown" };
     if (exported.kind === "limit") return { ok: false, code: "export_limit_exceeded" };
@@ -190,14 +197,15 @@ export class OpenCodeCliExportAdapter implements SessionExportAdapterPort, Dispo
     if ((await input.guard.check()) !== "current" || !this.hasSameIdentity(executable.identity)) {
       return { ok: false, code: "native_outcome_unknown" };
     }
-    if (!validateNativeExport(exported.stdout, input.sessionId, input.isSanitized).ok) {
+    const captured = capture.finish();
+    if (!captured.ok) {
+      if (captured.validation.reason === "limit")
+        return { ok: false, code: "export_limit_exceeded" };
+      if (captured.validation.reason === "deadline")
+        return { ok: false, code: "native_outcome_unknown" };
       return { ok: false, code: "export_unavailable" };
     }
-    return {
-      ok: true,
-      bytes: exported.stdout,
-      digest: createHash("sha256").update(exported.stdout).digest("hex") as Sha256Digest,
-    };
+    return captured;
   }
 
   async writeExport(
@@ -239,7 +247,7 @@ export class OpenCodeCliExportAdapter implements SessionExportAdapterPort, Dispo
       if ((await input.guard.check()) !== "current") {
         return { ok: false, code: "native_outcome_unknown" };
       }
-      return { ok: true, byteCount: captured.bytes.byteLength, contentSha256: captured.digest };
+      return { ok: true, byteCount: captured.byteCount, contentSha256: captured.digest };
     } catch (cause: unknown) {
       return { ok: false, code: pathFailure(cause) };
     } finally {

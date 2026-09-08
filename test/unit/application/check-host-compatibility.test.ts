@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 
 import { checkHostCompatibility } from "../../../src/application/check-host-compatibility";
 import type { HostHealthPort, RuntimeIdentityPort } from "../../../src/domain/host";
@@ -125,17 +125,43 @@ describe("host compatibility", () => {
   });
 
   test("bounds startup health and observes a rejection that loses the deadline race", async () => {
-    let rejectLate: ((cause: unknown) => void) | undefined;
-    const pending = new Promise<unknown>((_resolve, reject) => {
-      rejectLate = reject;
-    });
-    const result = await checkHostCompatibility(
-      exactRuntime,
-      { readHealth: () => pending },
-      { abort: new AbortController().signal, deadlineMs: Date.now() + 5 },
-    );
-    expect(result).toMatchObject({ ok: false, error: { code: "incompatible_host" } });
-    rejectLate?.(new Error("late health transport rejection"));
-    await Promise.resolve();
+    jest.useFakeTimers();
+    try {
+      jest.setSystemTime(10_000);
+      let rejectLate!: (cause: unknown) => void;
+      let suppliedSignal: AbortSignal | undefined;
+      let markHealthStarted!: () => void;
+      const healthStarted = new Promise<void>((resolve) => {
+        markHealthStarted = resolve;
+      });
+      const pending = new Promise<unknown>((_resolve, reject) => {
+        rejectLate = reject;
+      });
+      const resultPending = checkHostCompatibility(
+        exactRuntime,
+        {
+          readHealth: ((signal?: AbortSignal) => {
+            suppliedSignal = signal;
+            markHealthStarted();
+            return pending;
+          }) as HostHealthPort["readHealth"],
+        },
+        { abort: new AbortController().signal, deadlineMs: 10_005 },
+      );
+
+      await healthStarted;
+      expect(suppliedSignal?.aborted).toBe(false);
+      jest.advanceTimersByTime(5);
+      expect(suppliedSignal?.aborted).toBe(true);
+      await Promise.resolve();
+      rejectLate(new Error("late health transport rejection"));
+
+      expect(await resultPending).toMatchObject({
+        ok: false,
+        error: { code: "incompatible_host" },
+      });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
