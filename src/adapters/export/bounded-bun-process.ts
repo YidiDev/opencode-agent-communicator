@@ -62,6 +62,7 @@ interface RunBoundedProcessInput extends ExportSpawnInput {
   readonly stdoutLimit: number;
   readonly limits: SessionExportLimits;
   readonly onStdout?: (chunk: Uint8Array) => void;
+  readonly shouldRetainStdout?: boolean;
 }
 
 export async function runBoundedBunProcess(
@@ -120,7 +121,13 @@ export async function runBoundedBunProcess(
   const timer = setTimeout(() => expire?.(), timeoutMs);
   const readers: ReadableStreamDefaultReader<Uint8Array>[] = [];
   const work = Promise.all([
-    collect(child.stdout, input.stdoutLimit, input.onStdout, readers),
+    collect(
+      child.stdout,
+      input.stdoutLimit,
+      input.onStdout,
+      readers,
+      input.shouldRetainStdout ?? true,
+    ),
     collect(child.stderr, input.limits.maximumStderrBytes, undefined, readers),
     child.exited,
   ]);

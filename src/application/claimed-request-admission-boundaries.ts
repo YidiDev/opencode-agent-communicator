@@ -88,28 +88,6 @@ export function inspectNativeAdmission(value: unknown): NativeSteerAdmission {
   return { kind: "unknown" };
 }
 
-export function linkedEffectSignal(
-  first: AbortSignal,
-  second: AbortSignal,
-): { readonly signal: AbortSignal; dispose(): void } {
-  const controller = new AbortController();
-  const listeners: Array<readonly [AbortSignal, () => void]> = [];
-  for (const signal of [first, second]) {
-    if (signal.aborted) controller.abort("interrupted");
-    else {
-      const listener = (): void => controller.abort("interrupted");
-      signal.addEventListener("abort", listener, { once: true });
-      listeners.push([signal, listener]);
-    }
-  }
-  return {
-    signal: controller.signal,
-    dispose: () => {
-      for (const [signal, listener] of listeners) signal.removeEventListener("abort", listener);
-    },
-  };
-}
-
 export function expectedCommitted(native: NativeSteerAdmission, request: RequestMetadata): boolean {
   if (native.kind === "unknown") return request.deliveryState === "delivery_unknown";
   if (native.kind === "definitive_rejection") return request.deliveryState === "delivery_failed";

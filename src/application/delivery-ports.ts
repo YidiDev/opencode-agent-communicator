@@ -21,6 +21,7 @@ export interface CurrentWorkspaceMembershipPort {
     workspaceKey: WorkspaceKey,
     sourceSessionId: SessionId,
     targetSessionId: SessionId,
+    abort?: AbortSignal,
   ): Promise<CurrentRootMembership>;
 }
 

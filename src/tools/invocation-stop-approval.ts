@@ -1,6 +1,13 @@
 import type { SessionStopApprovalPort } from "../application/session-stop-ports";
+import { validateSessionId } from "../domain/sessions";
+import { validateWorkspaceKey } from "../domain/workspaces";
 import type { StructuralToolContext } from "./contracts";
 import { ToolContractFault } from "./contracts";
+import {
+  exactApprovalRecord,
+  hasExactApprovalControl,
+  isSha256Digest,
+} from "./invocation-approval-contracts";
 
 function approvalResource(
   binding: Parameters<SessionStopApprovalPort["requestStopApproval"]>[0],
@@ -26,6 +33,11 @@ export function invocationStopApproval(
     readonly sourceSessionId: Parameters<
       SessionStopApprovalPort["requestStopApproval"]
     >[0]["sourceSessionId"];
+    readonly targetSessionId: Parameters<
+      SessionStopApprovalPort["requestStopApproval"]
+    >[0]["targetSessionId"];
+    readonly abort: AbortSignal;
+    readonly deadlineMs: number;
   },
 ): SessionStopApprovalPort {
   let hasRequested = false;
@@ -34,11 +46,26 @@ export function invocationStopApproval(
       binding: Parameters<SessionStopApprovalPort["requestStopApproval"]>[0],
       control: Parameters<SessionStopApprovalPort["requestStopApproval"]>[1],
     ): Promise<"approved" | "rejected"> {
+      const inspected = exactApprovalRecord(binding, [
+        "workspaceKey",
+        "sourceSessionId",
+        "targetSessionId",
+        "reasonSha256",
+      ]);
       if (
         hasRequested ||
-        typeof context.ask !== "function" ||
-        binding.workspaceKey !== expected.workspaceKey ||
-        binding.sourceSessionId !== expected.sourceSessionId
+        inspected === undefined ||
+        expected.abort !== context.abort ||
+        expected.sourceSessionId !== context.sessionID ||
+        !validateWorkspaceKey(inspected.workspaceKey).ok ||
+        !validateSessionId(inspected.sourceSessionId).ok ||
+        !validateSessionId(inspected.targetSessionId).ok ||
+        !isSha256Digest(inspected.reasonSha256) ||
+        inspected.workspaceKey !== expected.workspaceKey ||
+        inspected.sourceSessionId !== expected.sourceSessionId ||
+        inspected.targetSessionId !== expected.targetSessionId ||
+        !hasExactApprovalControl(control, expected.abort, expected.deadlineMs) ||
+        typeof context.ask !== "function"
       )
         throw new ToolContractFault();
       hasRequested = true;

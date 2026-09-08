@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import type {
   CompleteRequestDeliveryInput,
   PrepareRequestInput,
@@ -21,6 +21,7 @@ import type { StartOperation, ValidatedStartArguments } from "../../../src/domai
 import { createSessionStartPolicy } from "../../../src/domain/session-start-policy";
 import { validateSessionId } from "../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
+import { createSessionRequestStartTool } from "../../../src/tools/session-request-start";
 
 function value<Value>(result: { ok: true; value: Value } | { ok: false }): Value {
   if (!result.ok) throw new Error("invalid fixture");
@@ -313,6 +314,56 @@ function context(controller = new AbortController(), deadlineMs = 50_000) {
 }
 
 describe("startSessionRequest policy and control boundaries", () => {
+  test("bounds a never-settling session_request_start approval before persistence", async () => {
+    jest.useFakeTimers();
+    try {
+      jest.setSystemTime(20_000);
+      const current = fixture("ask");
+      let nowMs = 20_000;
+      const {
+        approval: _approval,
+        requestAuthorization: _requestAuthorization,
+        ...ports
+      } = current.ports;
+      let approvalStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        approvalStarted = resolve;
+      });
+      const abort = new AbortController().signal;
+      const tool = createSessionRequestStartTool(
+        { ...ports, clock: { nowMs: () => nowMs } },
+        { workspaceKey, fencingToken: token, invocationDeadlineMs: () => 20_005 },
+        { ask: "allow", wait: "allow" },
+      );
+      const pending = tool.execute(
+        {
+          idempotency_key: "request-start-approval-deadline",
+          initial_message: "Build the artifact.",
+          request: { kind: "wait", milestone: "artifact ready", timeout_seconds: 30 },
+        },
+        {
+          sessionID: sourceSessionId,
+          abort,
+          ask: () => {
+            approvalStarted();
+            return new Promise<never>(() => undefined);
+          },
+        },
+      );
+      await started;
+      nowMs = 20_005;
+      jest.advanceTimersByTime(5);
+      expect(JSON.parse(await pending)).toMatchObject({
+        ok: false,
+        error: { code: "approval_rejected" },
+      });
+      expect(current.composites).toEqual([]);
+      expect(current.events).not.toContain("native-create");
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   test.each([
     ["deny", "permission_denied"],
     ["approval_rejected", "approval_rejected"],
@@ -427,6 +478,47 @@ describe("startSessionRequest linked durability and native outcomes", () => {
     expect(current.initialMessages).toHaveLength(1);
     expect(current.completions).toHaveLength(1);
     expect(current.events.filter((event) => event === "scheduler-wake")).toHaveLength(2);
+  });
+
+  test("keeps a correlated request on an idempotent reconciliation that remains unknown", async () => {
+    const current = fixture();
+    let nativeCreates = 0;
+    current.ports.nativeStart.createRootSession = async () => {
+      nativeCreates += 1;
+      return "unknown";
+    };
+    const first = await startSessionRequest(current.ports, context(), args);
+    expect(first).toMatchObject({
+      ok: false,
+      error: {
+        code: "native_outcome_unknown",
+        details: { operation: { creationState: "outcome_unknown" }, request: { id: requestId } },
+      },
+    });
+    current.ports.nativeStart.reconcileRootSession = async () => "unknown";
+    const replay = await startSessionRequest(current.ports, context(), args);
+    expect(replay).toMatchObject({
+      ok: false,
+      error: {
+        code: "native_outcome_unknown",
+        details: {
+          operation: { id: operationId, creationState: "outcome_unknown" },
+          request: { id: requestId, linkedStartOperationId: operationId },
+        },
+      },
+    });
+    current.ports.nativeStart.reconcileRootSession = async () => "matching";
+    current.ports.starts.reconcileUnknownCreation = async () => ({
+      ok: false,
+      code: "storage_unavailable",
+    });
+    const persistenceFailure = await startSessionRequest(current.ports, context(), args);
+    expect(persistenceFailure).toMatchObject({
+      ok: false,
+      error: { code: "storage_unavailable" },
+    });
+    if (!persistenceFailure.ok) expect(persistenceFailure.error).not.toHaveProperty("details");
+    expect(nativeCreates).toBe(1);
   });
 
   test("reconciles request settlement after definitive start admission was committed", async () => {

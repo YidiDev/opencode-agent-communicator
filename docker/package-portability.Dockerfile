@@ -13,7 +13,8 @@ RUN bun test test/unit/adapters/export/a-linux-syscalls.test.ts test/unit/compos
 
 FROM source AS packed
 RUN mkdir /package && bun pm pack --ignore-scripts --destination /package
+RUN apk add --no-cache npm
 RUN mkdir /consumer
 WORKDIR /consumer
-RUN bun init -y && bun add /package/opencode-agent-communicator-0.7.3.tgz --ignore-scripts
+RUN npm install --ignore-scripts --no-audit --no-fund /package/opencode-agent-communicator-0.7.3.tgz
 RUN bun -e 'import plugin from "opencode-agent-communicator"; if (typeof plugin !== "function") throw new Error("packed entry is not a plugin")'

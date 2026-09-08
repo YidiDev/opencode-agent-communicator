@@ -4,6 +4,10 @@ import {
   createCompositionFactory,
   failUncertainContextOnStartup,
 } from "../../../src/composition/plugin";
+import {
+  deliveryRecordsPerWorkspaceHardCeiling,
+  pendingRequestsPerWorkspaceHardCeiling,
+} from "../../../src/domain/safety-ceilings";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 
 const workspace = validateWorkspaceKey("context-recovery-coverage");
@@ -99,5 +103,49 @@ describe("production context startup recovery wiring", () => {
     );
     await entered;
     await expect(pending).rejects.toThrow("startup was cancelled");
+  });
+
+  test("recovers simultaneous message and request ceilings, then verifies an empty residual", async () => {
+    const limits: number[] = [];
+    const batch = Array.from({ length: 100 }, () => ({}) as never);
+    let remaining = deliveryRecordsPerWorkspaceHardCeiling + pendingRequestsPerWorkspaceHardCeiling;
+    await failUncertainContextOnStartup(
+      {
+        failUncertainContextOnStartup: async ({ limit }: { limit: number }) => {
+          limits.push(limit);
+          const size = Math.min(limit, remaining);
+          remaining -= size;
+          return batch.slice(0, size);
+        },
+      } as never,
+      { fencingToken: 1 } as never,
+      workspace.value,
+      new AbortController().signal,
+    );
+    expect(remaining).toBe(0);
+    expect(limits).toHaveLength(512);
+    expect(limits.at(-1)).toBe(1);
+  });
+
+  test("fails finitely when a residual proves non-progress", async () => {
+    const batch = Array.from({ length: 100 }, () => ({}) as never);
+    let remaining = deliveryRecordsPerWorkspaceHardCeiling + pendingRequestsPerWorkspaceHardCeiling;
+    let calls = 0;
+    await expect(
+      failUncertainContextOnStartup(
+        {
+          failUncertainContextOnStartup: async ({ limit }: { limit: number }) => {
+            calls += 1;
+            const size = Math.min(limit, remaining);
+            remaining -= size;
+            return size === 0 ? batch.slice(0, 1) : batch.slice(0, size);
+          },
+        } as never,
+        { fencingToken: 1 } as never,
+        workspace.value,
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("did not make bounded progress");
+    expect(calls).toBe(512);
   });
 });

@@ -15,6 +15,10 @@ import { runUntilAborted } from "./abortable-operation";
 import { wakeRequestScheduler } from "./blocking-request-creation-preconditions";
 import type { RequestDeadlineWakePort } from "./blocking-session-request-boundaries";
 import { boundedExternalCall } from "./bounded-external-call";
+import {
+  type CommunicatorReadinessPort,
+  stopCommunicatorForOwnershipLoss,
+} from "./communicator-readiness-port";
 import type { ContextAdmissionPersistencePort } from "./context-admission-ports";
 import type {
   ContextAdmissionRegistration,
@@ -33,6 +37,7 @@ import type {
 import { waitForContextAdmission } from "./wait-for-context-admission";
 
 export interface ImmediateRequestAdmissionPorts {
+  readonly readiness: CommunicatorReadinessPort;
   readonly requests: RequestAdmissionPersistencePort;
   readonly scheduler: RequestDeadlineWakePort;
   readonly contexts?: ContextAdmissionPersistencePort;
@@ -84,6 +89,19 @@ export const immediateRequestStorageFailure = (requestId?: string): DomainResult
     requestId ? { request_id: requestId } : undefined,
   );
 
+function ownershipLost(
+  ports: ImmediateRequestAdmissionPorts,
+  requestId?: RequestId,
+): DomainResult<never> {
+  stopCommunicatorForOwnershipLoss(ports.readiness);
+  return domainFailure(
+    "ownership_lost",
+    "Coordinator ownership was lost.",
+    false,
+    requestId ? { request_id: requestId } : undefined,
+  );
+}
+
 function readContextAdmission(
   contexts: ContextAdmissionPersistencePort,
   context: ImmediateRequestAdmissionContext,
@@ -130,13 +148,38 @@ function readAdmittedRequest(
   );
 }
 
+function immediatePreparedRequest(
+  input: ImmediateRequestAdmissionInput,
+  requestId: RequestId,
+  nativeMessageId: ReturnType<GeneratedIdFactory["nativeMessageId"]>,
+): PendingRequestMetadata & { readonly deliveryState: "prepared" } {
+  const { context, args, payload, createdAtMs, deadlineAtMs } = input;
+  return {
+    id: requestId,
+    workspaceKey: context.workspaceKey,
+    sourceSessionId: context.sourceSessionId,
+    targetSessionId: args.session_id,
+    nativeMessageId,
+    deliveryMode: "context",
+    kind: payload.value.kind,
+    resolutionState: "pending",
+    deliveryState: "prepared",
+    resultState: "none",
+    payloadByteLength: payload.byteLength,
+    payloadSha256: payload.sha256,
+    createdAtMs,
+    updatedAtMs: createdAtMs,
+    deadlineAtMs,
+  };
+}
+
 // One linear persistence and admission boundary preserves the auditable no-replay transition.
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: persistence, ownership, and the single native effect must remain ordered.
 export async function persistAndAdmitImmediateRequest(
   ports: ImmediateRequestAdmissionPorts,
   input: ImmediateRequestAdmissionInput,
 ): Promise<DomainResult<RequestMetadata>> {
-  const { context, args, payload, workBytes, workSha256, createdAtMs, deadlineAtMs } = input;
+  const { context, args, payload, workBytes, workSha256 } = input;
   const contexts = ports.contexts;
   const contextRuntime = ports.contextRuntime;
   const activity = ports.activity;
@@ -153,23 +196,7 @@ export async function persistAndAdmitImmediateRequest(
     const requestId = ports.ids.requestId();
     const nativeMessageId = ports.ids.nativeMessageId();
     const creationOperationId = ports.ids.startOperationId();
-    const prepared: PendingRequestMetadata & { readonly deliveryState: "prepared" } = {
-      id: requestId,
-      workspaceKey: context.workspaceKey,
-      sourceSessionId: context.sourceSessionId,
-      targetSessionId: args.session_id,
-      nativeMessageId,
-      deliveryMode: "context",
-      kind: payload.value.kind,
-      resolutionState: "pending",
-      deliveryState: "prepared",
-      resultState: "none",
-      payloadByteLength: payload.byteLength,
-      payloadSha256: payload.sha256,
-      createdAtMs,
-      updatedAtMs: createdAtMs,
-      deadlineAtMs,
-    };
+    const prepared = immediatePreparedRequest(input, requestId, nativeMessageId);
     let envelope: string;
     try {
       envelope = await serializeVerifiedRequestEnvelope(
@@ -268,11 +295,13 @@ export async function persistAndAdmitImmediateRequest(
     }
     const stored = persisted.result;
     if (!stored.ok) {
-      return stored.code === "quota_exceeded"
-        ? domainFailure("quota_exceeded", "Request quota is exhausted.", false)
-        : stored.code === "rate_limited"
-          ? domainFailure("rate_limited", "Request creation is rate limited.", true)
-          : immediateRequestStorageFailure(requestId);
+      return stored.code === "ownership_lost"
+        ? ownershipLost(ports, requestId)
+        : stored.code === "quota_exceeded"
+          ? domainFailure("quota_exceeded", "Request quota is exhausted.", false)
+          : stored.code === "rate_limited"
+            ? domainFailure("rate_limited", "Request creation is rate limited.", true)
+            : immediateRequestStorageFailure(requestId);
     }
     wakeRequestScheduler(ports.scheduler);
     const readDeadlineMs = contextReadDeadline(ports.clock, context.deadlineMs);
@@ -283,6 +312,12 @@ export async function persistAndAdmitImmediateRequest(
       requestId,
       readDeadlineMs,
     );
+    if (
+      contextAdmissionRead.kind === "rejected" &&
+      contextAdmissionRead.cause instanceof OwnershipLostFault
+    ) {
+      return ownershipLost(ports, requestId);
+    }
     if (contextAdmissionRead.kind !== "value" || !contextAdmissionRead.value) {
       return immediateRequestStorageFailure(requestId);
     }
@@ -306,7 +341,11 @@ export async function persistAndAdmitImmediateRequest(
         ...(context.deadlineMs === undefined ? {} : { deadlineMs: context.deadlineMs }),
       },
     );
-    if (!admission.ok) return admission;
+    if (!admission.ok) {
+      return admission.error.code === "ownership_lost"
+        ? ownershipLost(ports, requestId)
+        : admission;
+    }
     const requestRead = await readAdmittedRequest(
       ports.requests,
       getRequestMetadata,
@@ -314,6 +353,9 @@ export async function persistAndAdmitImmediateRequest(
       requestId,
       readDeadlineMs,
     );
+    if (requestRead.kind === "rejected" && requestRead.cause instanceof OwnershipLostFault) {
+      return ownershipLost(ports, requestId);
+    }
     if (requestRead.kind !== "value") return immediateRequestStorageFailure(requestId);
     const request = requestRead.value;
     return request?.deliveryState === "context_admitted"
@@ -321,7 +363,7 @@ export async function persistAndAdmitImmediateRequest(
       : immediateRequestStorageFailure(requestId);
   } catch (cause) {
     if (cause instanceof OwnershipLostFault) {
-      return domainFailure("ownership_lost", "Coordinator ownership was lost.", false);
+      return ownershipLost(ports);
     }
     if (cause instanceof ParticipantOperationAbortedFault) return input.interrupted();
     return cause instanceof ParticipantOperationCapacityFault

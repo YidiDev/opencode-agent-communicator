@@ -155,6 +155,10 @@ test("an authoritative terminal remains the winner after cancellation settlement
   });
   let terminal = false;
   let cleanupDeadline = (): void => undefined;
+  let terminalNotified!: () => void;
+  const notificationCompleted = new Promise<void>((resolve) => {
+    terminalNotified = resolve;
+  });
   const setup = harness(
     request,
     runtime,
@@ -180,6 +184,7 @@ test("an authoritative terminal remains the winner after cancellation settlement
           resolutionState: "cancelled",
           resolvedAtMs: request.createdAtMs + 1,
         });
+        terminalNotified();
       });
       return new Promise(() => undefined);
     },
@@ -202,7 +207,7 @@ test("an authoritative terminal remains the winner after cancellation settlement
     approvedPayload,
     new AbortController(),
   );
-  await Promise.resolve();
+  await notificationCompleted;
   cleanupDeadline();
   expect(await blocked).toMatchObject({ ok: false, error: { code: "request_cancelled" } });
 });
@@ -218,6 +223,10 @@ test("one local deadline timer reconciles terminalization when notification is o
   });
   let reads = 0;
   let fire = (): void => undefined;
+  let timerArmed!: () => void;
+  const armed = new Promise<void>((resolve) => {
+    timerArmed = resolve;
+  });
   const setup = harness(request, runtime, async () => {
     reads += 1;
     if (reads === 1) return pendingProjection(request);
@@ -238,6 +247,7 @@ test("one local deadline timer reconciles terminalization when notification is o
     deadlineTimer: {
       arm: (_delay: number, wake: () => void) => {
         fire = wake;
+        timerArmed();
         return { cancel: () => undefined };
       },
     },
@@ -251,7 +261,7 @@ test("one local deadline timer reconciles terminalization when notification is o
     approvedPayload,
     new AbortController(),
   );
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  await armed;
   fire();
   expect(await blocked).toMatchObject({ ok: false, error: { code: "deadline_expired" } });
   expect(reads).toBe(2);
@@ -365,11 +375,21 @@ test("a cleanup deadline bounds a post-abort authoritative reread that never set
   });
   let reads = 0;
   let cleanupDeadline = (): void => undefined;
+  let firstReadStarted!: () => void;
+  let secondReadStarted!: () => void;
+  const firstRead = new Promise<void>((resolve) => {
+    firstReadStarted = resolve;
+  });
+  const secondRead = new Promise<void>((resolve) => {
+    secondReadStarted = resolve;
+  });
   const setup = harness(
     request,
     runtime,
     async () => {
       reads += 1;
+      if (reads === 1) firstReadStarted();
+      if (reads === 2) secondReadStarted();
       return new Promise(() => undefined);
     },
     async () => ({ ok: false, code: "storage_unavailable" }),
@@ -391,9 +411,9 @@ test("a cleanup deadline bounds a post-abort authoritative reread that never set
     approvedPayload,
     new AbortController(),
   );
-  while (reads < 1) await Promise.resolve();
+  await firstRead;
   abort.abort("caller_cancelled");
-  while (reads < 2) await Promise.resolve();
+  await secondRead;
   cleanupDeadline();
   expect(await blocked).toMatchObject({
     ok: false,

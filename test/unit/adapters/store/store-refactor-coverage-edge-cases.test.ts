@@ -101,6 +101,7 @@ describe("store refactor delivery and Linux path coverage", () => {
         context,
         { state: "admitted", nowMs: 2, evidenceObservedAtMs: 1 } as never,
         "submitting",
+        2,
       ),
     ).toThrow(StoreIntegrityError);
     expect(() =>
@@ -108,6 +109,7 @@ describe("store refactor delivery and Linux path coverage", () => {
         context,
         { state: "promoted", nowMs: 2, evidenceObservedAtMs: 1 } as never,
         "admitted",
+        2,
       ),
     ).toThrow(StoreIntegrityError);
   });

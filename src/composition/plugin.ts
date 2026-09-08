@@ -14,6 +14,10 @@ import {
   recoverCommunicatorStartup,
 } from "../application/recover-communicator-startup";
 import { RequestRuntime } from "../application/request-runtime";
+import {
+  deliveryRecordsPerWorkspaceHardCeiling,
+  pendingRequestsPerWorkspaceHardCeiling,
+} from "../domain/safety-ceilings";
 import { createChatMessagesTransformBookkeeping } from "./chat-messages-transform";
 import { createCommunicatorGeneration } from "./communicator-generation";
 import {
@@ -146,20 +150,40 @@ export async function failUncertainContextOnStartup(
   workspaceKey: WorkspaceBinding["workspaceKey"],
   abort: AbortSignal,
 ): Promise<void> {
+  const batchLimit = 100;
+  const recoveryHardCeiling =
+    deliveryRecordsPerWorkspaceHardCeiling + pendingRequestsPerWorkspaceHardCeiling;
   let recoveredContextRows = 0;
-  while (true) {
+  while (recoveredContextRows < recoveryHardCeiling) {
     assertGenerationStartupActive(abort);
     const failed = await store.failUncertainContextOnStartup({
       fencingToken: lifecycle.fencingToken,
       workspaceKey,
-      limit: 100,
+      limit: batchLimit,
     });
     assertGenerationStartupActive(abort);
-    recoveredContextRows += failed.length;
-    if (failed.length < 100) return;
-    if (recoveredContextRows >= 4_096) {
-      throw new Error("Context startup recovery exceeded its hard bound.");
+    if (failed.length > batchLimit) {
+      throw new Error("Context startup recovery returned an oversized batch.");
     }
+    recoveredContextRows += failed.length;
+    if (recoveredContextRows > recoveryHardCeiling) {
+      throw new Error("Context startup recovery did not make bounded progress.");
+    }
+    if (failed.length < batchLimit && recoveredContextRows < recoveryHardCeiling) return;
+  }
+
+  // Message deliveries and context-delivered requests can simultaneously reach their independent
+  // ceilings. Probe once more rather than mistaking that exact aggregate boundary for non-progress,
+  // but remain finite if the store repeats rows or violates either ceiling.
+  assertGenerationStartupActive(abort);
+  const residual = await store.failUncertainContextOnStartup({
+    fencingToken: lifecycle.fencingToken,
+    workspaceKey,
+    limit: 1,
+  });
+  assertGenerationStartupActive(abort);
+  if (residual.length !== 0) {
+    throw new Error("Context startup recovery did not make bounded progress.");
   }
 }
 

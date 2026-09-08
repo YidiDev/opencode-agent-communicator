@@ -31,7 +31,7 @@ export function rethrowSanitizedStorageError(cause: unknown, message: string): n
     cause instanceof OwnershipLostFault
   )
     throw cause;
-  throw new StoreIntegrityError(message);
+  throw new StoreIntegrityError(message, cause instanceof Error ? { cause } : undefined);
 }
 
 export function checkpointDatabase(database: Database): void {

@@ -1,9 +1,15 @@
 import { describe, expect, test } from "bun:test";
 
 import { encodeRequestListCursor } from "../../../src/application/request-list-cursor";
-import { validateRequestId } from "../../../src/domain/generated-ids";
+import {
+  validateManagedSessionId,
+  validateNativeMessageId,
+  validateRequestId,
+  validateStartOperationId,
+} from "../../../src/domain/generated-ids";
 import type { FencingToken } from "../../../src/domain/ownership";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
+import { ToolContractFault } from "../../../src/tools/contracts";
 import {
   requestToolFailureCodes,
   sessionAskArgumentsSchema,
@@ -24,6 +30,8 @@ import {
   sessionWaitArgumentsSchema,
 } from "../../../src/tools/request-contracts";
 import { requestToolContext, requestToolIdentity } from "../../../src/tools/request-tool-context";
+import { createSessionRequestSendTool } from "../../../src/tools/session-request-send";
+import { serializeSessionRequestStartResult } from "../../../src/tools/session-request-start";
 
 function workspace() {
   const value = validateWorkspaceKey("request-tools");
@@ -35,6 +43,20 @@ const requestId = `req_${"a".repeat(32)}`;
 const context = { sessionID: "ses_source", abort: new AbortController().signal };
 
 describe("request tool argument contracts", () => {
+  test("describes request-send as active-only without idle wake-up", () => {
+    const tool = createSessionRequestSendTool(
+      {} as never,
+      {
+        workspaceKey: workspace(),
+        fencingToken: 1 as FencingToken,
+        invocationDeadlineMs: () => 1,
+      },
+      { message: "allow", ask: "allow", wait: "allow" },
+    );
+    expect(tool.description).toContain("visible active root");
+    expect(tool.description).toContain("never wakes an idle target");
+  });
+
   test("accepts canonical strict request arguments", () => {
     expect(
       sessionRequestSendArgumentsSchema.safeParse({
@@ -255,6 +277,159 @@ describe("request tool failure contracts", () => {
     expect(sessionSignalFailureCodes).toEqual(sessionRespondFailureCodes);
   });
 });
+
+describe("request-start result contracts", () => {
+  test("request-start rejects undeclared codes and malformed composite failure details", () => {
+    const expected = {
+      workspaceKey: workspace(),
+      sourceSessionId: "ses_source",
+      idempotencyKey: "request-start",
+    };
+    expect(() =>
+      serializeSessionRequestStartResult(
+        {
+          ok: false,
+          error: { code: "not_found_or_unauthorized", message: "undeclared", retryable: false },
+        } as never,
+        expected,
+      ),
+    ).toThrow(ToolContractFault);
+    for (const details of [
+      { operation: {}, request: {} },
+      { operation: {}, request: {}, extra: true },
+      { operation: {} },
+    ]) {
+      expect(() =>
+        serializeSessionRequestStartResult(
+          {
+            ok: false,
+            error: {
+              code: "native_outcome_unknown",
+              message: "malformed",
+              retryable: false,
+              details,
+            },
+          } as never,
+          expected,
+        ),
+      ).toThrow(ToolContractFault);
+    }
+  });
+
+  test("request-start rejects forged successful composite bindings and shapes", () => {
+    const operationId = validateStartOperationId(`op_${"1".repeat(32)}`);
+    const managedSessionId = validateManagedSessionId(`ses_${"2".repeat(32)}`);
+    const nativeMessageId = validateNativeMessageId(`msg_${"3".repeat(32)}`);
+    const linkedRequestId = validateRequestId(`req_${"1".repeat(32)}`);
+    if (!operationId.ok || !managedSessionId.ok || !nativeMessageId.ok || !linkedRequestId.ok) {
+      throw new Error("invalid fixture");
+    }
+    const expected = {
+      workspaceKey: workspace(),
+      sourceSessionId: "ses_source",
+      idempotencyKey: "request-start",
+    };
+    const operation = {
+      id: operationId.value,
+      workspaceKey: expected.workspaceKey,
+      sourceSessionId: "ses_source" as never,
+      idempotencyKey: expected.idempotencyKey,
+      argumentsSha256: "a".repeat(64) as never,
+      sessionId: managedSessionId.value,
+      nativeMessageId: nativeMessageId.value,
+      creationState: "prepared" as const,
+      titleState: "not_started" as const,
+      admissionState: "not_started" as const,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    };
+    const request = {
+      id: linkedRequestId.value,
+      workspaceKey: expected.workspaceKey,
+      sourceSessionId: operation.sourceSessionId,
+      targetSessionId: managedSessionId.value,
+      nativeMessageId: nativeMessageId.value,
+      deliveryMode: "initial" as const,
+      linkedStartOperationId: operationId.value,
+      payloadByteLength: 1,
+      payloadSha256: "b".repeat(64) as never,
+      kind: "wait" as const,
+      resolutionState: "pending" as const,
+      deliveryState: "prepared" as const,
+      resultState: "none" as const,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      deadlineAtMs: 2,
+    };
+    expect(
+      JSON.parse(
+        serializeSessionRequestStartResult({ ok: true, value: { operation, request } }, expected),
+      ),
+    ).toMatchObject({
+      ok: true,
+      value: { request: { target_session_id: managedSessionId.value } },
+    });
+    expect(
+      JSON.parse(
+        serializeSessionRequestStartResult(
+          {
+            ok: false,
+            error: {
+              code: "native_outcome_unknown",
+              message: "The native start outcome remains unknown.",
+              retryable: false,
+              details: { operation, request },
+            },
+          },
+          expected,
+        ),
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: {
+        code: "native_outcome_unknown",
+        details: {
+          operation: { operation_id: operationId.value },
+          request: { request_id: linkedRequestId.value },
+        },
+      },
+    });
+    for (const value of [
+      { operation: { ...operation, workspaceKey: validWorkspace("workspace:forged") }, request },
+      { operation, request: { ...request, targetSessionId: operation.sourceSessionId } },
+      { operation, request: { ...request, workspaceKey: validWorkspace("workspace:forged") } },
+      { operation, request: { ...request, extra: true } },
+      { operation, request, extra: true },
+    ]) {
+      expect(() =>
+        serializeSessionRequestStartResult({ ok: true, value } as never, expected),
+      ).toThrow(ToolContractFault);
+    }
+    expect(() =>
+      serializeSessionRequestStartResult(
+        {
+          ok: false,
+          error: {
+            code: "native_outcome_unknown",
+            message: "partial",
+            retryable: false,
+            details: {
+              operation,
+              request: { ...request, workspaceKey: validWorkspace("workspace:forged") },
+            },
+          },
+        } as never,
+        expected,
+      ),
+    ).toThrow(ToolContractFault);
+  });
+});
+
+function validWorkspace(value: string) {
+  const validation = validateWorkspaceKey(value);
+  if (!validation.ok) throw new Error("invalid fixture");
+  return validation.value;
+}
 
 describe("request tool context adaptation", () => {
   test("validates read-only identity without requiring mutation deadline control", () => {

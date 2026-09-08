@@ -1,20 +1,25 @@
 import { isSupportedOpenCodeVersion } from "../../domain/host";
 import type { SessionId } from "../../domain/sessions";
+import { BoundedJsonFault, BoundedJsonParser } from "./bounded-json-parser";
+import {
+  validNativePart as part,
+  validNativeTokens as tokens,
+} from "./native-export-part-validation";
 import {
   isExportBoolean as boolean,
-  type ExportData as Data,
   exportKeys as keys,
   isExportNumber as number,
   exportRecord as record,
   isExportString as string,
 } from "./native-export-shape";
-import { validNativeToolState as toolState } from "./native-export-tool-state";
+import { nativeJsonHardLimits } from "./native-json-limits";
 
 export type NativeExportValidation =
   | { readonly ok: true }
-  | { readonly ok: false; readonly reason: "malformed" | "wrong_session" | "not_sanitized" };
-
-const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(string);
+  | {
+      readonly ok: false;
+      readonly reason: "malformed" | "wrong_session" | "not_sanitized" | "limit" | "deadline";
+    };
 
 function stringMap(value: unknown, predicate: (item: unknown) => boolean): boolean {
   const item = record(value);
@@ -28,23 +33,6 @@ function time(value: unknown, completion = false): boolean {
     keys(item, ["created"], completion ? ["completed"] : []) &&
     number(item.created) &&
     (item.completed === undefined || number(item.completed))
-  );
-}
-
-function tokens(value: unknown): boolean {
-  const item = record(value);
-  const cache = record(item?.cache);
-  return (
-    !!item &&
-    keys(item, ["input", "output", "reasoning", "cache"], ["total"]) &&
-    number(item.input) &&
-    number(item.output) &&
-    number(item.reasoning) &&
-    (item.total === undefined || number(item.total)) &&
-    !!cache &&
-    keys(cache, ["read", "write"]) &&
-    number(cache.read) &&
-    number(cache.write)
   );
 }
 
@@ -172,104 +160,29 @@ function messageInfo(value: unknown, sessionId: string): { ok: boolean; id?: str
   return { ok: true, id: item.id };
 }
 
-function commonPart(item: Data, sessionId: string, messageId: string): boolean {
-  return (
-    string(item.id) &&
-    item.sessionID === sessionId &&
-    item.messageID === messageId &&
-    string(item.type)
-  );
-}
-
-function part(value: unknown, sessionId: string, messageId: string): boolean {
-  const item = record(value);
-  if (!item || !commonPart(item, sessionId, messageId)) return false;
-  const base = ["id", "sessionID", "messageID", "type"];
-  switch (item.type) {
-    case "text":
-      return (
-        keys(item, [...base, "text"], ["synthetic", "ignored", "time", "metadata"]) &&
-        string(item.text)
-      );
-    case "reasoning":
-      return (
-        keys(item, [...base, "text", "time"], ["metadata"]) &&
-        string(item.text) &&
-        !!record(item.time)
-      );
-    case "file":
-      return (
-        keys(item, [...base, "mime", "url"], ["filename", "source"]) &&
-        string(item.mime) &&
-        string(item.url)
-      );
-    case "tool":
-      return (
-        keys(item, [...base, "callID", "tool", "state"], ["metadata"]) &&
-        string(item.callID) &&
-        string(item.tool) &&
-        toolState(item.state)
-      );
-    case "step-start":
-      return (
-        keys(item, base, ["snapshot"]) && (item.snapshot === undefined || string(item.snapshot))
-      );
-    case "step-finish":
-      return (
-        keys(item, [...base, "reason", "cost", "tokens"], ["snapshot"]) &&
-        string(item.reason) &&
-        number(item.cost) &&
-        tokens(item.tokens)
-      );
-    case "snapshot":
-      return keys(item, [...base, "snapshot"]) && string(item.snapshot);
-    case "patch":
-      return keys(item, [...base, "hash", "files"]) && string(item.hash) && strings(item.files);
-    case "agent":
-      return keys(item, [...base, "name"], ["source"]) && string(item.name);
-    case "retry":
-      return (
-        keys(item, [...base, "attempt", "error", "time"]) &&
-        number(item.attempt) &&
-        !!record(item.error) &&
-        !!record(item.time)
-      );
-    case "compaction":
-      return keys(item, [...base, "auto"]) && boolean(item.auto);
-    case "subtask":
-      return (
-        keys(item, [...base, "prompt", "description", "agent"]) &&
-        string(item.prompt) &&
-        string(item.description) &&
-        string(item.agent)
-      );
-    default:
-      return false;
-  }
-}
-
-/** Strictly validates the supported OpenCode 1.18 import envelope and declared variants. */
-export function validateNativeExport(
-  bytes: Uint8Array,
+export function validateNativeExportValue(
+  raw: unknown,
   sessionId: SessionId,
   isSanitized: boolean,
 ): NativeExportValidation {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-  } catch {
-    return { ok: false, reason: "malformed" };
-  }
   const root = record(raw);
   if (!root || !keys(root, ["info", "messages"]) || !Array.isArray(root.messages)) {
     return { ok: false, reason: "malformed" };
   }
+  if (root.messages.length > nativeJsonHardLimits.maximumMessages) {
+    return { ok: false, reason: "limit" };
+  }
   const info = sessionInfo(root.info, sessionId, isSanitized);
   if (!info.ok) return info;
+  let partCount = 0;
   for (const message of root.messages) {
     const item = record(message);
     if (!item || !keys(item, ["info", "parts"]) || !Array.isArray(item.parts)) {
       return { ok: false, reason: "malformed" };
+    }
+    partCount += item.parts.length;
+    if (partCount > nativeJsonHardLimits.maximumParts) {
+      return { ok: false, reason: "limit" };
     }
     const messageResult = messageInfo(item.info, sessionId);
     if (
@@ -281,4 +194,26 @@ export function validateNativeExport(
     }
   }
   return { ok: true };
+}
+
+/** Strictly validates bounded bytes against the supported OpenCode 1.18 import envelope. */
+export function validateNativeExport(
+  bytes: Uint8Array,
+  sessionId: SessionId,
+  isSanitized: boolean,
+): NativeExportValidation {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const parser = new BoundedJsonParser();
+  try {
+    for (let offset = 0; offset < bytes.byteLength; offset += 64 * 1024) {
+      parser.feed(decoder.decode(bytes.subarray(offset, offset + 64 * 1024), { stream: true }));
+    }
+    parser.feed(decoder.decode());
+    return validateNativeExportValue(parser.finish(), sessionId, isSanitized);
+  } catch (cause: unknown) {
+    return {
+      ok: false,
+      reason: cause instanceof BoundedJsonFault && cause.kind === "limit" ? "limit" : "malformed",
+    };
+  }
 }

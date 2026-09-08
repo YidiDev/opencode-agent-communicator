@@ -258,3 +258,33 @@ describe("visible root session listing", () => {
     expect(fake.requests).toEqual([]);
   });
 });
+
+test("aborts the in-flight native membership read when the list deadline expires", async () => {
+  let suppliedSignal: AbortSignal | undefined;
+  const result = await listVisibleRootSessions(
+    {
+      readiness: { assertReady: () => undefined },
+      sessions: { readVisibleRoots: async () => [] },
+      membership: {
+        readCurrentRoots: ((
+          _workspace: typeof workspaceKey,
+          _source: typeof sourceSessionId,
+          _target: typeof sourceSessionId,
+          signal?: AbortSignal,
+        ) => {
+          suppliedSignal = signal;
+          return new Promise(() => {});
+        }) as never,
+      },
+    },
+    {
+      workspaceKey,
+      sourceSessionId,
+      abort: new AbortController().signal,
+      deadlineMs: Date.now() + 5,
+    },
+  );
+
+  expect(result).toMatchObject({ ok: false, error: { code: "deadline_expired" } });
+  expect(suppliedSignal?.aborted).toBe(true);
+});

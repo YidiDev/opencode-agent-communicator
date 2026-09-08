@@ -62,7 +62,7 @@ export async function stopSession(
     deadlineMs,
   };
   try {
-    return await stopSessionWithinDeadline(ports, linkedContext, args);
+    return await stopSessionWithinDeadline(ports, linkedContext, context.abort, args);
   } catch (cause: unknown) {
     if (cause instanceof StopDeadlineFault) {
       return domainFailure("deadline_expired", "The session stop deadline expired.", false);
@@ -78,6 +78,7 @@ export async function stopSession(
 async function stopSessionWithinDeadline(
   ports: SessionStopPorts,
   context: SessionStopContext,
+  approvalAbort: AbortSignal,
   args: SessionStopArguments,
 ): Promise<DomainResult<SessionStopResult>> {
   assertCommunicatorReady(ports.readiness);
@@ -104,7 +105,7 @@ async function stopSessionWithinDeadline(
         reasonSha256,
       },
       {
-        abort: context.abort,
+        abort: approvalAbort,
         ...(context.deadlineMs === undefined ? {} : { deadlineMs: context.deadlineMs }),
       },
     ),

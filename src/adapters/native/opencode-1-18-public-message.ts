@@ -12,11 +12,11 @@ export interface PublicMessageSurface {
       readonly agent?: string;
       readonly parts: [{ readonly type: "text"; readonly text: string }];
     },
-    options: { readonly signal: AbortSignal },
+    options: { readonly signal: AbortSignal; readonly fetch?: typeof globalThis.fetch },
   ): Promise<unknown>;
   message(
     input: { readonly sessionID: string; readonly directory: string; readonly messageID: string },
-    options: { readonly signal: AbortSignal },
+    options: { readonly signal: AbortSignal; readonly fetch?: typeof globalThis.fetch },
   ): Promise<unknown>;
 }
 
@@ -181,6 +181,7 @@ export async function admitPublicMessage(
     readonly abort: AbortSignal;
   },
   dependencies: PublicMessageAdmissionDependencies = {},
+  serverUrl?: URL,
 ): Promise<PublicMessageAdmission> {
   if (input.abort.aborted) return { kind: "unknown" };
   const model = modelRef(input.model);
@@ -200,7 +201,19 @@ export async function admitPublicMessage(
   } catch {
     // A failed client observation does not prove the at-most-once POST missed the server.
   }
-  if (isAuthoritativeClientRejection(submission, input.abort.aborted, input.sessionId)) {
+  if (
+    serverUrl !== undefined &&
+    (await isAuthoritativeClientRejection(submission, input.abort.aborted, {
+      abort: input.abort,
+      method: "POST",
+      serverUrl,
+      endpointPath: `/session/${encodeURIComponent(input.sessionId)}/prompt_async`,
+      directory,
+      targetSessionId: input.sessionId,
+      messageId: input.nativeMessageId,
+      messageIdBodyKey: "messageID",
+    }))
+  ) {
     return { kind: "definitive_rejection" };
   }
   // A genuine 204 proves scheduling only. Fixed-ID public read-back is the admission boundary.

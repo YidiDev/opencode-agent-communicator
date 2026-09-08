@@ -18,6 +18,7 @@ function valid<Value>(
 
 const sessionId = valid(validateSessionId("ses_public"));
 const nativeMessageId = valid(validateNativeMessageId(`msg_${"a".repeat(32)}`));
+const serverUrl = new URL("http://opencode.internal");
 
 function observed(text = "exact message") {
   return {
@@ -176,7 +177,14 @@ test("classifies exact pre-admission rejection without read-back", async () => {
     async promptAsync() {
       return {
         error: { _tag: "InvalidRequestError", message: "invalid" },
-        request: new Request("http://opencode.internal/session"),
+        request: new Request(
+          `${serverUrl.origin}/session/${sessionId}/prompt_async?directory=${encodeURIComponent("/workspace")}`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ messageID: nativeMessageId }),
+          },
+        ),
         response: new Response(null, { status: 400 }),
       };
     },
@@ -185,7 +193,7 @@ test("classifies exact pre-admission rejection without read-back", async () => {
       return undefined;
     },
   };
-  expect(await admitPublicMessage(surface, "/workspace", input())).toEqual({
+  expect(await admitPublicMessage(surface, "/workspace", input(), {}, serverUrl)).toEqual({
     kind: "definitive_rejection",
   });
   expect(reads).toBe(0);

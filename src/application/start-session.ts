@@ -109,10 +109,15 @@ export async function startSession(
       operation.titleState === "prepared" ||
       operation.admissionState === "prepared";
     if (!hasPreparedEffect) return projectStartOutcome(operation);
-    const approval = await approvePreparedStart(ports, linkedContext, token.value, {
-      ...prepared.value,
-      operation,
-    });
+    const approval = await approvePreparedStart(
+      ports,
+      { ...linkedContext, abort: context.abort },
+      token.value,
+      {
+        ...prepared.value,
+        operation,
+      },
+    );
     if (!approval.ok) return approval;
     return await executeStartEffects(ports, linkedContext, token.value, operation);
   } finally {

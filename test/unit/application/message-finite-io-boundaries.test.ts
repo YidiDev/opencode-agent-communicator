@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 
 import {
   admitClaimedMessage,
@@ -12,6 +12,7 @@ import type { Sha256Digest } from "../../../src/domain/message-payload";
 import { OwnershipLostFault, validateFencingToken } from "../../../src/domain/ownership";
 import { validateSessionId } from "../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
+import { deferred } from "../../support/blocking-request-fixture";
 
 const sendSessionMessage = (
   ...input: Parameters<typeof sendApplicationSessionMessage>
@@ -82,13 +83,43 @@ function delivery(state: DeliveryState = "prepared"): DeliveryMetadata {
 }
 
 const never = <Value>(): Promise<Value> => new Promise(() => undefined);
-const deadlineContext = (abort = new AbortController().signal) => ({
+const deadlineContext = (
+  abort = new AbortController().signal,
+  deadlineMs = Date.now() + 60_000,
+) => ({
   workspaceKey,
   sourceSessionId,
   abort,
-  deadlineMs: Date.now() + 15,
+  deadlineMs,
 });
 const args = { session_id: targetSessionId, content: "work" };
+
+function pendingOperation<Value>() {
+  const started = deferred<void>();
+  return {
+    started: started.promise,
+    operation: () => {
+      started.resolve();
+      return never<Value>();
+    },
+  };
+}
+
+async function expireAtControlledDeadline<Value>(
+  started: Promise<void>,
+  operation: (deadlineMs: number) => Promise<Value>,
+): Promise<Value> {
+  jest.useFakeTimers();
+  try {
+    jest.setSystemTime(10_000);
+    const pending = operation(10_015);
+    await started;
+    jest.advanceTimersByTime(15);
+    return await pending;
+  } finally {
+    jest.useRealTimers();
+  }
+}
 
 function sendFixture() {
   let membershipReads = 0;
@@ -158,8 +189,11 @@ function sendFixture() {
 describe("session send finite I/O boundaries", () => {
   test("bounds a nonsettling initial ownership read before persistence", async () => {
     const fixture = sendFixture();
-    fixture.state.ownership = never;
-    const result = await sendSessionMessage(fixture.ports, deadlineContext(), args);
+    const boundary = pendingOperation<boolean>();
+    fixture.state.ownership = boundary.operation;
+    const result = await expireAtControlledDeadline(boundary.started, (deadlineMs) =>
+      sendSessionMessage(fixture.ports, deadlineContext(undefined, deadlineMs), args),
+    );
     expect(result).toMatchObject({ ok: false, error: { code: "deadline_expired" } });
     expect(fixture.membershipReads()).toBe(1);
     expect(fixture.cancellations()).toBe(0);
@@ -198,9 +232,13 @@ describe("session send finite I/O boundaries", () => {
       });
 
       const pending = sendFixture();
-      if (boundary === "membership") pending.state.membership = never;
-      else pending.ports.authorization.authorizeMessage = never;
-      expect(await sendSessionMessage(pending.ports, deadlineContext(), args)).toMatchObject({
+      const operation = pendingOperation<never>();
+      if (boundary === "membership") pending.state.membership = operation.operation;
+      else pending.ports.authorization.authorizeMessage = operation.operation;
+      const result = await expireAtControlledDeadline(operation.started, (deadlineMs) =>
+        sendSessionMessage(pending.ports, deadlineContext(undefined, deadlineMs), args),
+      );
+      expect(result).toMatchObject({
         ok: false,
         error: { code: "deadline_expired" },
       });
@@ -209,11 +247,15 @@ describe("session send finite I/O boundaries", () => {
 
   test("cancels cleanly when final membership does not settle", async () => {
     const fixture = sendFixture();
+    const boundary = pendingOperation<never>();
     fixture.state.membership = async () => {
-      if (fixture.membershipReads() === 3) return never();
+      if (fixture.membershipReads() === 3) return boundary.operation();
       return { sourceVisible: true, targetVisible: true, sourceTitle: "Source" };
     };
-    expect(await sendSessionMessage(fixture.ports, deadlineContext(), args)).toMatchObject({
+    const result = await expireAtControlledDeadline(boundary.started, (deadlineMs) =>
+      sendSessionMessage(fixture.ports, deadlineContext(undefined, deadlineMs), args),
+    );
+    expect(result).toMatchObject({
       ok: false,
       error: { code: "deadline_expired" },
     });
@@ -224,20 +266,24 @@ describe("session send finite I/O boundaries", () => {
     "cancels prepared work when pre-claim ownership is %s",
     async (mode) => {
       const fixture = sendFixture();
+      const boundary = pendingOperation<boolean>();
       fixture.state.ownership = async () => {
         if (fixture.ownershipReads() === 2) {
           if (mode === "rejected") throw new Error("ownership unavailable");
-          return never();
+          return boundary.operation();
         }
         return true;
       };
-      const result = await sendSessionMessage(
-        fixture.ports,
+      const result =
         mode === "nonsettling"
-          ? deadlineContext()
-          : { workspaceKey, sourceSessionId, abort: new AbortController().signal },
-        args,
-      );
+          ? await expireAtControlledDeadline(boundary.started, (deadlineMs) =>
+              sendSessionMessage(fixture.ports, deadlineContext(undefined, deadlineMs), args),
+            )
+          : await sendSessionMessage(
+              fixture.ports,
+              { workspaceKey, sourceSessionId, abort: new AbortController().signal },
+              args,
+            );
       expect(result).toMatchObject({
         ok: false,
         error: { code: mode === "rejected" ? "ownership_lost" : "deadline_expired" },
@@ -250,19 +296,23 @@ describe("session send finite I/O boundaries", () => {
     "does not misreport an uncertain %s claim as clean cancellation",
     async (mode) => {
       const fixture = sendFixture();
+      const boundary = pendingOperation<never>();
       fixture.ports.deliveries.claimPrepared =
         mode === "rejected"
           ? async () => {
               throw new Error("claim unavailable");
             }
-          : never;
-      const result = await sendSessionMessage(
-        fixture.ports,
+          : boundary.operation;
+      const result =
         mode === "nonsettling"
-          ? deadlineContext()
-          : { workspaceKey, sourceSessionId, abort: new AbortController().signal },
-        args,
-      );
+          ? await expireAtControlledDeadline(boundary.started, (deadlineMs) =>
+              sendSessionMessage(fixture.ports, deadlineContext(undefined, deadlineMs), args),
+            )
+          : await sendSessionMessage(
+              fixture.ports,
+              { workspaceKey, sourceSessionId, abort: new AbortController().signal },
+              args,
+            );
       expect(result).toMatchObject({
         ok: false,
         error: { code: "admission_unknown", details: { delivery_id: deliveryId } },
@@ -276,15 +326,26 @@ describe("session send finite I/O boundaries", () => {
 describe("session send settlement boundaries", () => {
   test("records a late successful uncertain claim as admission_unknown", async () => {
     const fixture = sendFixture();
+    const claimStarted = deferred<void>();
+    const completionRecorded = deferred<void>();
+    const completeSubmission = fixture.ports.deliveries.completeSubmission;
+    fixture.ports.deliveries.completeSubmission = async (input) => {
+      const result = await completeSubmission(input);
+      completionRecorded.resolve();
+      return result;
+    };
     let settleClaim:
       | ((value: Awaited<ReturnType<SessionSendPorts["deliveries"]["claimPrepared"]>>) => void)
       | undefined;
     fixture.ports.deliveries.claimPrepared = () =>
       new Promise((resolve) => {
+        claimStarted.resolve();
         settleClaim = resolve;
       });
 
-    const result = await sendSessionMessage(fixture.ports, deadlineContext(), args);
+    const result = await expireAtControlledDeadline(claimStarted.promise, (deadlineMs) =>
+      sendSessionMessage(fixture.ports, deadlineContext(undefined, deadlineMs), args),
+    );
     expect(result).toMatchObject({
       ok: false,
       error: { code: "admission_unknown", details: { delivery_id: deliveryId } },
@@ -294,15 +355,19 @@ describe("session send settlement boundaries", () => {
       delivery: delivery("submitting") as DeliveryMetadata & { readonly state: "submitting" },
       envelope: "{}",
     });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await completionRecorded.promise;
     expect(fixture.completions).toContain("admission_unknown");
   });
 
   test.each(["digest", "prepare"] as const)("bounds nonsettling %s I/O", async (boundary) => {
     const fixture = sendFixture();
-    if (boundary === "digest") fixture.ports.digest.sha256 = never;
-    else fixture.ports.deliveries.createPrepared = never;
-    expect(await sendSessionMessage(fixture.ports, deadlineContext(), args)).toMatchObject({
+    const operation = pendingOperation<never>();
+    if (boundary === "digest") fixture.ports.digest.sha256 = operation.operation;
+    else fixture.ports.deliveries.createPrepared = operation.operation;
+    const result = await expireAtControlledDeadline(operation.started, (deadlineMs) =>
+      sendSessionMessage(fixture.ports, deadlineContext(undefined, deadlineMs), args),
+    );
+    expect(result).toMatchObject({
       ok: false,
       error: { code: "deadline_expired" },
     });
@@ -312,6 +377,13 @@ describe("session send settlement boundaries", () => {
     "contains rejected %s I/O without an invocation deadline",
     async (boundary) => {
       const fixture = sendFixture();
+      const cancelled = deferred<void>();
+      const cancelPrepared = fixture.ports.deliveries.cancelPrepared;
+      fixture.ports.deliveries.cancelPrepared = async (input) => {
+        const result = await cancelPrepared(input);
+        cancelled.resolve();
+        return result;
+      };
       if (boundary === "digest") {
         fixture.ports.digest.sha256 = async () => {
           throw new Error("digest rejected");
@@ -333,7 +405,7 @@ describe("session send settlement boundaries", () => {
         ),
       ).toMatchObject({ ok: false, error: { code: "storage_unavailable" } });
       if (boundary === "prepare") {
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await cancelled.promise;
         expect(fixture.cancellations()).toBe(1);
       }
     },
@@ -367,16 +439,27 @@ describe("session send settlement boundaries", () => {
 
   test("cancels immediately and again when preparation settles after expiry", async () => {
     const fixture = sendFixture();
+    const preparationStarted = deferred<void>();
+    const secondCancellation = deferred<void>();
+    const cancelPrepared = fixture.ports.deliveries.cancelPrepared;
+    fixture.ports.deliveries.cancelPrepared = async (input) => {
+      const result = await cancelPrepared(input);
+      if (fixture.cancellations() === 2) secondCancellation.resolve();
+      return result;
+    };
     let release: (() => void) | undefined;
     fixture.ports.deliveries.createPrepared = () =>
       new Promise((resolve) => {
+        preparationStarted.resolve();
         release = () => resolve({ ok: true, delivery: delivery() });
       });
-    const result = await sendSessionMessage(fixture.ports, deadlineContext(), args);
+    const result = await expireAtControlledDeadline(preparationStarted.promise, (deadlineMs) =>
+      sendSessionMessage(fixture.ports, deadlineContext(undefined, deadlineMs), args),
+    );
     expect(result).toMatchObject({ ok: false, error: { code: "deadline_expired" } });
     expect(fixture.cancellations()).toBe(1);
     release?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await secondCancellation.promise;
     expect(fixture.cancellations()).toBe(2);
   });
 });
@@ -429,9 +512,11 @@ describe("claimed admission finite I/O boundaries", () => {
     let calls = 0;
     let transportAborted = false;
     const completed: string[] = [];
+    const transportStarted = deferred<void>();
     const ports = admissionPorts({
       queue: ((input: { abort: AbortSignal }) => {
         calls += 1;
+        transportStarted.resolve();
         input.abort.addEventListener("abort", () => {
           transportAborted = true;
         });
@@ -442,7 +527,9 @@ describe("claimed admission finite I/O boundaries", () => {
         return { ok: true as const, delivery: delivery("admission_unknown") };
       },
     });
-    const result = await admit(ports, { deadlineMs: Date.now() + 15 });
+    const result = await expireAtControlledDeadline(transportStarted.promise, (deadlineMs) =>
+      admit(ports, { deadlineMs }),
+    );
     expect(result).toMatchObject({
       ok: false,
       error: {
@@ -451,7 +538,6 @@ describe("claimed admission finite I/O boundaries", () => {
         details: { delivery_id: deliveryId },
       },
     });
-    await Promise.resolve();
     expect(transportAborted).toBeTrue();
     expect(calls).toBe(1);
     expect(completed).toContain("admission_unknown");
@@ -462,10 +548,12 @@ describe("claimed admission finite I/O boundaries", () => {
     async (position) => {
       let reads = 0;
       const completed: string[] = [];
+      const ownershipStarted = deferred<void>();
       const ports = admissionPorts({
         current: async () => {
           reads += 1;
           if ((position === "before" && reads === 1) || (position === "after" && reads === 2)) {
+            ownershipStarted.resolve();
             return never();
           }
           return true;
@@ -475,12 +563,13 @@ describe("claimed admission finite I/O boundaries", () => {
           return { ok: true as const, delivery: delivery("admission_unknown") };
         },
       });
-      const result = await admit(ports, { deadlineMs: Date.now() + 15 });
+      const result = await expireAtControlledDeadline(ownershipStarted.promise, (deadlineMs) =>
+        admit(ports, { deadlineMs }),
+      );
       expect(result).toMatchObject({
         ok: false,
         error: { code: "admission_unknown", details: { delivery_id: deliveryId } },
       });
-      await Promise.resolve();
       expect(completed).toContain("admission_unknown");
     },
   );
@@ -492,14 +581,14 @@ describe("claimed admission finite I/O boundaries", () => {
           throw new Error("queue unavailable");
         },
       }),
-      { deadlineMs: Date.now() + 50 },
+      { deadlineMs: Date.now() + 60_000 },
     );
     expect(result).toMatchObject({ ok: false, error: { code: "admission_unknown" } });
   });
 
   test("normalizes a non-record native result without reflecting through it", async () => {
     const result = await admit(admissionPorts({ queue: async () => null }), {
-      deadlineMs: Date.now() + 50,
+      deadlineMs: Date.now() + 60_000,
     });
     expect(result).toMatchObject({ ok: false, error: { code: "admission_unknown" } });
   });
@@ -519,15 +608,24 @@ describe("claimed admission finite I/O boundaries", () => {
   test.each(["nonsettling", "rejected"] as const)(
     "bounds %s outcome recording after the native effect",
     async (mode) => {
+      const completionStarted = deferred<void>();
       const ports = admissionPorts({
         complete:
           mode === "nonsettling"
-            ? never
+            ? () => {
+                completionStarted.resolve();
+                return never();
+              }
             : () => {
                 throw new Error("hostile completion invocation");
               },
       });
-      const result = await admit(ports, { deadlineMs: Date.now() + 15 });
+      const result =
+        mode === "nonsettling"
+          ? await expireAtControlledDeadline(completionStarted.promise, (deadlineMs) =>
+              admit(ports, { deadlineMs }),
+            )
+          : await admit(ports, { deadlineMs: Date.now() + 60_000 });
       expect(result).toMatchObject({
         ok: false,
         error: { code: "admission_unknown", details: { delivery_id: deliveryId } },
@@ -546,7 +644,7 @@ describe("claimed admission finite I/O boundaries", () => {
       },
     );
     const result = await admit(admissionPorts({ queue: async () => hostileOutcome }), {
-      deadlineMs: Date.now() + 50,
+      deadlineMs: Date.now() + 60_000,
     });
     expect(result).toMatchObject({ ok: false, error: { code: "admission_unknown" } });
   });

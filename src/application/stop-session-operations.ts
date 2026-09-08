@@ -6,6 +6,7 @@ import { pendingRequestsPerWorkspaceHardCeiling } from "../domain/safety-ceiling
 import type { SessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
 import { boundedExternalCall } from "./bounded-external-call";
+import { deadlineLinkedSignal } from "./claimed-message-admission";
 import type { RequestParticipantActivityObservation } from "./request-ports";
 import type { SessionStopContext, SessionStopPorts, SessionStopResult } from "./stop-session-types";
 import { snapshotDataRecord, snapshotDenseArray } from "./strict-port-boundaries";
@@ -14,10 +15,15 @@ export class StopDeadlineFault extends Error {}
 
 export async function stopExternal<Value>(
   context: SessionStopContext,
-  operation: () => Promise<Value> | Value,
+  operation: (signal: AbortSignal) => Promise<Value> | Value,
 ): Promise<Value> {
   const deadlineMs = context.deadlineMs ?? Date.now() + 3_600_000;
-  const result = await boundedExternalCall(operation, context.abort, deadlineMs);
+  const effect = deadlineLinkedSignal(context.abort, deadlineMs);
+  const result = await boundedExternalCall(
+    () => operation(effect.signal),
+    effect.signal,
+    deadlineMs,
+  ).finally(effect.dispose);
   if (result.kind === "expired") throw new StopDeadlineFault();
   if (result.kind === "rejected") throw result.cause;
   if (context.abort.aborted || Date.now() >= deadlineMs) throw new StopDeadlineFault();
@@ -30,12 +36,12 @@ export async function observeStopParticipants(
   target: SessionId,
 ): Promise<DomainResult<RequestParticipantActivityObservation>> {
   try {
-    const raw: unknown = await stopExternal(context, () =>
+    const raw: unknown = await stopExternal(context, (signal) =>
       ports.activity.observeRequestParticipants(
         context.workspaceKey,
         context.sourceSessionId,
         target,
-        context.abort,
+        signal,
       ),
     );
     const value = snapshotDataRecord(raw, 3);
@@ -201,8 +207,8 @@ export async function applyNativeStop(
     if (!(await stopExternal(context, () => ports.ownership.isCurrent(fencingToken)))) {
       return unknownNativeOutcome(state);
     }
-    const native = await stopExternal(context, () =>
-      ports.nativeInterrupt.interruptSession({ targetSessionId: target, abort: context.abort }),
+    const native = await stopExternal(context, (signal) =>
+      ports.nativeInterrupt.interruptSession({ targetSessionId: target, abort: signal }),
     );
     if (
       native !== "interrupted" ||

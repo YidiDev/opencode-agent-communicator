@@ -169,7 +169,15 @@ async function immediateHarness() {
   };
   const workBytes = new TextEncoder().encode("work");
   const workSha256 = await digestMessageContent(requestDigestPort, workBytes);
+  let lifecycleStops = 0;
   const ports = {
+    readiness: {
+      fencingToken: token,
+      assertReady: () => undefined,
+      ownershipLost: () => {
+        lifecycleStops += 1;
+      },
+    },
     contexts: {
       getContextAdmission: async () => ({
         id: fixture.request.id,
@@ -229,7 +237,14 @@ async function immediateHarness() {
     interrupted: () =>
       ({ ok: false as const, error: { code: "request_cancelled" as const } }) as never,
   };
-  return { admitted, input, ports, registration };
+  return {
+    admitted,
+    input,
+    ports,
+    registration,
+    requestId: fixture.request.id,
+    lifecycleStops: () => lifecycleStops,
+  };
 }
 
 test("immediate admission detaches when participant visibility or context lookup fails", async () => {
@@ -266,6 +281,32 @@ test("immediate admission detaches when participant visibility or context lookup
     error: { code: "storage_unavailable" },
   });
   expect(detached).toBe(1);
+});
+
+test("immediate admission preserves ownership loss from the final request read", async () => {
+  const value = await immediateHarness();
+  value.ports.requests.getRequestMetadata = async () => {
+    throw new OwnershipLostFault();
+  };
+  expect(await persistAndAdmitImmediateRequest(value.ports, value.input)).toMatchObject({
+    ok: false,
+    error: { code: "ownership_lost" },
+  });
+  expect(value.lifecycleStops()).toBe(1);
+});
+
+test("immediate admission rejects an unsafe post-persistence clock before context reads", async () => {
+  const value = await immediateHarness();
+  const createPrepared = value.ports.requests.createPrepared.bind(value.ports.requests);
+  value.ports.requests.createPrepared = async (input) => {
+    const result = await createPrepared(input);
+    value.ports.clock.nowMs = () => Number.NaN;
+    return result;
+  };
+  expect(await persistAndAdmitImmediateRequest(value.ports, value.input)).toMatchObject({
+    ok: false,
+    error: { code: "storage_unavailable", details: { request_id: value.requestId } },
+  });
 });
 
 async function terminalContextRequest(

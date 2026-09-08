@@ -24,6 +24,16 @@ export class SqliteStoreOperationAccess {
     return this.access(operation);
   }
 
+  inspectStaleOwnership<Value>(operation: () => Value): Value {
+    try {
+      const result = operation();
+      this.privateState.verifySqliteFiles();
+      return result;
+    } catch (cause: unknown) {
+      rethrowSanitizedStorageError(cause, "SQLite storage inspection failed.");
+    }
+  }
+
   close(ownership: OwnershipRepository, databaseLifecycle: SqliteDatabaseLifecycle): void {
     let pendingError: unknown;
     let hasCurrentLease = false;

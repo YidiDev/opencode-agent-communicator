@@ -24,6 +24,25 @@ function messageId() {
   return result.value;
 }
 
+const serverUrl = new URL("http://opencode.internal");
+
+function correlatedRequest(path: string, method = "GET", body?: Record<string, unknown>): Request {
+  return new Request(`${serverUrl.origin}${path}?directory=${encodeURIComponent("/workspace")}`, {
+    method,
+    ...(body === undefined
+      ? {}
+      : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+  });
+}
+
+function missingSession() {
+  return {
+    error: { _tag: "SessionNotFoundError", sessionID: sessionId(), message: "not found" },
+    request: correlatedRequest(`/api/session/${sessionId()}`),
+    response: new Response(null, { status: 404 }),
+  };
+}
+
 function info(title = "Untitled") {
   return {
     id: sessionId(),
@@ -61,7 +80,7 @@ test("creates a deterministic root only after absence and verifies response plus
                 sessionID: sessionId(),
                 message: "not found",
               },
-              request: new Request(`http://opencode.internal/session/${sessionId()}`),
+              request: correlatedRequest(`/api/session/${sessionId()}`),
               response: new Response(null, { status: 404 }),
             }
           : { data: { data: info() } };
@@ -74,6 +93,7 @@ test("creates a deterministic root only after absence and verifies response plus
     },
     "/workspace",
     { sessionId: sessionId(), abort: new AbortController().signal },
+    serverUrl,
   );
   expect(result).toBe("created");
   expect(calls).toEqual(["get", "create", "get"]);
@@ -172,10 +192,7 @@ test("keeps exact successful create evidence when immediate read-back is transie
   let reads = 0;
   let creates = 0;
   const controller = new AbortController();
-  const absent = () => ({
-    error: { _tag: "SessionNotFoundError", sessionID: sessionId(), message: "not found" },
-    response: new Response(null, { status: 404 }),
-  });
+  const absent = () => missingSession();
   const outcome = await createDeterministicRootSession(
     {
       async get() {
@@ -190,6 +207,7 @@ test("keeps exact successful create evidence when immediate read-back is transie
     },
     "/workspace",
     { sessionId: sessionId(), abort: controller.signal },
+    serverUrl,
   );
   expect(outcome).toBe("created");
   expect({ reads, creates }).toEqual({ reads: 2, creates: 1 });
@@ -222,19 +240,29 @@ test("fails closed for mixed envelopes and fake status objects", async () => {
   expect(created).toBe(false);
 });
 
-test("accepts only a genuine optional SDK request in authoritative rejection envelopes", () => {
+test("requires genuine exact SDK request correlation in authoritative rejection envelopes", async () => {
   const error = {
     _tag: "SessionNotFoundError",
     sessionID: sessionId(),
     message: "not found",
   };
   const response = new Response(null, { status: 404 });
-  const request = new Request(`http://opencode.internal/session/${sessionId()}`);
+  const serverUrl = new URL("http://opencode.internal");
+  const route = {
+    method: "GET" as const,
+    serverUrl,
+    endpointPath: `/api/session/${sessionId()}`,
+    directory: "/workspace",
+    targetSessionId: sessionId(),
+  };
+  const request = new Request(
+    `${serverUrl.origin}${route.endpointPath}?directory=${encodeURIComponent(route.directory)}`,
+  );
 
-  expect(isAuthoritativeClientRejection({ error, request, response }, false, sessionId())).toBe(
+  expect(await isAuthoritativeClientRejection({ error, request, response }, false, route)).toBe(
     true,
   );
-  expect(isAuthoritativeClientRejection({ error, response }, false, sessionId())).toBe(true);
+  expect(await isAuthoritativeClientRejection({ error, response }, false, route)).toBe(false);
   for (const malformed of [
     { error, request: {}, response },
     { error, request: Object.create(Request.prototype), response },
@@ -243,7 +271,7 @@ test("accepts only a genuine optional SDK request in authoritative rejection env
     { error, request, response: new Proxy(response, {}) },
     { error, request, response, unexpected: true },
   ]) {
-    expect(isAuthoritativeClientRejection(malformed, false, sessionId())).toBe(false);
+    expect(await isAuthoritativeClientRejection(malformed, false, route)).toBe(false);
   }
 });
 
@@ -269,12 +297,7 @@ test("passes exact agent and model overrides and rejects malformed model referen
       reads += 1;
       return reads === 1
         ? {
-            error: {
-              _tag: "SessionNotFoundError",
-              sessionID: sessionId(),
-              message: "not found",
-            },
-            response: new Response(null, { status: 404 }),
+            ...missingSession(),
           }
         : {
             data: {
@@ -300,12 +323,17 @@ test("passes exact agent and model overrides and rejects malformed model referen
     },
   };
   expect(
-    await createDeterministicRootSession(surface, "/workspace", {
-      sessionId: sessionId(),
-      agent: "worker",
-      model: "openai/gpt-5",
-      abort: new AbortController().signal,
-    }),
+    await createDeterministicRootSession(
+      surface,
+      "/workspace",
+      {
+        sessionId: sessionId(),
+        agent: "worker",
+        model: "openai/gpt-5",
+        abort: new AbortController().signal,
+      },
+      serverUrl,
+    ),
   ).toBe("created");
   expect(calls).toEqual([
     {
@@ -368,11 +396,15 @@ test("title updates distinguish authoritative rejection while preserving ambiguo
       {
         updateTitle: async () => ({
           error: { _tag: "SessionNotFoundError", sessionID: sessionId(), message: "not found" },
+          request: correlatedRequest(`/session/${sessionId()}`, "PATCH", {
+            title: "Exact title",
+          }),
           response: new Response(null, { status: 404 }),
         }),
       },
       "/workspace",
       { sessionId: sessionId(), title: "Exact title", abort },
+      serverUrl,
     ),
   ).toBe("definitive_rejection");
   expect(
@@ -393,6 +425,40 @@ test("title updates distinguish authoritative rejection while preserving ambiguo
       { sessionId: sessionId(), title: "Exact title", abort },
     ),
   ).toBe("unknown");
+});
+
+test("title rejection requires the exact generated request body", async () => {
+  const abort = new AbortController().signal;
+  const bodies: Array<BodyInit | undefined> = [
+    undefined,
+    JSON.stringify({ title: "Other title" }),
+    JSON.stringify({ title: "Exact title", extra: true }),
+    "not-json",
+  ];
+
+  for (const body of bodies) {
+    const request = new Request(
+      `${serverUrl.origin}/session/${sessionId()}?directory=${encodeURIComponent("/workspace")}`,
+      {
+        method: "PATCH",
+        ...(body === undefined ? {} : { body }),
+      },
+    );
+    expect(
+      await updateAndVerifySessionTitle(
+        {
+          updateTitle: async () => ({
+            error: { _tag: "SessionNotFoundError", sessionID: sessionId(), message: "not found" },
+            request,
+            response: new Response(null, { status: 404 }),
+          }),
+        },
+        "/workspace",
+        { sessionId: sessionId(), title: "Exact title", abort },
+        serverUrl,
+      ),
+    ).toBe("unknown");
+  }
 });
 
 test("admits the initial message after async scheduling and exact public read-back", async () => {
@@ -510,13 +576,17 @@ test("classifies public prompt rejection, malformed model, cancellation, and tra
       {
         promptAsync: async () => ({
           error: { _tag: "InvalidRequestError", message: "rejected" },
-          request: new Request("http://opencode.internal/session"),
+          request: correlatedRequest(`/session/${sessionId()}/prompt_async`, "POST", {
+            messageID: messageId(),
+          }),
           response: new Response(null, { status: 400 }),
         }),
         message: async () => undefined,
       },
       "/workspace",
       base,
+      {},
+      serverUrl,
     ),
   ).toBe("definitive_rejection");
   expect(
