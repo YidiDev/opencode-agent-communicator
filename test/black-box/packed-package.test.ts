@@ -94,7 +94,7 @@ describe("packed npm archive", () => {
       cpu: string[];
     };
     expect(metadata).toMatchObject({
-      version: "0.7.3",
+      version: "0.7.4",
       exports: { ".": "./src/index.ts" },
       os: ["linux"],
       cpu: ["x64"],

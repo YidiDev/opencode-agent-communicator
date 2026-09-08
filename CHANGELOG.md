@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-09-07
+
+### Fixed
+
+- Hardened SQLite fencing and chronology checks, native OpenCode request/response correlation and
+  bounded streaming, secure-export validation, context recovery and replay handling, and strict
+  approval/result contracts so ambiguous or adversarial boundary behavior remains fail-closed.
+- Corrected communicator guidance and strengthened generated-client, restart-recovery, packed-package,
+  supported-OpenCode, workflow-ordering, and package-portability evidence.
+
 ## [0.7.3] - 2026-09-02
 
 ### Fixed
@@ -290,7 +300,8 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.4...HEAD
+[0.7.4]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.0...v0.7.1
