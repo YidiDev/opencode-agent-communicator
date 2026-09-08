@@ -21,6 +21,10 @@ export class SqliteStoreOperationAccess {
   }
 
   inspect<Value>(operation: () => Value): Value {
+    return this.access(operation);
+  }
+
+  inspectStaleOwnership<Value>(operation: () => Value): Value {
     try {
       const result = operation();
       this.privateState.verifySqliteFiles();

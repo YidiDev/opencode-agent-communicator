@@ -271,7 +271,7 @@ export class SqliteStoreCore {
     this.assertOpen();
     return this.context.localToken === token
       ? this.access.mutate(() => this.ownershipRepository.isCurrent(token))
-      : this.access.inspect(() => this.ownershipRepository.isCurrent(token));
+      : this.access.inspectStaleOwnership(() => this.ownershipRepository.isCurrent(token));
   }
 
   ownershipTakeoverDelayMs(): number {

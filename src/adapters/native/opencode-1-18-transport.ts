@@ -9,7 +9,9 @@ export const openCode118ResponseByteCeilings = Object.freeze({
   health: 16 * 1_024,
   sessionList: 1_024 * 1_024,
   sessionStatus: 256 * 1_024,
-  admission: 64 * 1_024,
+  // Serialized 64 KiB envelopes expand by <2x; raw 32 KiB initial messages by at most 6x.
+  // Fixed response fields keep both below this immutable 256 KiB bound.
+  admission: 256 * 1_024,
   sessionStart: 64 * 1_024,
   sessionTitle: 64 * 1_024,
   sessionInterrupt: 16 * 1_024,
@@ -35,6 +37,7 @@ export function boundedOpenCode118RequestOptions(
 const ABORTED_MESSAGE = "Pinned OpenCode response read was aborted.";
 const MALFORMED_BODY_MESSAGE = "Pinned OpenCode response body is unreadable.";
 const OVERSIZED_BODY_MESSAGE = "Pinned OpenCode response exceeded its byte ceiling.";
+const MAXIMUM_BODY_READS = 4_096;
 
 function requestAbortSignal(input: RequestInfo | URL, init?: RequestInit): AbortSignal | undefined {
   if (init && "signal" in init) return init.signal ?? undefined;
@@ -118,8 +121,9 @@ async function readBoundedBody(
   };
   signal?.addEventListener("abort", abortReader, { once: true });
 
-  const chunks: Uint8Array[] = [];
+  const boundedBody = new Uint8Array(maximumResponseBytes);
   let byteLength = 0;
+  let reads = 0;
   try {
     if (signal?.aborted) {
       void cancelReader();
@@ -132,25 +136,24 @@ async function readBoundedBody(
         void cancelReader();
         throw new NativeAdapterFault(MALFORMED_BODY_MESSAGE);
       }
+      reads += 1;
+      if (result.value.byteLength === 0 || reads > MAXIMUM_BODY_READS) {
+        void cancelReader();
+        throw new NativeAdapterFault(MALFORMED_BODY_MESSAGE);
+      }
       if (result.value.byteLength > maximumResponseBytes - byteLength) {
         void cancelReader();
         throw new NativeAdapterFault(OVERSIZED_BODY_MESSAGE);
       }
+      boundedBody.set(result.value, byteLength);
       byteLength += result.value.byteLength;
-      chunks.push(result.value);
     }
   } finally {
     signal?.removeEventListener("abort", abortReader);
     if (!didCancel) reader.releaseLock();
   }
 
-  const boundedBody = new Uint8Array(byteLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    boundedBody.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return boundedBody.buffer;
+  return boundedBody.slice(0, byteLength).buffer;
 }
 
 /** Bounds every response body from a host-selected transport without trusting response metadata. */

@@ -22,6 +22,10 @@ interface AdmissionTarget {
 }
 
 type AdmissionDelivery = "queue" | "steer";
+// Serialized 64 KiB envelopes expand by <2x; raw 32 KiB initial messages by at most 6x.
+// Fixed request fields keep both below this immutable 256 KiB correlation bound.
+const MAXIMUM_CORRELATION_BODY_BYTES = 256 * 1_024;
+const MAXIMUM_CORRELATION_BODY_READS = 4_096;
 type NativeAdmission =
   | Exclude<NativeQueueAdmission, { readonly kind: "public_message" }>
   | NativeSteerAdmission;
@@ -106,8 +110,9 @@ async function boundedRequestJson(
   const clone = request.clone();
   if (clone.body === null) return undefined;
   const reader = clone.body.getReader();
-  const chunks: Uint8Array[] = [];
+  const body = new Uint8Array(MAXIMUM_CORRELATION_BODY_BYTES);
   let bytes = 0;
+  let reads = 0;
   const cancel = (): void => {
     void reader.cancel().catch(() => undefined);
   };
@@ -121,12 +126,18 @@ async function boundedRequestJson(
       const result = await reader.read();
       if (abort.aborted) return undefined;
       if (result.done) break;
-      if (!(result.value instanceof Uint8Array) || result.value.byteLength > 65_536 - bytes) {
+      reads += 1;
+      if (
+        !(result.value instanceof Uint8Array) ||
+        result.value.byteLength === 0 ||
+        reads > MAXIMUM_CORRELATION_BODY_READS ||
+        result.value.byteLength > MAXIMUM_CORRELATION_BODY_BYTES - bytes
+      ) {
         void reader.cancel().catch(() => undefined);
         return undefined;
       }
+      body.set(result.value, bytes);
       bytes += result.value.byteLength;
-      chunks.push(result.value);
     }
   } catch {
     void reader.cancel().catch(() => undefined);
@@ -134,14 +145,10 @@ async function boundedRequestJson(
   } finally {
     abort.removeEventListener("abort", cancel);
   }
-  const body = new Uint8Array(bytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
   try {
-    const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
+    const value: unknown = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(body.subarray(0, bytes)),
+    );
     return isRecord(value) && Object.getPrototypeOf(value) === Object.prototype ? value : undefined;
   } catch {
     return undefined;

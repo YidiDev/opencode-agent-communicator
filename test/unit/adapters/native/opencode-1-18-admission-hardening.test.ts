@@ -47,9 +47,14 @@ function rejection(
   };
 }
 
+function replaceCloneBody(request: Request, body: ReadableStream<Uint8Array>): Request {
+  Object.defineProperty(request, "clone", { value: () => ({ body }) });
+  return request;
+}
+
 test("rejects missing, malformed, and oversized generated request bodies as ambiguous", async () => {
   const malformed = request("not-json");
-  const oversized = request(new Uint8Array(65_537));
+  const oversized = request(new Uint8Array(256 * 1_024 + 1));
   const missing = request(null);
 
   for (const generatedRequest of [malformed, oversized, missing]) {
@@ -57,6 +62,54 @@ test("rejects missing, malformed, and oversized generated request bodies as ambi
       await isAuthoritativeClientRejection(rejection(generatedRequest), false, correlation),
     ).toBe(false);
   }
+});
+
+test.each([
+  ["zero-length flood", () => new Uint8Array()],
+  ["fragment flood", () => new Uint8Array([32])],
+])("bounds and cancels a generated request %s", async (_label, chunk) => {
+  let cancellations = 0;
+  let reads = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      reads += 1;
+      controller.enqueue(chunk());
+    },
+    cancel() {
+      cancellations += 1;
+    },
+  });
+  const generatedRequest = replaceCloneBody(request(JSON.stringify({ id: messageId })), body);
+
+  expect(
+    await isAuthoritativeClientRejection(rejection(generatedRequest), false, correlation),
+  ).toBe(false);
+  expect(reads).toBeLessThanOrEqual(4_097);
+  expect(cancellations).toBe(1);
+});
+
+test("copies tiny generated-request views from large caller storage before parsing", async () => {
+  const encoded = new TextEncoder().encode(JSON.stringify({ id: messageId }));
+  const backing = new Uint8Array(1024 * 1024);
+  backing.set(encoded, 700_000);
+  let offset = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (offset === encoded.length) {
+        backing.fill(0, 700_000, 700_000 + encoded.length - 1);
+        controller.close();
+        return;
+      }
+      const tinyView = backing.subarray(700_000 + offset, 700_001 + offset);
+      offset += 1;
+      controller.enqueue(tinyView);
+    },
+  });
+  const generatedRequest = replaceCloneBody(request(JSON.stringify({ id: messageId })), body);
+
+  expect(
+    await isAuthoritativeClientRejection(rejection(generatedRequest), false, correlation),
+  ).toBe(true);
 });
 
 test("accepts the pinned generated header-only workspace binding with an exact message body", async () => {
