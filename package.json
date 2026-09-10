@@ -72,8 +72,8 @@
     "prepack": "node tools/verify-package.mjs"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "1.18.25",
-    "@opencode-ai/sdk": "1.18.25",
+    "@opencode-ai/plugin": "1.18.29",
+    "@opencode-ai/sdk": "1.18.29",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -83,7 +83,7 @@
     "@types/istanbul-lib-instrument": "1.7.8",
     "istanbul-lib-coverage": "3.2.2",
     "istanbul-lib-instrument": "6.0.3",
-    "opencode-ai": "1.18.25",
+    "opencode-ai": "1.18.29",
     "typescript": "7.0.2",
     "typescript-compiler-api": "npm:typescript@5.9.3"
   },
