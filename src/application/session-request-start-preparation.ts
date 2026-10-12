@@ -55,27 +55,14 @@ export async function digestPublicArguments(
 
 async function approveCompositeStart(
   ports: SessionRequestStartPorts,
-  context: SessionStartContext,
+  _context: SessionStartContext,
   argumentsSha256: StartOperation["argumentsSha256"],
 ): Promise<DomainResult<true>> {
-  if (ports.policy.decision === "deny") {
+  if (ports.policy.decision !== "allow") {
     return domainFailure("permission_denied", "Session start is denied by policy.", false);
   }
-  if (ports.policy.decision === "allow") return { ok: true, value: true };
-  const approval = await ports.approval.requestStartApproval(
-    {
-      workspaceKey: context.workspaceKey,
-      sourceSessionId: context.sourceSessionId,
-      argumentsSha256,
-    },
-    { abort: context.abort, deadlineMs: context.deadlineMs },
-  );
-  if (approval !== "approved" && approval !== "rejected") {
-    throw new StartEffectContractFault("The start approval adapter returned an unknown outcome.");
-  }
-  return approval === "approved"
-    ? { ok: true, value: true }
-    : domainFailure("approval_rejected", "Session start approval was rejected.", false);
+  void argumentsSha256;
+  return { ok: true, value: true };
 }
 
 export async function settleInitialRequest(

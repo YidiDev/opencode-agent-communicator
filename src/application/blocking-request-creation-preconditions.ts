@@ -115,6 +115,45 @@ export async function proveCurrentCallerVisibility(
     : domainFailure("caller_not_visible", "Caller is not a current visible root session.", false);
 }
 
+export async function proveCurrentRequestVisibility(
+  ports: SessionBlockingRequestPorts,
+  context: SessionBlockingRequestContext,
+  target: SessionId,
+): Promise<DomainResult<undefined>> {
+  const settlement = await runUntilAborted(context.abort, () =>
+    ports.membership.readCurrentRoots(
+      context.workspaceKey,
+      context.sourceSessionId,
+      target,
+      context.abort,
+    ),
+  );
+  const checkpoint = blockingCheckpoint(ports.clock, context);
+  if (!checkpoint.ok) return checkpoint;
+  if (settlement.kind === "aborted") return requestCancelledFailure();
+  if (settlement.kind === "rejected")
+    return settlement.cause instanceof OwnershipLostFault
+      ? domainFailure("ownership_lost", "Coordinator ownership was lost.", false)
+      : domainFailure("native_unavailable", "Current session membership is unavailable.", true);
+  const membership = snapshotDataRecord(settlement.value, 3);
+  if (
+    !membership ||
+    typeof membership.sourceVisible !== "boolean" ||
+    typeof membership.targetVisible !== "boolean"
+  ) {
+    return domainFailure("native_unavailable", "Current session membership is unavailable.", true);
+  }
+  if (!membership.sourceVisible)
+    return domainFailure(
+      "caller_not_visible",
+      "Caller is not a current visible root session.",
+      false,
+    );
+  return membership.targetVisible
+    ? { ok: true, value: undefined }
+    : domainFailure("target_not_visible", "Target is not a current visible root session.", false);
+}
+
 export function wakeRequestScheduler(port: RequestDeadlineWakePort): void {
   try {
     const returned: unknown = port.wake();

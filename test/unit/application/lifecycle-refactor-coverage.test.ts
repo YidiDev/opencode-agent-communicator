@@ -256,7 +256,7 @@ function startPorts() {
     clock: { nowMs: () => 3 },
     ids: {} as never,
     digest: { sha256: async () => new Uint8Array(32) },
-    policy: createSessionStartPolicy(),
+    policy: createSessionStartPolicy({ decision: "allow" }),
   } as unknown as SessionStartPorts;
   return { operation, ports, stopped };
 }

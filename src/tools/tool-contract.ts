@@ -1,18 +1,11 @@
 import type { z } from "zod";
 import type { DomainFailureCode, DomainResult } from "../domain/results";
 
-export interface StructuralApprovalInput {
-  readonly permission: string;
-  readonly patterns: string[];
-  readonly always: string[];
-  readonly metadata: Record<string, unknown>;
-}
-
 export interface StructuralToolContext {
   readonly sessionID: string;
   readonly abort: AbortSignal;
   readonly messageID?: string;
-  readonly ask?: (input: StructuralApprovalInput) => Promise<void>;
+  readonly [legacyHostField: string]: unknown;
 }
 
 export interface InternalToolContract<Arguments> {

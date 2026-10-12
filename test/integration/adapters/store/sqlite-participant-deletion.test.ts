@@ -287,17 +287,12 @@ describe("fenced participant deletion persistence", () => {
       projectId: "project",
     });
     await handler.handle({
+      id: "evt_deleted",
+      created: 1,
       type: "session.deleted",
-      properties: {
-        info: {
-          id: fixture.request.targetSessionId,
-          projectID: "project",
-          directory: "/workspace",
-          title: "Deleted",
-          version: "1.18.23",
-          time: { created: 1, updated: 2 },
-        },
-      },
+      durable: { aggregateID: fixture.request.targetSessionId, seq: 1, version: 2 },
+      location: { directory: "/workspace" },
+      data: { sessionID: fixture.request.targetSessionId },
     });
     expect(await registration.outcome).toMatchObject({
       outcome: "terminal",

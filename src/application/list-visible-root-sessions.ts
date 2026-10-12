@@ -15,6 +15,10 @@ import {
   type CommunicatorReadinessPort,
 } from "./communicator-readiness-port";
 import type { CurrentWorkspaceMembershipPort } from "./delivery-ports";
+import type {
+  ParticipantRegistryListingPort,
+  ParticipantRootRevalidationPort,
+} from "./participant-registry-ports";
 
 const defaultSessionLimit = 50;
 const maximumSessionLimit = 100;
@@ -55,12 +59,15 @@ async function invoke<Value>(
 export interface SessionListPorts {
   readonly readiness: CommunicatorReadinessPort;
   readonly membership: CurrentWorkspaceMembershipPort;
-  readonly sessions: VisibleRootSessionPort & {
+  readonly sessions?: VisibleRootSessionPort & {
     readVisibleRoots(
       includeArchived: boolean,
       abort?: AbortSignal,
     ): ReturnType<VisibleRootSessionPort["readVisibleRoots"]>;
   };
+  /** OpenCode 2 composition supplies both ports; partial registry wiring fails closed. */
+  readonly registry?: ParticipantRegistryListingPort;
+  readonly revalidation?: ParticipantRootRevalidationPort;
 }
 
 export interface VisibleRootSession {
@@ -127,9 +134,33 @@ export async function listVisibleRootSessions(
     }
   }
   {
-    const sessionCall = await invoke(context, (signal) =>
-      ports.sessions.readVisibleRoots(includeArchived, signal),
-    );
+    const registryMode = ports.registry !== undefined || ports.revalidation !== undefined;
+    if (registryMode && (!ports.registry || !ports.revalidation)) {
+      return domainFailure(
+        "native_unavailable",
+        "Visible session state is temporarily unavailable.",
+        true,
+      );
+    }
+    const sessionCall = await invoke(context, async (signal) => {
+      if (!ports.registry || !ports.revalidation) {
+        if (!ports.sessions) throw new Error("visible-root listing port is unavailable");
+        return ports.sessions.readVisibleRoots(includeArchived, signal);
+      }
+      const candidates = await ports.registry.listRootCandidates(
+        context.workspaceKey,
+        maximumSessionLimit,
+      );
+      if (candidates.length > maximumSessionLimit) {
+        throw new Error("participant registry returned an unbounded candidate set");
+      }
+      const observations = await Promise.all(
+        candidates.map((candidate) =>
+          ports.revalidation?.revalidateRoot(context.workspaceKey, candidate.id, signal),
+        ),
+      );
+      return observations.filter((item) => item !== undefined);
+    });
     if (sessionCall.kind === "expired") {
       return domainFailure("deadline_expired", "Session list invocation deadline expired.", false);
     }

@@ -210,7 +210,7 @@ describe("immediate request deterministic race coverage", () => {
     expect(current.state.prepared).toBeUndefined();
   });
 
-  test("returns durable admission without native I/O when persistence wins the abort race", async () => {
+  test("leaves an aborted post-persistence request for durable recovery without native I/O", async () => {
     const current = immediateFixture();
     const controller = new AbortController();
     const createPrepared = current.ports.requests.createPrepared.bind(current.ports.requests);
@@ -226,8 +226,8 @@ describe("immediate request deterministic race coverage", () => {
         immediateContext(controller),
         immediateArguments,
       ),
-    ).toMatchObject({ ok: true, value: { deliveryState: "context_admitted" } });
-    expect(current.state.schedulerWakes).toBe(1);
+    ).toMatchObject({ ok: false, error: { code: "request_cancelled" } });
+    expect(current.state.schedulerWakes).toBe(0);
     expect(current.state.nativeCalls).toBe(0);
   });
 

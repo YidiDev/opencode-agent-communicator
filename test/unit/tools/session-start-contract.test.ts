@@ -12,7 +12,6 @@ import {
   sessionStartFailureCodes,
   ToolContractFault,
 } from "../../../src/tools/contracts";
-import { invocationStartApproval } from "../../../src/tools/invocation-start-approval";
 import { publicStartOperation } from "../../../src/tools/public-values";
 import { serializeSessionStartResult } from "../../../src/tools/session-start";
 
@@ -41,34 +40,6 @@ test("publishes a strict snake_case start contract and exhaustive expected failu
   expect(sessionStartFailureCodes).toContain("start_payload_unavailable");
   expect(sessionStartFailureCodes).toContain("unresolved_provenance_quota_exceeded");
   expect(sessionStartFailureCodes).toContain("admission_unknown");
-});
-
-test("binds default approval to the exact invocation digest and allows only one request", async () => {
-  const approvals: unknown[] = [];
-  const abort = new AbortController().signal;
-  const workspaceKey = valid(validateWorkspaceKey("workspace:test"));
-  const sourceSessionId = valid(validateSessionId("ses_source"));
-  const deadlineMs = 10_000;
-  const approval = invocationStartApproval(
-    {
-      sessionID: "ses_source",
-      messageID: "msg_invocation",
-      abort,
-      async ask(input) {
-        approvals.push(input);
-      },
-    },
-    { workspaceKey, sourceSessionId, abort, deadlineMs, clock: { nowMs: () => 0 } },
-  );
-  const binding = {
-    workspaceKey,
-    sourceSessionId,
-    argumentsSha256: "a".repeat(64) as Sha256Digest,
-  };
-  expect(await approval.requestStartApproval(binding, { abort, deadlineMs })).toBe("approved");
-  expect(approvals).toHaveLength(1);
-  expect(JSON.stringify(approvals[0])).toContain("arguments_sha256");
-  expect(approval.requestStartApproval(binding, { abort, deadlineMs })).rejects.toThrow();
 });
 
 test("projects only summary metadata with snake_case keys", () => {

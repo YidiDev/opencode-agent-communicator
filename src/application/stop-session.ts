@@ -111,7 +111,7 @@ async function stopSessionWithinDeadline(
     ),
   );
   if (approval !== "approved") {
-    return domainFailure("approval_rejected", "Session stop approval was rejected.", false);
+    return domainFailure("permission_denied", "Session stop is denied by policy.", false);
   }
   return applyApprovedStop(ports, context, target.value);
 }

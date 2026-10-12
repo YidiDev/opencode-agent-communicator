@@ -642,7 +642,7 @@ describe("readSession orchestration failures", () => {
         error: {
           code:
             kind === "rejected"
-              ? "approval_rejected"
+              ? "permission_denied"
               : kind === "expired"
                 ? "deadline_expired"
                 : "native_unavailable",

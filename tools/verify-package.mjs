@@ -31,8 +31,8 @@ export const expectedToolIds = Object.freeze([
 // This is SHA-256(npm-reported pack paths joined with LF), not a content digest. Any added, removed,
 // renamed, or reordered archive entry requires an explicit review and fingerprint update.
 export const expectedPackedPathPolicy = Object.freeze({
-  entryCount: 328,
-  sha256: "3ccaf421d8a7e0b6c05064a2d4e9540cee6f3c4f03bd856f03e9a311b21ea9e0",
+  entryCount: 302,
+  sha256: "6bf0e820905260eee97df0f963eb257da195bf72e72c02416f39a18920c51af3",
 });
 
 const forbiddenPathSegments = new Set([
@@ -119,18 +119,24 @@ export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
   assert(packageJson.cpu?.length === 1 && packageJson.cpu[0] === "x64", "package must be x64-only");
   assert(packageJson.engines?.bun === "1.4.0", "Bun compatibility must be exact");
   assert(
-    packageJson.peerDependencies?.["opencode-ai"] === ">=1.18.21 <1.19.0",
+    packageJson.peerDependencies?.["@opencode/cli"] === ">=2.0.26 <2.1.0",
     "OpenCode peer must match the certified minor line",
   );
   assert(
-    packageJson.engines?.opencode === ">=1.18.21 <1.19.0",
+    packageJson.engines?.opencode === ">=2.0.26 <2.1.0",
     "OpenCode engine range must match the certified minor line",
   );
+  assert(packageJson.dependencies?.["@opencode/plugin"] === "2.0.26", "plugin API must be exact");
+  assert(packageJson.devDependencies?.["@opencode/cli"] === "2.0.26", "CLI must be exact");
   assert(
-    packageJson.dependencies?.["@opencode-ai/plugin"] === "1.18.25",
-    "plugin API must be exact",
+    packageJson.trustedDependencies?.length === 1 &&
+      packageJson.trustedDependencies[0] === "@opencode/cli",
+    "only the pinned CLI platform-binary installer may run a lifecycle script",
   );
-  assert(packageJson.dependencies?.["@opencode-ai/sdk"] === "1.18.25", "SDK must be exact");
+  assert(
+    packageJson.dependencies?.effect === "4.0.0-rc.112",
+    "Effect must match the certified plugin API version",
+  );
   assert(packageJson.dependencies?.zod === "4.4.3", "Zod must match the certified version");
   assert(
     packageJson.devDependencies?.typescript === "7.0.2",

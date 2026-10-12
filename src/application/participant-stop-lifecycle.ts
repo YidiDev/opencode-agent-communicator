@@ -18,8 +18,8 @@ import {
   ParticipantOperationGateClosedFault,
 } from "./participant-operation-gate";
 import {
-  isOpenCode118ParticipantActivityEvent,
-  parseOpenCode118ParticipantActivityEvent,
+  isOpenCode2ParticipantActivityEvent,
+  parseOpenCode2ParticipantActivityEvent,
 } from "./participant-stop-evidence";
 import type {
   NativeParticipantStopActivityPort,
@@ -146,12 +146,12 @@ export class ParticipantStopLifecycle {
   }
 
   async handle(value: unknown): Promise<void> {
-    if (!isOpenCode118ParticipantActivityEvent(value)) return;
+    if (!isOpenCode2ParticipantActivityEvent(value)) return;
     if (this.disposing || this.effects.signal.aborted || this.options.lifecycle.status !== "ready")
       return;
-    let evidence: ReturnType<typeof parseOpenCode118ParticipantActivityEvent>;
+    let evidence: ReturnType<typeof parseOpenCode2ParticipantActivityEvent>;
     try {
-      evidence = parseOpenCode118ParticipantActivityEvent(value);
+      evidence = parseOpenCode2ParticipantActivityEvent(value);
       if (!evidence) throw new TypeError("OpenCode participant activity evidence is malformed.");
     } catch (cause: unknown) {
       this.fail("port_contract_violation");

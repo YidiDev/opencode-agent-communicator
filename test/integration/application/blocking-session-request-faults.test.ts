@@ -33,9 +33,9 @@ async function waitForCreatedRequest(setup: Setup) {
   throw new Error("The blocking request was not durably created.");
 }
 
-test("blocking wait observes context admission without awaiting obsolete native steer", async () => {
-  const nativeNeverSettles = deferred<never>();
-  const setup = await fixture(() => nativeNeverSettles.promise);
+test("an aborted unsettled queue admission fails closed after durable creation", async () => {
+  const queueNeverSettles = deferred<never>();
+  const setup = await fixture(() => queueNeverSettles.promise);
   const abort = new AbortController();
   const blocked = waitSession(
     setup.ports,
@@ -44,16 +44,16 @@ test("blocking wait observes context admission without awaiting obsolete native 
   );
 
   expect(await waitForCreatedRequest(setup)).toMatchObject({
-    deliveryMode: "context",
-    deliveryState: "context_admitted",
+    deliveryMode: "queue",
+    deliveryState: "prepared",
   });
   abort.abort("test_cleanup");
 
-  expect(await blocked).toMatchObject({ ok: false, error: { code: "request_cancelled" } });
+  expect(await blocked).toMatchObject({ ok: false, error: { code: "storage_unavailable" } });
   setup.store.close();
 });
 
-test("the invocation deadline cancels a context-admitted blocking request", async () => {
+test("the invocation deadline cancels a queue-admitted blocking request", async () => {
   const setup = await fixture(async () => ({ kind: "unknown" }));
   const invocationDeadline = deferred<() => void>();
   const blocked = waitSession(
@@ -69,8 +69,16 @@ test("the invocation deadline cancels a context-admitted blocking request", asyn
     setup.context,
     { session_id: setup.target, milestone: "ready", timeout_seconds: 30 },
   );
-  const request = await waitForCreatedRequest(setup);
-  expect(request).toMatchObject({ deliveryState: "context_admitted" });
+  let request = await waitForCreatedRequest(setup);
+  for (
+    let attempt = 0;
+    request.deliveryState !== "delivery_unknown" && attempt < 100;
+    attempt += 1
+  ) {
+    await Promise.resolve();
+    request = await waitForCreatedRequest(setup);
+  }
+  expect(request).toMatchObject({ deliveryMode: "queue", deliveryState: "delivery_unknown" });
 
   (await invocationDeadline.promise)();
 
@@ -81,7 +89,7 @@ test("the invocation deadline cancels a context-admitted blocking request", asyn
       workspaceKey: requestTestWorkspace(),
       requestId: request.requestId,
     }),
-  ).toMatchObject({ resolutionState: "cancelled", deliveryState: "context_admitted" });
+  ).toMatchObject({ resolutionState: "cancelled", deliveryState: "delivery_unknown" });
   setup.store.close();
 });
 
@@ -111,7 +119,16 @@ test("a cancel commit with lost settlement uses a fresh bounded authoritative re
     { ...setup.context, abort: abort.signal },
     { session_id: setup.target, milestone: "ready", timeout_seconds: 30 },
   );
-  expect(await waitForCreatedRequest(setup)).toMatchObject({ deliveryState: "context_admitted" });
+  let request = await waitForCreatedRequest(setup);
+  for (
+    let attempt = 0;
+    request.deliveryState !== "delivery_unknown" && attempt < 100;
+    attempt += 1
+  ) {
+    await Promise.resolve();
+    request = await waitForCreatedRequest(setup);
+  }
+  expect(request).toMatchObject({ deliveryMode: "queue", deliveryState: "delivery_unknown" });
   abort.abort("caller_cancelled");
   await cancelCommitted.promise;
   const activeCancellationDeadlines = cleanupDeadlines.filter((phase) => !phase.cancelled);
@@ -124,27 +141,11 @@ test("a cancel commit with lost settlement uses a fresh bounded authoritative re
   setup.store.close();
 });
 
-test("a failed context admission remains durably terminal and fail-closed", async () => {
-  const setup = await fixture(async () => {
-    throw new Error("native steer is not part of context admission");
-  });
-  const requests = Object.create(setup.store) as typeof setup.store;
-  const requestCreates = requests as unknown as {
-    createPrepared(input: PrepareRequestInput): Promise<RequestStoreResult>;
-  };
-  requestCreates.createPrepared = async (input) => {
-    const created = await setup.store.createPrepared(input);
-    if (!created.ok) return created;
-    await setup.store.failUncertainContextOnStartup({
-      fencingToken: input.fencingToken,
-      workspaceKey: input.request.workspaceKey,
-      limit: 1,
-    });
-    return created;
-  };
+test("a definitively rejected queue admission remains durably terminal and fail-closed", async () => {
+  const setup = await fixture(async () => ({ kind: "definitive_rejection" }));
 
   expect(
-    await waitSession({ ...setup.ports, requests }, setup.context, {
+    await waitSession(setup.ports, setup.context, {
       session_id: setup.target,
       milestone: "ready",
       timeout_seconds: 30,
@@ -164,9 +165,9 @@ test.each([
   "ownership_lost",
   "quota_exceeded",
   "rate_limited",
-] as const)("fails safely when context request creation returns %s", async (mode) => {
+] as const)("fails safely when queue request creation returns %s", async (mode) => {
   const setup = await fixture(async () => {
-    throw new Error("native steer must not run");
+    throw new Error("native queue must not run");
   });
   const requests = Object.create(setup.store) as typeof setup.store;
   const requestCreates = requests as unknown as {
@@ -200,7 +201,7 @@ test.each([
   setup.store.close();
 });
 
-test("a throwing scheduler wake cannot reverse a context-admitted cancellation", async () => {
+test("a throwing scheduler wake fails closed before queue admission", async () => {
   const setup = await fixture(async () => ({ kind: "unknown" }));
   const abort = new AbortController();
   const requests = Object.create(setup.ports.requests) as typeof setup.store;
@@ -224,7 +225,12 @@ test("a throwing scheduler wake cannot reverse a context-admitted cancellation",
       { ...setup.context, abort: abort.signal },
       { session_id: setup.target, milestone: "ready", timeout_seconds: 30 },
     ),
-  ).toMatchObject({ ok: false, error: { code: "request_cancelled" } });
+  ).toMatchObject({ ok: false, error: { code: "storage_unavailable" } });
+  expect(await waitForCreatedRequest(setup)).toMatchObject({
+    deliveryMode: "queue",
+    deliveryState: "prepared",
+    resolutionState: "pending",
+  });
   setup.store.close();
 });
 
@@ -257,9 +263,9 @@ test("handles unsafe deadlines and process-local waiter capacity before persiste
   capacity.store.close();
 });
 
-test("a context cancellation committed during create is reported without a native claim", async () => {
+test("a queue cancellation committed during create is reported without a native claim", async () => {
   const setup = await fixture(async () => {
-    throw new Error("must not steer");
+    throw new Error("must not queue");
   });
   const requests = Object.create(setup.store) as typeof setup.store;
   const requestCreates = requests as unknown as {
@@ -268,10 +274,11 @@ test("a context cancellation committed during create is reported without a nativ
   requestCreates.createPrepared = async (input) => {
     const created = await setup.store.createPrepared(input);
     if (!created.ok) return created;
-    await setup.store.cancelContextAdmission({
+    await setup.store.cancelPending({
       fencingToken: input.fencingToken,
       workspaceKey: input.request.workspaceKey,
-      id: input.request.id,
+      requestId: input.request.id,
+      callerSessionId: setup.source,
     });
     return created;
   };

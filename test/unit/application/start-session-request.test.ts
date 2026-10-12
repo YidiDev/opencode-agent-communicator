@@ -1,4 +1,4 @@
-import { describe, expect, jest, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type {
   CompleteRequestDeliveryInput,
   PrepareRequestInput,
@@ -21,7 +21,6 @@ import type { StartOperation, ValidatedStartArguments } from "../../../src/domai
 import { createSessionStartPolicy } from "../../../src/domain/session-start-policy";
 import { validateSessionId } from "../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
-import { createSessionRequestStartTool } from "../../../src/tools/session-request-start";
 
 function value<Value>(result: { ok: true; value: Value } | { ok: false }): Value {
   if (!result.ok) throw new Error("invalid fixture");
@@ -298,7 +297,7 @@ function fixture(policyDecision: "allow" | "ask" | "deny" = "allow"): Fixture {
       nativeMessageId: () => nativeMessageId,
     } as SessionRequestStartPorts["ids"],
     digest: { sha256: async () => new Uint8Array(32).fill(0xab) },
-    policy: createSessionStartPolicy({ decision: policyDecision }),
+    policy: createSessionStartPolicy({ decision: policyDecision === "allow" ? "allow" : "deny" }),
   };
   return current;
 }
@@ -314,54 +313,14 @@ function context(controller = new AbortController(), deadlineMs = 50_000) {
 }
 
 describe("startSessionRequest policy and control boundaries", () => {
-  test("bounds a never-settling session_request_start approval before persistence", async () => {
-    jest.useFakeTimers();
-    try {
-      jest.setSystemTime(20_000);
-      const current = fixture("ask");
-      let nowMs = 20_000;
-      const {
-        approval: _approval,
-        requestAuthorization: _requestAuthorization,
-        ...ports
-      } = current.ports;
-      let approvalStarted!: () => void;
-      const started = new Promise<void>((resolve) => {
-        approvalStarted = resolve;
-      });
-      const abort = new AbortController().signal;
-      const tool = createSessionRequestStartTool(
-        { ...ports, clock: { nowMs: () => nowMs } },
-        { workspaceKey, fencingToken: token, invocationDeadlineMs: () => 20_005 },
-        { ask: "allow", wait: "allow" },
-      );
-      const pending = tool.execute(
-        {
-          idempotency_key: "request-start-approval-deadline",
-          initial_message: "Build the artifact.",
-          request: { kind: "wait", milestone: "artifact ready", timeout_seconds: 30 },
-        },
-        {
-          sessionID: sourceSessionId,
-          abort,
-          ask: () => {
-            approvalStarted();
-            return new Promise<never>(() => undefined);
-          },
-        },
-      );
-      await started;
-      nowMs = 20_005;
-      jest.advanceTimersByTime(5);
-      expect(JSON.parse(await pending)).toMatchObject({
-        ok: false,
-        error: { code: "approval_rejected" },
-      });
-      expect(current.composites).toEqual([]);
-      expect(current.events).not.toContain("native-create");
-    } finally {
-      jest.useRealTimers();
-    }
+  test("denies session_request_start statically before persistence", async () => {
+    const current = fixture("deny");
+    expect(await startSessionRequest(current.ports, context(), args)).toMatchObject({
+      ok: false,
+      error: { code: "permission_denied" },
+    });
+    expect(current.composites).toEqual([]);
+    expect(current.events).not.toContain("native-create");
   });
 
   test.each([
@@ -385,10 +344,7 @@ describe("startSessionRequest policy and control boundaries", () => {
     },
   );
 
-  test.each([
-    ["deny", "approved", "permission_denied"],
-    ["ask", "rejected", "approval_rejected"],
-  ] as const)(
+  test.each([["deny", "approved", "permission_denied"]] as const)(
     "maps composite start policy %s/%s before persistence",
     async (policy, approval, code) => {
       const current = fixture(policy);
@@ -652,13 +608,7 @@ describe("startSessionRequest fail-closed boundaries", () => {
     });
   });
 
-  test("rejects unknown approval outcomes and malformed generated identifiers", async () => {
-    const approval = fixture("ask");
-    approval.ports.approval.requestStartApproval = async () => "unknown" as never;
-    await expect(startSessionRequest(approval.ports, context(), args)).rejects.toThrow(
-      "unknown outcome",
-    );
-
+  test("rejects malformed generated identifiers", async () => {
     const identifiers = fixture();
     identifiers.ports.ids.startOperationId = () => "invalid" as never;
     await expect(startSessionRequest(identifiers.ports, context(), args)).rejects.toThrow(
@@ -666,10 +616,10 @@ describe("startSessionRequest fail-closed boundaries", () => {
     );
   });
 
-  test("accepts explicit start approval and denies managed-session recursion", async () => {
-    const approved = fixture("ask");
+  test("accepts explicit static allow and denies managed-session recursion", async () => {
+    const approved = fixture("allow");
     expect(await startSessionRequest(approved.ports, context(), args)).toMatchObject({ ok: true });
-    expect(approved.events).toContain("start-approval");
+    expect(approved.events).not.toContain("start-approval");
 
     const recursive = fixture();
     recursive.ports.starts.isManagedSession = async () => true;

@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, rmSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { OpenCodeNativeAdapter } from "../../../src/adapters/native/opencode-1-18";
+import type { OpenCodeNativeAdapter } from "../../../src/adapters/native/opencode-2";
 import {
   type CommunicatorOptions,
   parseCommunicatorOptions,
@@ -11,7 +11,6 @@ import {
 import {
   type CompositionDependencies,
   createCompositionFactory,
-  productionExportEnvironment,
 } from "../../../src/composition/plugin";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 
@@ -31,7 +30,7 @@ function rootFixture(): string {
 
 function nativeFixture(): OpenCodeNativeAdapter {
   return {
-    readHealth: async () => ({ healthy: true, version: "1.18.23" }),
+    readHealth: async () => ({ healthy: true, version: "2.0.26" }),
     readVisibleRoots: async () => [],
     readCurrentRoots: async () => ({
       sourceVisible: false,
@@ -65,6 +64,7 @@ function nativeFixture(): OpenCodeNativeAdapter {
     admitInitialMessage: async () => "unknown",
     readParticipantPresence: async () => "present",
     isEligibleContextTarget: async () => true,
+    revalidateRoot: async () => undefined,
   };
 }
 
@@ -93,8 +93,8 @@ function injectedDependencies(
       directory: join(options.stateDirectory, "..", "workspace"),
       worktree: join(options.stateDirectory, "..", "workspace"),
     }),
-    createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
-    checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
+    createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "2.0.26" }) }),
+    checkCompatibility: async () => ({ ok: true, value: { version: "2.0.26" } }),
     createNative: nativeFixture,
     createRuntime: () =>
       ({
@@ -118,11 +118,9 @@ function openDescriptorCount(path: string): number {
 
 function pluginInput() {
   return {
-    client: {},
-    directory: "/ignored",
-    worktree: "/ignored",
-    serverUrl: new URL("http://x"),
-  };
+    options: {},
+    location: { project: { canonical: "/ignored" }, directory: "/ignored" },
+  } as never;
 }
 
 afterEach(() => {
@@ -130,26 +128,6 @@ afterEach(() => {
 });
 
 describe("production composition resources", () => {
-  test("passes only allowlisted host state variables to the production exporter", () => {
-    expect(
-      productionExportEnvironment({
-        HOME: "/custom/home",
-        XDG_DATA_HOME: "/custom/data",
-        XDG_STATE_HOME: "/custom/state",
-        LANG: "en_US.UTF-8",
-        NODE_OPTIONS: "--require=/rejected",
-        LD_PRELOAD: "/rejected.so",
-        OPENCODE_CONFIG: "/rejected.json",
-        PATH: "/rejected/bin",
-      }),
-    ).toEqual({
-      HOME: "/custom/home",
-      XDG_DATA_HOME: "/custom/data",
-      XDG_STATE_HOME: "/custom/state",
-      LANG: "en_US.UTF-8",
-    });
-  });
-
   test("opens the real store and initializes the unavailable exporter when export is unconfigured", async () => {
     const root = rootFixture();
     const order: string[] = [];
@@ -159,13 +137,13 @@ describe("production composition resources", () => {
     );
     const plugin = createCompositionFactory(injectedDependencies(options, order));
 
-    const hooks = await Reflect.apply(plugin, undefined, [pluginInput(), {}]);
+    const hooks = await plugin(pluginInput());
     expect(readdirSync(options.stateDirectory)).toContain(`${workspaceKey.slice(0, 56)}.sqlite3`);
     await hooks.dispose?.();
     expect(order).toEqual(["lifecycle-stop", "scheduler-drain"]);
   });
 
-  test("initializes and disposes the real configured exporter with every bounded limit", async () => {
+  test("initializes and disposes the real configured exporter with every public limit", async () => {
     const root = rootFixture();
     const exportRoot = join(root, "exports");
     const order: string[] = [];
@@ -174,14 +152,9 @@ describe("production composition resources", () => {
         stateDirectory: join(root, "state"),
         export: {
           root: exportRoot,
-          executable: "/usr/bin/true",
-          trustedWorkingDirectory: "/usr/bin",
           limits: {
             maximumOutputBytes: 4_096,
-            maximumStderrBytes: 128,
-            maximumDurationMs: 1_000,
             maximumConcurrent: 1,
-            terminationGraceMs: 5_000,
             maximumSourceExportsPerMinute: 2,
             maximumWorkspaceExportsPerMinute: 3,
           },
@@ -193,10 +166,7 @@ describe("production composition resources", () => {
       ...injectedDependencies(options, order),
       createStore: () => ({ starts: {}, close: () => order.push("store-close") }) as never,
     };
-    const hooks = await Reflect.apply(createCompositionFactory(dependencies), undefined, [
-      pluginInput(),
-      {},
-    ]);
+    const hooks = await createCompositionFactory(dependencies)(pluginInput());
 
     expect(openDescriptorCount(exportRoot)).toBe(1);
     await hooks.dispose?.();
@@ -211,9 +181,7 @@ describe("production composition resources", () => {
       {
         stateDirectory: join(root, "state"),
         export: {
-          root: join(root, "exports"),
-          executable: "/etc/passwd",
-          trustedWorkingDirectory: "/usr/bin",
+          root: "/proc/communicator-exports",
         },
       },
       { HOME: root },
@@ -225,10 +193,7 @@ describe("production composition resources", () => {
 
     const warning = spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      const hooks = await Reflect.apply(createCompositionFactory(dependencies), undefined, [
-        pluginInput(),
-        {},
-      ]);
+      const hooks = await createCompositionFactory(dependencies)(pluginInput());
       expect(Object.keys(hooks.tool ?? {})).toHaveLength(21);
       expect(warning).toHaveBeenCalledWith(
         "Session export is unavailable because secure initialization failed.",

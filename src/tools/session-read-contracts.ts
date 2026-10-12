@@ -44,7 +44,6 @@ export const sessionReadFailureCodes = [
   "caller_not_visible",
   "target_not_visible",
   "permission_denied",
-  "approval_rejected",
   "deadline_expired",
   "native_unavailable",
   "cursor_stale",

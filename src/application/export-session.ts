@@ -10,11 +10,7 @@ import {
   stopCommunicatorForOwnershipLoss,
 } from "./communicator-readiness-port";
 import type { CurrentRootMembership } from "./delivery-ports";
-import type {
-  ExportApprovalBinding,
-  ExportEffectGuardPort,
-  SessionExportPorts,
-} from "./session-export-ports";
+import type { ExportEffectGuardPort, SessionExportPorts } from "./session-export-ports";
 import { type SessionExportArguments, sessionExportRequest } from "./session-export-request";
 import { exportAdapterFailure, isExportAdapterResult } from "./session-export-result";
 import { snapshotDataRecord } from "./strict-port-boundaries";
@@ -164,60 +160,19 @@ async function authorize(
   if (
     !decisions ||
     Object.keys(decisions).some((key) => key !== "mode" && key !== "overwrite") ||
-    (decisions.mode !== "allow" && decisions.mode !== "ask" && decisions.mode !== "deny") ||
+    (decisions.mode !== "allow" && decisions.mode !== "deny") ||
     (decisions.overwrite !== undefined &&
       decisions.overwrite !== "allow" &&
-      decisions.overwrite !== "ask" &&
       decisions.overwrite !== "deny")
   ) {
     return domainFailure("export_unavailable", "Session export policy is unavailable.", false);
   }
-  const binding: ExportApprovalBinding = {
-    workspaceKey: context.workspaceKey,
-    sourceSessionId: context.sourceSessionId,
-    targetSessionId: request.sessionId,
-    destination: request.destination,
-    isSanitized: request.isSanitized,
-    shouldOverwrite: request.shouldOverwrite,
-  };
   const decide = async (
-    kind: "mode" | "overwrite",
-    decision: "allow" | "ask" | "deny",
+    _kind: "mode" | "overwrite",
+    decision: "allow" | "deny",
   ): Promise<DomainResult<undefined>> => {
     if (decision === "deny") {
       return domainFailure("permission_denied", "Session export is denied by policy.", false);
-    }
-    if (decision === "ask") {
-      const call = await boundedExternalCall(
-        () =>
-          ports.approval.requestExportApproval(kind, binding, {
-            abort: context.abort,
-            deadlineMs: context.deadlineMs,
-          }),
-        context.abort,
-        context.deadlineMs,
-      );
-      if (call.kind === "expired") {
-        return domainFailure(
-          "export_limit_exceeded",
-          "The export invocation deadline elapsed.",
-          false,
-        );
-      }
-      if (call.kind === "rejected") {
-        return domainFailure("export_unavailable", "Session export approval is unavailable.", true);
-      }
-      const approved = call.value;
-      if (approved !== "approved" && approved !== "rejected") {
-        return domainFailure(
-          "export_unavailable",
-          "Session export approval is unavailable.",
-          false,
-        );
-      }
-      if (approved !== "approved") {
-        return domainFailure("approval_rejected", "Session export approval was rejected.", false);
-      }
     }
     return { ok: true, value: undefined };
   };

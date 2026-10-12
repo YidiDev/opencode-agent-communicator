@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 
 import { listVisibleRootSessions } from "../../../src/application/list-visible-root-sessions";
 import type {
@@ -239,7 +239,95 @@ describe("visible root session listing", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "native_unavailable" } });
     expect(fake.requests).toEqual([]);
   });
+});
 
+describe("registry-backed visible root session listing", () => {
+  test("uses registry IDs only as bounded candidates and returns authoritative revalidation", async () => {
+    const candidate = session({ id: "ses_candidate", updatedAtMs: 1 });
+    const missing = session({ id: "ses_missing", updatedAtMs: 2 });
+    const result = await listVisibleRootSessions(
+      {
+        readiness: { assertReady: () => undefined },
+        membership: {
+          async readCurrentRoots() {
+            return { sourceVisible: true, targetVisible: true, sourceTitle: "Source" };
+          },
+        },
+        registry: {
+          async listRootCandidates(suppliedWorkspace, limit) {
+            expect(suppliedWorkspace).toBe(workspaceKey);
+            expect(limit).toBe(100);
+            return [
+              {
+                id: candidate.id,
+                rootKind: "root",
+                parentSessionId: null,
+                title: "stale title",
+                isArchived: null,
+                activityStatus: "unknown",
+                activityObservedAtMs: null,
+                visibility: "unknown",
+                visibilityObservedAtMs: null,
+                firstObservedAtMs: 1,
+                lastObservedAtMs: 1,
+              },
+              {
+                id: missing.id,
+                rootKind: "root",
+                parentSessionId: null,
+                title: null,
+                isArchived: null,
+                activityStatus: "unknown",
+                activityObservedAtMs: null,
+                visibility: "unknown",
+                visibilityObservedAtMs: null,
+                firstObservedAtMs: 1,
+                lastObservedAtMs: 1,
+              },
+            ];
+          },
+        },
+        revalidation: {
+          async revalidateRoot(_workspace, sessionId) {
+            return sessionId === candidate.id
+              ? session({ id: "ses_candidate", title: "Current", updatedAtMs: 50, status: "retry" })
+              : undefined;
+          },
+        },
+      },
+      { workspaceKey, sourceSessionId },
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      value: [{ id: "ses_candidate", title: "Current", status: "retry", isActive: true }],
+    });
+  });
+
+  test("fails closed when registry listing and host revalidation are only partially wired", async () => {
+    const fake = port([]);
+    const result = await listVisibleRootSessions(
+      {
+        readiness: { assertReady: () => undefined },
+        sessions: fake.port,
+        membership: {
+          async readCurrentRoots() {
+            return { sourceVisible: true, targetVisible: true, sourceTitle: "Source" };
+          },
+        },
+        registry: {
+          async listRootCandidates() {
+            return [];
+          },
+        },
+      },
+      { workspaceKey, sourceSessionId },
+    );
+    expect(result).toMatchObject({ ok: false, error: { code: "native_unavailable" } });
+    expect(fake.requests).toEqual([]);
+  });
+});
+
+describe("visible root session listing validation", () => {
   test("validates host-canonical caller ID before membership I/O", async () => {
     const fake = port([]);
     const result = await listVisibleRootSessions(
@@ -260,31 +348,48 @@ describe("visible root session listing", () => {
 });
 
 test("aborts the in-flight native membership read when the list deadline expires", async () => {
-  let suppliedSignal: AbortSignal | undefined;
-  const result = await listVisibleRootSessions(
-    {
-      readiness: { assertReady: () => undefined },
-      sessions: { readVisibleRoots: async () => [] },
-      membership: {
-        readCurrentRoots: ((
-          _workspace: typeof workspaceKey,
-          _source: typeof sourceSessionId,
-          _target: typeof sourceSessionId,
-          signal?: AbortSignal,
-        ) => {
-          suppliedSignal = signal;
-          return new Promise(() => {});
-        }) as never,
+  jest.useFakeTimers();
+  try {
+    jest.setSystemTime(10_000);
+    let suppliedSignal: AbortSignal | undefined;
+    let markMembershipStarted!: () => void;
+    const membershipStarted = new Promise<void>((resolve) => {
+      markMembershipStarted = resolve;
+    });
+    const resultPending = listVisibleRootSessions(
+      {
+        readiness: { assertReady: () => undefined },
+        sessions: { readVisibleRoots: async () => [] },
+        membership: {
+          readCurrentRoots: ((
+            _workspace: typeof workspaceKey,
+            _source: typeof sourceSessionId,
+            _target: typeof sourceSessionId,
+            signal?: AbortSignal,
+          ) => {
+            suppliedSignal = signal;
+            markMembershipStarted();
+            return new Promise(() => {});
+          }) as never,
+        },
       },
-    },
-    {
-      workspaceKey,
-      sourceSessionId,
-      abort: new AbortController().signal,
-      deadlineMs: Date.now() + 5,
-    },
-  );
+      {
+        workspaceKey,
+        sourceSessionId,
+        abort: new AbortController().signal,
+        deadlineMs: 10_005,
+      },
+    );
 
-  expect(result).toMatchObject({ ok: false, error: { code: "deadline_expired" } });
-  expect(suppliedSignal?.aborted).toBe(true);
+    await membershipStarted;
+    expect(suppliedSignal?.aborted).toBe(false);
+    jest.advanceTimersByTime(5);
+    expect(suppliedSignal?.aborted).toBe(true);
+    expect(await resultPending).toMatchObject({
+      ok: false,
+      error: { code: "deadline_expired" },
+    });
+  } finally {
+    jest.useRealTimers();
+  }
 });

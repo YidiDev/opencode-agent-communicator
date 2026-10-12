@@ -1,4 +1,3 @@
-import type { Hooks } from "@opencode-ai/plugin";
 import { injectCommunicatorContext } from "../application/inject-communicator-context";
 
 interface TextPart {
@@ -45,7 +44,7 @@ export function createChatMessagesTransform(
   ports: Parameters<typeof injectCommunicatorContext>[0],
   context: Omit<Parameters<typeof injectCommunicatorContext>[1], "messages">,
   bookkeeping = createChatMessagesTransformBookkeeping(),
-): NonNullable<Hooks["experimental.chat.messages.transform"]> {
+): (_input: unknown, output: { messages: unknown }) => Promise<void> {
   const { inFlight, injectedText } = bookkeeping;
   return async (_input, output) => {
     if (typeof output.messages !== "object" || output.messages === null) return;

@@ -9,7 +9,6 @@ import {
   sessionStartFailureCodes,
   ToolContractFault,
 } from "./contracts";
-import { invocationStartApproval } from "./invocation-start-approval";
 import { publicStartOperation } from "./public-values";
 import {
   exactRecordWithOptionalKeys,
@@ -86,7 +85,7 @@ export function createSessionStartTool(
 ): InternalToolContract<SessionStartToolArguments> {
   return {
     description:
-      "Create one independent root session with durable source-scoped idempotency and mandatory invocation-specific approval by default.",
+      "Create one independent root session with durable source-scoped idempotency when explicitly allowed by static plugin policy.",
     args: sessionStartArgumentsSchema,
     async execute(arguments_, context) {
       const caller = toolCallerSession(context.sessionID);
@@ -101,13 +100,7 @@ export function createSessionStartTool(
         ? await startSession(
             {
               ...ports,
-              approval: invocationStartApproval(context, {
-                workspaceKey: scope.workspaceKey,
-                sourceSessionId: caller.value,
-                abort: context.abort,
-                deadlineMs,
-                clock: ports.clock,
-              }),
+              approval: { requestStartApproval: async () => "rejected" },
             },
             {
               workspaceKey: scope.workspaceKey,

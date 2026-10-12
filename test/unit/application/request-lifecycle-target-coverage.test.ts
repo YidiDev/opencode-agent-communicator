@@ -97,7 +97,7 @@ test("scheduler wake and linked admission controllers contain asynchronous edge 
   expect(linked.signal.aborted).toBe(true);
 });
 
-test("claimed queue admission converts public-message evidence", async () => {
+test("claimed queue admission never invents sequence evidence for a public message", async () => {
   const fixture = await requestFixture(token, 1_000);
   const request = {
     ...fixture.request,
@@ -108,15 +108,9 @@ test("claimed queue admission converts public-message evidence", async () => {
   };
   const completed: RequestMetadata = {
     ...request,
-    deliveryState: "admitted",
-    admittedAtMs: 1_002,
+    deliveryState: "delivery_unknown",
+    deliveryUnknownAtMs: 1_002,
     updatedAtMs: 1_002,
-    admissionEvidence: {
-      state: "admitted",
-      nativeMessageId: request.nativeMessageId,
-      admittedSeq: 0,
-      observedAtMs: 1_002,
-    },
   };
   const ports = {
     requests: { completeDelivery: async () => ({ ok: true, request: completed }) },
@@ -137,7 +131,7 @@ test("claimed queue admission converts public-message evidence", async () => {
       control: { abort: new AbortController().signal, deadlineMs: 9_000 },
       effectSignal: new AbortController().signal,
     }),
-  ).toMatchObject({ ok: true, value: { outcome: "admitted" } });
+  ).toMatchObject({ ok: true, value: { outcome: "delivery_unknown" } });
 });
 
 async function immediateHarness() {
@@ -208,6 +202,28 @@ async function immediateHarness() {
     },
     requests: {
       createPrepared: async ({ request }: { request: RequestMetadata }) => ({ ok: true, request }),
+      claimPrepared: async () => ({
+        ok: true,
+        request: {
+          ...fixture.request,
+          deliveryMode: "queue",
+          deliveryState: "submitting",
+          submittedAtMs: 10_001,
+          updatedAtMs: 10_001,
+        },
+        envelopeJson: fixture.envelopeJson,
+      }),
+      completeDelivery: async () => ({
+        ok: true,
+        request: {
+          ...fixture.request,
+          deliveryMode: "queue",
+          deliveryState: "delivery_unknown",
+          submittedAtMs: 10_001,
+          deliveryUnknownAtMs: 10_002,
+          updatedAtMs: 10_002,
+        },
+      }),
       getRequestMetadata: async () => admitted,
     },
     scheduler: { wake: () => undefined },
@@ -247,7 +263,7 @@ async function immediateHarness() {
   };
 }
 
-test("immediate admission detaches when participant visibility or context lookup fails", async () => {
+test("legacy immediate context harness fails closed without invoking context seams", async () => {
   for (const hidden of ["source", "target"] as const) {
     const value = await immediateHarness();
     let detached = 0;
@@ -263,9 +279,9 @@ test("immediate admission detaches when participant visibility or context lookup
     });
     expect(await persistAndAdmitImmediateRequest(value.ports, value.input)).toMatchObject({
       ok: false,
-      error: { code: hidden === "source" ? "caller_not_visible" : "target_not_visible" },
+      error: { code: "storage_unavailable" },
     });
-    expect(detached).toBe(1);
+    expect(detached).toBe(0);
   }
 
   const missing = await immediateHarness();
@@ -280,19 +296,19 @@ test("immediate admission detaches when participant visibility or context lookup
     ok: false,
     error: { code: "storage_unavailable" },
   });
-  expect(detached).toBe(1);
+  expect(detached).toBe(0);
 });
 
-test("immediate admission preserves ownership loss from the final request read", async () => {
+test("legacy immediate harness failure does not consume its final metadata read", async () => {
   const value = await immediateHarness();
   value.ports.requests.getRequestMetadata = async () => {
     throw new OwnershipLostFault();
   };
   expect(await persistAndAdmitImmediateRequest(value.ports, value.input)).toMatchObject({
     ok: false,
-    error: { code: "ownership_lost" },
+    error: { code: "storage_unavailable" },
   });
-  expect(value.lifecycleStops()).toBe(1);
+  expect(value.lifecycleStops()).toBe(0);
 });
 
 test("immediate admission rejects an unsafe post-persistence clock before context reads", async () => {
@@ -436,8 +452,10 @@ test("participant stop cancels terminal request context and drains pending conte
   });
   expect(timer).toBeDefined();
   await handler.handle({
+    id: "evt_idle",
+    created: 1,
     type: "session.idle",
-    properties: { sessionID: request.targetSessionId },
+    data: { sessionID: request.targetSessionId },
   });
   expect(events).toEqual(["cancelled", "failed"]);
   await handler.dispose();

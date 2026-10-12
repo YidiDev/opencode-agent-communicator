@@ -90,9 +90,7 @@ async function performNativeSteer(
             abort: signal,
           })
           .then((value) =>
-            value.kind === "public_message"
-              ? { kind: "admitted" as const, admittedSeq: 0, observedAtMs: value.observedAtMs }
-              : value,
+            value.kind === "public_message" ? { kind: "unknown" as const } : value,
           );
     } else {
       submit = () =>

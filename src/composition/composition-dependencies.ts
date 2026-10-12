@@ -1,14 +1,13 @@
-import type { PluginInput } from "@opencode-ai/plugin";
+import type { Plugin } from "@opencode/plugin/effect";
 import type {
-  createOpenCode118NativeAdapter,
+  createOpenCode2NativeAdapter,
   OpenCodeNativeAdapter,
-} from "../adapters/native/opencode-1-18";
+} from "../adapters/native/opencode-2";
 import type { LinuxBunSqliteStore } from "../adapters/store/sqlite-store";
 import type {
   AdvisoryLockPostCommitNotificationPort,
   AdvisoryLockWakePort,
 } from "../application/advisory-lock-use-cases";
-import type { checkHostCompatibility } from "../application/check-host-compatibility";
 import type { CommunicatorStartupRecoveryLifecycle } from "../application/communicator-startup-lifecycle";
 import type { ContextAdmissionRuntime } from "../application/context-admission-runtime";
 import type { ClockPort } from "../application/delivery-ports";
@@ -27,10 +26,17 @@ import type { deriveWorkspaceBinding } from "./workspace";
 export interface CompositionDependencies {
   readonly parseOptions: typeof parseCommunicatorOptions;
   readonly deriveWorkspace: typeof deriveWorkspaceBinding;
-  readonly createHealth: (input: PluginInput) => HostHealthPort;
+  readonly createHealth: (input: Plugin.Context) => HostHealthPort;
   readonly runtimeIdentity: RuntimeIdentityPort;
-  readonly createNative: typeof createOpenCode118NativeAdapter;
-  readonly checkCompatibility: typeof checkHostCompatibility;
+  readonly createNative: typeof createOpenCode2NativeAdapter;
+  readonly checkCompatibility: (
+    runtime: RuntimeIdentityPort,
+    health: HostHealthPort,
+    control: { readonly abort: AbortSignal; readonly deadlineMs: number },
+  ) => Promise<
+    | { readonly ok: true; readonly value: { readonly version: string } }
+    | { readonly ok: false; readonly error: { readonly message: string } }
+  >;
   readonly createStore: (
     options: ConstructorParameters<typeof LinuxBunSqliteStore>[0],
   ) => LinuxBunSqliteStore;
@@ -63,7 +69,7 @@ export interface CompositionDependencies {
   ) => Promise<void>;
   readonly createExporter: (
     options: CommunicatorOptions,
-    input: PluginInput,
+    input: { readonly native: OpenCodeNativeAdapter },
   ) => ReturnType<typeof createProductionExporter> & {
     readonly adapter: SessionExportAdapterPort;
   };

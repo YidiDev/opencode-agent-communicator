@@ -1,10 +1,12 @@
+import { participantDeletionCandidatesHardCeiling } from "../domain/safety-ceilings";
+import { type SessionId, validateSessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
 import type { CommunicatorStartupRecoveryLifecycle } from "./communicator-startup-lifecycle";
 import type { ParticipantContextPersistencePort } from "./context-admission-ports";
 import type { ContextAdmissionNotificationPort } from "./context-admission-runtime";
 import {
-  isOpenCode118SessionDeletedEvent,
-  parseOpenCode118SessionDeletedEvent,
+  isOpenCode2SessionDeletedEvent,
+  parseOpenCode2SessionDeletedEvent,
 } from "./participant-deletion-evidence";
 import type {
   NativeParticipantPresencePort,
@@ -18,6 +20,7 @@ import {
 import type { ParticipantOperationPort } from "./participant-operation-gate";
 import { RequestDeadlineSchedulerFault } from "./request-deadline-scheduler";
 import type { CommittedRequestNotificationPort } from "./request-notification-port";
+import { snapshotDataRecord, snapshotDenseArray } from "./strict-port-boundaries";
 
 export const participantDeletionMaximumConcurrentEvents = 64;
 export const participantDeletionMaximumRememberedSessions = 1_024;
@@ -76,24 +79,16 @@ export class ParticipantDeletionLifecycle {
   }
 
   async handle(value: unknown): Promise<void> {
-    if (!isOpenCode118SessionDeletedEvent(value)) return;
+    if (!isOpenCode2SessionDeletedEvent(value)) return;
     if (this.disposing || this.effects.signal.aborted) return;
     if (this.options.lifecycle.status !== "ready") return;
-    let evidence: ReturnType<typeof parseOpenCode118SessionDeletedEvent>;
-    try {
-      evidence = parseOpenCode118SessionDeletedEvent(value);
-      if (!evidence) throw new TypeError("OpenCode session.deleted evidence is malformed.");
-    } catch (cause: unknown) {
-      this.fail("port_contract_violation");
-      throw cause;
-    }
+    const evidence = this.parseEvidence(value);
     if (
-      evidence.directory !== this.options.directory ||
-      evidence.projectId !== this.options.projectId ||
-      !evidence.isRoot ||
+      (evidence.directory !== undefined && evidence.directory !== this.options.directory) ||
       this.effects.signal.aborted
     )
       return;
+    if (!(await this.isRegisteredParticipant(evidence.sessionId))) return;
     if (this.completed.has(evidence.sessionId)) return;
     const existing = this.inFlight.get(evidence.sessionId);
     if (existing) {
@@ -136,6 +131,19 @@ export class ParticipantDeletionLifecycle {
     await Promise.allSettled([...this.active]);
   }
 
+  private parseEvidence(
+    value: unknown,
+  ): NonNullable<ReturnType<typeof parseOpenCode2SessionDeletedEvent>> {
+    try {
+      const evidence = parseOpenCode2SessionDeletedEvent(value);
+      if (!evidence) throw new TypeError("OpenCode session.deleted evidence is malformed.");
+      return evidence;
+    } catch (cause: unknown) {
+      this.fail("port_contract_violation");
+      throw cause;
+    }
+  }
+
   private async applyDeletionHint(
     deletedSessionId: import("../domain/sessions").SessionId,
   ): Promise<boolean> {
@@ -152,6 +160,48 @@ export class ParticipantDeletionLifecycle {
         throw cause.cause;
       throw new Error("Participant deletion persistence failed closed.", { cause });
     }
+  }
+
+  /** The v2 deletion payload has no project or root fields; authorize against scoped durable state. */
+  private async isRegisteredParticipant(sessionId: SessionId): Promise<boolean> {
+    let raw: unknown;
+    try {
+      raw = await this.options.requests.listParticipantDeletionCandidates({
+        fencingToken: this.options.lifecycle.fencingToken,
+        workspaceKey: this.options.workspaceKey,
+      });
+    } catch (cause: unknown) {
+      this.fail("storage_failure");
+      throw new Error("Participant deletion registry lookup failed closed.", { cause });
+    }
+    const result = snapshotDataRecord(raw, 2);
+    if (
+      result?.ok === false &&
+      Object.keys(result).length === 2 &&
+      (result.code === "ownership_lost" || result.code === "storage_unavailable")
+    ) {
+      const code = result.code === "ownership_lost" ? "ownership_lost" : "storage_failure";
+      this.fail(code);
+      throw new Error("Participant deletion registry lookup failed closed.");
+    }
+    const values =
+      result?.ok === true
+        ? snapshotDenseArray(result.sessionIds, participantDeletionCandidatesHardCeiling)
+        : undefined;
+    if (!result || Object.keys(result).length !== 2 || !values) {
+      this.fail("port_contract_violation");
+      throw new Error("Participant deletion registry lookup failed closed.");
+    }
+    const seen = new Set<SessionId>();
+    for (const value of values) {
+      const candidate = validateSessionId(value);
+      if (!candidate.ok || seen.has(candidate.value)) {
+        this.fail("port_contract_violation");
+        throw new Error("Participant deletion registry lookup failed closed.");
+      }
+      seen.add(candidate.value);
+    }
+    return seen.has(sessionId);
   }
 
   private armPeriodic(): void {

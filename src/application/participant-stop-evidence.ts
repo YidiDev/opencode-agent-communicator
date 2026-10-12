@@ -1,21 +1,29 @@
 import { type SessionId, validateSessionId } from "../domain/sessions";
 
-export interface OpenCode118ParticipantActivityEvidence {
+export interface OpenCode2ParticipantActivityEvidence {
   readonly sessionId: SessionId;
   readonly activity: "busy" | "retry" | "idle";
+  readonly directory?: string;
 }
 
 type DataRecord = Record<string, unknown>;
 
-function exactRecord(value: unknown, required: readonly string[]): DataRecord | undefined {
+function exactRecord(
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): DataRecord | undefined {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) return undefined;
     const keys = Reflect.ownKeys(value);
     if (
-      keys.length !== required.length ||
-      keys.some((key) => typeof key !== "string" || !required.includes(key)) ||
+      keys.length < required.length ||
+      keys.length > required.length + optional.length ||
+      keys.some(
+        (key) => typeof key !== "string" || (!required.includes(key) && !optional.includes(key)),
+      ) ||
       required.some((key) => !keys.includes(key))
     )
       return undefined;
@@ -31,7 +39,37 @@ function exactRecord(value: unknown, required: readonly string[]): DataRecord | 
   }
 }
 
-export function parseOpenCode118ParticipantStatus(
+function boundedString(value: unknown, maximum: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= maximum;
+}
+
+function validMetadata(value: unknown): boolean {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return false;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length > 1_000 || keys.some((key) => typeof key !== "string")) return false;
+    return keys.every((key) => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      return descriptor?.enumerable === true && "value" in descriptor;
+    });
+  } catch {
+    return false;
+  }
+}
+
+function parseLocation(value: unknown): string | undefined | false {
+  const location =
+    exactRecord(value, ["directory"]) ?? exactRecord(value, ["directory", "workspaceID"]);
+  if (!location || !boundedString(location.directory, 4096)) return false;
+  if (Object.hasOwn(location, "workspaceID") && !boundedString(location.workspaceID, 512)) {
+    return false;
+  }
+  return location.directory;
+}
+
+export function parseOpenCode2ParticipantStatus(
   value: unknown,
 ): "busy" | "retry" | "idle" | undefined {
   const record = exactRecord(value, ["type"]);
@@ -45,9 +83,8 @@ export function parseOpenCode118ParticipantStatus(
     (retry.attempt as number) < 0 ||
     typeof retry.message !== "string" ||
     retry.message.length > 65_536 ||
-    typeof retry.next !== "number" ||
-    !Number.isFinite(retry.next) ||
-    retry.next < 0
+    !Number.isSafeInteger(retry.next) ||
+    (retry.next as number) < 0
   )
     return undefined;
   if (Object.hasOwn(retry, "action")) {
@@ -67,37 +104,41 @@ export function parseOpenCode118ParticipantStatus(
   return "retry";
 }
 
-/** Parses only the pinned OpenCode 1.18 idle and status hook shapes. */
-export function parseOpenCode118ParticipantActivityEvent(
+/** Parses only the public OpenCode 2.0.26 idle and status event payloads. */
+export function parseOpenCode2ParticipantActivityEvent(
   value: unknown,
-): OpenCode118ParticipantActivityEvidence | undefined {
-  if (!isOpenCode118ParticipantActivityEvent(value)) return undefined;
-  const event =
-    exactRecord(value, ["type", "properties"]) ?? exactRecord(value, ["id", "type", "properties"]);
+): OpenCode2ParticipantActivityEvidence | undefined {
+  if (!isOpenCode2ParticipantActivityEvent(value)) return undefined;
+  const event = exactRecord(value, ["id", "created", "type", "data"], ["location", "metadata"]);
   if (
     !event ||
-    (event.id !== undefined &&
-      (typeof event.id !== "string" || event.id.length === 0 || event.id.length > 256)) ||
-    (event.type !== "session.idle" && event.type !== "session.status")
+    !boundedString(event.id, 256) ||
+    typeof event.created !== "number" ||
+    !Number.isFinite(event.created) ||
+    (event.type !== "session.idle" && event.type !== "session.status") ||
+    (Object.hasOwn(event, "metadata") && !validMetadata(event.metadata))
   ) {
     throw new TypeError("OpenCode participant activity evidence is malformed.");
   }
-  const properties =
+  const directory = Object.hasOwn(event, "location") ? parseLocation(event.location) : undefined;
+  const data =
     event.type === "session.idle"
-      ? exactRecord(event.properties, ["sessionID"])
-      : exactRecord(event.properties, ["sessionID", "status"]);
-  const id = properties && validateSessionId(properties.sessionID);
+      ? exactRecord(event.data, ["sessionID"])
+      : exactRecord(event.data, ["sessionID", "status"]);
+  const id = data && validateSessionId(data.sessionID);
   const activity =
-    event.type === "session.idle"
-      ? "idle"
-      : properties && parseOpenCode118ParticipantStatus(properties.status);
-  if (!properties || !id?.ok || activity === undefined) {
+    event.type === "session.idle" ? "idle" : data && parseOpenCode2ParticipantStatus(data.status);
+  if (directory === false || !data || !id?.ok || activity === undefined) {
     throw new TypeError(`OpenCode ${String(event.type)} evidence is malformed.`);
   }
-  return Object.freeze({ sessionId: id.value, activity });
+  return Object.freeze({
+    sessionId: id.value,
+    activity,
+    ...(directory === undefined ? {} : { directory }),
+  });
 }
 
-export function isOpenCode118ParticipantActivityEvent(value: unknown): boolean {
+export function isOpenCode2ParticipantActivityEvent(value: unknown): boolean {
   try {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
     const descriptor = Object.getOwnPropertyDescriptor(value, "type");

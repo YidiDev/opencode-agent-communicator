@@ -17,8 +17,8 @@ export function sessionExportRequest(
   if (!target.ok) return domainFailure("invalid_arguments", target.message, false);
   const destination = validateExportDestination(args.destination);
   if (!destination.ok) return domainFailure("invalid_arguments", destination.message, false);
-  if (args.sanitize !== undefined && typeof args.sanitize !== "boolean") {
-    return domainFailure("invalid_arguments", "sanitize must be a boolean.", false);
+  if (args.sanitize !== undefined && args.sanitize !== true) {
+    return domainFailure("invalid_arguments", "Unsanitized session export is unsupported.", false);
   }
   if (args.overwrite !== undefined && typeof args.overwrite !== "boolean") {
     return domainFailure("invalid_arguments", "overwrite must be a boolean.", false);

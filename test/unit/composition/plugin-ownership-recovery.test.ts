@@ -6,6 +6,13 @@ import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 const workspace = validateWorkspaceKey("recovery-workspace");
 if (!workspace.ok) throw new Error("Invalid workspace fixture.");
 
+function pluginContext() {
+  return {
+    options: {},
+    location: { project: { canonical: "/" }, directory: "/" },
+  } as never;
+}
+
 class LifecycleFixture {
   readonly effectSignal = new AbortController().signal;
   readonly scheduler = { wake: () => undefined, drain: async () => undefined };
@@ -70,8 +77,8 @@ describe("plugin ownership recovery", () => {
         directory: "/",
         worktree: "/",
       }),
-      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
-      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "2.0.26" }) }),
+      checkCompatibility: async () => ({ ok: true, value: { version: "2.0.26" } }),
       createNative: () =>
         ({
           readCurrentRoots: async () => ({
@@ -87,6 +94,11 @@ describe("plugin ownership recovery", () => {
         stores += 1;
         return {
           starts: {},
+          recordParticipantObservations: async (input: { observations: readonly unknown[] }) => ({
+            ok: true,
+            recorded: input.observations.length,
+          }),
+          listParticipantRootCandidates: async () => [],
           ownershipTakeoverDelayMs: () => 0,
           close: () => undefined,
         } as never;
@@ -103,7 +115,7 @@ describe("plugin ownership recovery", () => {
         adapter: { writeExport: async () => ({ ok: false, code: "export_unavailable" }) },
       }),
     });
-    const hooks = await Reflect.apply(plugin, undefined, [{}, {}]);
+    const hooks = await plugin(pluginContext());
     const sessionList = hooks.tool?.session_list;
     if (!sessionList) throw new Error("session_list was not registered");
 
@@ -135,8 +147,8 @@ describe("plugin ownership recovery", () => {
         directory: "/",
         worktree: "/",
       }),
-      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
-      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "2.0.26" }) }),
+      checkCompatibility: async () => ({ ok: true, value: { version: "2.0.26" } }),
       createNative: () =>
         ({
           readParticipantPresence: async () => "present",
@@ -166,9 +178,7 @@ describe("plugin ownership recovery", () => {
       },
     });
 
-    await expect(Reflect.apply(plugin, undefined, [{}, {}])).rejects.toThrow(
-      "generation recovery failed",
-    );
+    await expect(plugin(pluginContext())).rejects.toThrow("generation recovery failed");
     expect(order).toEqual([
       "lifecycle-stop",
       "scheduler-drain",
@@ -189,8 +199,8 @@ describe("plugin ownership recovery", () => {
         directory: "/",
         worktree: "/",
       }),
-      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
-      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "2.0.26" }) }),
+      checkCompatibility: async () => ({ ok: true, value: { version: "2.0.26" } }),
       createNative: () =>
         ({
           readParticipantPresence: async () => "present",
@@ -216,9 +226,7 @@ describe("plugin ownership recovery", () => {
       },
     });
 
-    await expect(Reflect.apply(plugin, undefined, [{}, {}])).rejects.toThrow(
-      "Communicator ownership ended.",
-    );
+    await expect(plugin(pluginContext())).rejects.toThrow("Communicator ownership ended.");
     expect(storesClosed).toBe(1);
   });
 });

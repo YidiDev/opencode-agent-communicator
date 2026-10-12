@@ -24,10 +24,10 @@ function toolContext(sessionID: string) {
 }
 
 test("ask tool protocol exposes inbox payload, response, result, and acknowledgement", async () => {
-  const steered = deferred<string>();
+  const queued = deferred<string>();
   const setup = await blockingRequestFixture(async ({ envelope }) => {
-    steered.resolve(envelope);
-    return { kind: "admitted", admittedSeq: 1, observedAtMs: 25_000 };
+    queued.resolve(envelope);
+    return { kind: "public_message", observedAtMs: 25_000 };
   });
   const scope = {
     workspaceKey: requestTestWorkspace(),
@@ -44,7 +44,7 @@ test("ask tool protocol exposes inbox payload, response, result, and acknowledge
     },
     toolContext(setup.source),
   );
-  const requestId = requestIdFromEnvelope(await steered.promise);
+  const requestId = requestIdFromEnvelope(await queued.promise);
 
   const list = createSessionRequestListTool(
     {
@@ -160,10 +160,10 @@ test("ask tool protocol exposes inbox payload, response, result, and acknowledge
 });
 
 test("wait and signal tools complete with bounded evidence", async () => {
-  const steered = deferred<string>();
+  const queued = deferred<string>();
   const setup = await blockingRequestFixture(async ({ envelope }) => {
-    steered.resolve(envelope);
-    return { kind: "promoted", admittedSeq: 2, promotedSeq: 3, observedAtMs: 25_000 };
+    queued.resolve(envelope);
+    return { kind: "public_message", observedAtMs: 25_000 };
   });
   const scope = {
     workspaceKey: requestTestWorkspace(),
@@ -175,7 +175,7 @@ test("wait and signal tools complete with bounded evidence", async () => {
     { session_id: setup.target, milestone: "compiled", timeout_seconds: 30 },
     toolContext(setup.source),
   );
-  const requestId = requestIdFromEnvelope(await steered.promise);
+  const requestId = requestIdFromEnvelope(await queued.promise);
   const respond = createSessionRespondTool(setup.mutationPorts, scope);
   expect(
     JSON.parse(
@@ -199,10 +199,10 @@ test("wait and signal tools complete with bounded evidence", async () => {
 });
 
 test("maximum wait keeps the persisted request deadline ahead of invocation cancellation", async () => {
-  const steered = deferred<string>();
+  const queued = deferred<string>();
   const setup = await blockingRequestFixture(async ({ envelope }) => {
-    steered.resolve(envelope);
-    return { kind: "admitted", admittedSeq: 2, observedAtMs: 25_000 };
+    queued.resolve(envelope);
+    return { kind: "public_message", observedAtMs: 25_000 };
   });
   let requestedMinimumDurationMs: number | undefined;
   const wait = createSessionWaitTool(setup.ports, {
@@ -219,7 +219,7 @@ test("maximum wait keeps the persisted request deadline ahead of invocation canc
     { session_id: setup.target, milestone: "maximum", timeout_seconds: 3_600 },
     { sessionID: setup.source, abort: controller.signal },
   );
-  const envelope = JSON.parse(await steered.promise);
+  const envelope = JSON.parse(await queued.promise);
 
   expect(requestedMinimumDurationMs).toBe(3_600_000 + blockingRequestDeadlineMarginMs * 2);
   expect(envelope.deadline_at_ms).toBe(25_000 + 3_600_000);
@@ -237,10 +237,10 @@ test("maximum wait keeps the persisted request deadline ahead of invocation canc
 });
 
 test("cancel tool terminalizes a pending wait and releases the blocked source", async () => {
-  const steered = deferred<string>();
+  const queued = deferred<string>();
   const setup = await blockingRequestFixture(async ({ envelope }) => {
-    steered.resolve(envelope);
-    return { kind: "admitted", admittedSeq: 4, observedAtMs: 25_000 };
+    queued.resolve(envelope);
+    return { kind: "public_message", observedAtMs: 25_000 };
   });
   const scope = {
     workspaceKey: requestTestWorkspace(),
@@ -252,7 +252,7 @@ test("cancel tool terminalizes a pending wait and releases the blocked source", 
     { session_id: setup.target, milestone: "publish", timeout_seconds: 30 },
     toolContext(setup.source),
   );
-  const requestId = requestIdFromEnvelope(await steered.promise);
+  const requestId = requestIdFromEnvelope(await queued.promise);
   const cancel = createSessionRequestCancelTool(setup.mutationPorts, scope);
   expect(
     JSON.parse(await cancel.execute({ request_id: requestId }, toolContext(setup.source))),

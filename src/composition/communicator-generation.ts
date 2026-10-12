@@ -1,5 +1,4 @@
-import type { Hooks, PluginInput } from "@opencode-ai/plugin";
-import type { OpenCodeNativeAdapter } from "../adapters/native/opencode-1-18";
+import type { OpenCodeNativeAdapter } from "../adapters/native/opencode-2";
 import type { LinuxBunSqliteStore } from "../adapters/store/sqlite-store";
 import {
   OwnershipUnavailableError,
@@ -42,12 +41,12 @@ import { configuredStartPolicy, constructToolContracts } from "./tools";
 import { unavailableSessionExporter } from "./unavailable-exporter";
 import type { WorkspaceBinding } from "./workspace";
 
-type EventHook = NonNullable<Hooks["event"]>;
+type EventHook = (input: { readonly event: unknown }) => Promise<void>;
 
 export { CommunicatorGeneration, type CommunicatorToolContracts };
 
 export interface CommunicatorGenerationFactoryInput {
-  readonly pluginInput: PluginInput;
+  readonly pluginInput: { readonly directory: string; readonly worktree: string };
   readonly options: CommunicatorOptions;
   readonly workspace: WorkspaceBinding;
   readonly native: OpenCodeNativeAdapter;
@@ -294,9 +293,7 @@ export async function createCommunicatorGeneration(
     assertBoundary();
     try {
       exporter = dependencies.createExporter(options, {
-        ...input.pluginInput,
-        directory: workspace.directory,
-        worktree: workspace.worktree,
+        native,
       });
     } catch {
       console.warn("Session export is unavailable because secure initialization failed.");

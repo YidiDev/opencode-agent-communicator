@@ -12,7 +12,12 @@ import { type DomainResult, domainFailure } from "../domain/results";
 import { type SessionId, validateSessionId } from "../domain/sessions";
 import { validateWorkspaceKey, type WorkspaceKey } from "../domain/workspaces";
 import type { CommunicatorReadinessPort } from "./communicator-readiness-port";
-import type { ClockPort, CurrentWorkspaceMembershipPort, OwnershipPort } from "./delivery-ports";
+import type {
+  ClockPort,
+  CurrentWorkspaceMembershipPort,
+  NativeQueueAdmissionPort,
+  OwnershipPort,
+} from "./delivery-ports";
 import type { ParticipantOperationPort } from "./participant-operation-gate";
 import type { RequestAuthorizationPort } from "./request-authorization-port";
 import type { CommittedRequestNotificationPort } from "./request-notification-port";
@@ -69,6 +74,7 @@ export interface SessionBlockingRequestPorts {
     RequestTerminalPersistencePort &
     RequestParticipantQueryPort;
   readonly nativeSteer: NativeSteerAdmissionPort;
+  readonly nativeQueue?: NativeQueueAdmissionPort;
   readonly ownership: OwnershipPort;
   readonly notifications: CommittedRequestNotificationPort;
   readonly runtime: RequestRuntime;

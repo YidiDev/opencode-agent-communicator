@@ -50,9 +50,8 @@ describe("session export domain", () => {
   test("ships secure policy defaults and rejects malformed policy", () => {
     expect(createSessionExportPolicy()).toEqual({
       selfSanitized: "allow",
-      crossSession: "ask",
-      unsanitized: "ask",
-      overwrite: "ask",
+      crossSession: "deny",
+      overwrite: "deny",
     });
     expect(() => createSessionExportPolicy({ overwrite: "other" as never })).toThrow();
   });

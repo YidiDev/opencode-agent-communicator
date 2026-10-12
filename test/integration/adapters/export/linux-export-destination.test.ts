@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import * as fileSystem from "node:fs";
 import {
   chmodSync,
   closeSync,
@@ -98,6 +99,30 @@ describe("Linux descriptor-relative export destination", () => {
     expect(() => temporary.write(new Uint8Array([1]))).toThrow(
       expect.objectContaining({ kind: "storage_unavailable" }),
     );
+    expect(() => temporary.install(false)).toThrow(
+      expect.objectContaining({ kind: "storage_unavailable" }),
+    );
+    temporary.discard();
+  });
+
+  test("maps unexpected descriptor failures to storage unavailable", () => {
+    const paths = temporaryRoot();
+    using root = LinuxExportRoot.open(paths.exports);
+    root.createTemporary("nested/setup", "f".repeat(32)).discard();
+    const stat = spyOn(fileSystem, "fstatSync").mockImplementation(() => {
+      throw new Error("unexpected descriptor failure");
+    });
+    try {
+      expect(() => root.createTemporary("nested/x.json", "f".repeat(32))).toThrow(
+        expect.objectContaining({ kind: "storage_unavailable" }),
+      );
+    } finally {
+      stat.mockRestore();
+    }
+
+    const temporary = root.createTemporary("x.json", "f".repeat(32));
+    closeSync(temporary.descriptor);
+
     expect(() => temporary.install(false)).toThrow(
       expect.objectContaining({ kind: "storage_unavailable" }),
     );

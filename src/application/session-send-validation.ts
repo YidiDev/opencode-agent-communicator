@@ -54,7 +54,7 @@ export function validateSendArguments(
       content: args.content as string,
       bytes: content.bytes,
       byteLength: content.byteLength,
-      delivery: args.delivery ?? "context",
+      delivery: args.delivery ?? "user",
     },
   };
 }

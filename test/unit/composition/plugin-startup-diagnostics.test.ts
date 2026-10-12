@@ -7,6 +7,13 @@ import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 const workspace = validateWorkspaceKey("startup-diagnostic");
 if (!workspace.ok) throw new Error("Invalid workspace fixture.");
 
+function pluginContext() {
+  return {
+    options: {},
+    location: { project: { canonical: "/" }, directory: "/" },
+  } as never;
+}
+
 const invalidStartupClocks: ReadonlyArray<readonly [string, () => number]> = [
   [
     "throws",
@@ -43,7 +50,7 @@ describe("composition startup diagnostics", () => {
         },
         checkCompatibility: async () => {
           compatibility += 1;
-          return { ok: true, value: { version: "1.18.23" } };
+          return { ok: true, value: { version: "2.0.26" } };
         },
         createNative: () => {
           native += 1;
@@ -55,7 +62,7 @@ describe("composition startup diagnostics", () => {
         },
       });
 
-      await expect(Reflect.apply(plugin, undefined, [{}, {}])).rejects.toThrow(
+      await expect(plugin(pluginContext())).rejects.toThrow(
         "Communicator startup timing is invalid.",
       );
       expect({ health, compatibility, native, stores }).toEqual({
@@ -77,8 +84,8 @@ describe("composition startup diagnostics", () => {
         directory: "/",
         worktree: "/",
       }),
-      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
-      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "2.0.26" }) }),
+      checkCompatibility: async () => ({ ok: true, value: { version: "2.0.26" } }),
       createNative: () => ({}) as never,
       createStore: () =>
         ({
@@ -101,7 +108,7 @@ describe("composition startup diagnostics", () => {
     });
 
     const diagnostic = "Communicator ownership could not be established safely.";
-    await expect(Reflect.apply(plugin, undefined, [{}, {}])).rejects.toThrow(diagnostic);
+    await expect(plugin(pluginContext())).rejects.toThrow(diagnostic);
     expect(closes).toBe(1);
   });
 });

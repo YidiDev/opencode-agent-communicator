@@ -81,7 +81,7 @@ function fixture(): SessionStartPorts {
       nativeMessageId: () => messageId,
     },
     digest: { sha256: async () => new Uint8Array(32) },
-    policy: createSessionStartPolicy(),
+    policy: createSessionStartPolicy({ decision: "allow" }),
   };
 }
 
@@ -190,7 +190,6 @@ describe("session-start failure boundaries", () => {
   test("terminalizes denied or rejected starts and preserves transition failures", async () => {
     for (const [decision, approval, expected] of [
       ["deny", "approved", "permission_denied"],
-      ["ask", "rejected", "approval_rejected"],
     ] as const) {
       const ports = { ...fixture(), policy: createSessionStartPolicy({ decision }) };
       ports.approval.requestStartApproval = async () => approval;
@@ -206,18 +205,11 @@ describe("session-start failure boundaries", () => {
       ).toMatchObject({ ok: false, error: { code: expected } });
     }
 
-    const invalid = fixture();
-    invalid.approval.requestStartApproval = async () => "future" as never;
-    await expect(
-      approvePreparedStart(invalid, context(), token, {
-        operation,
-        argumentsSha256: operation.argumentsSha256,
-      }),
-    ).rejects.toThrow("unknown outcome");
-
     for (const cause of [new OwnershipLostFault("lease"), new Error("disk")]) {
       const ports = fixture();
-      ports.approval.requestStartApproval = async () => "rejected";
+      (ports as { policy: SessionStartPorts["policy"] }).policy = createSessionStartPolicy({
+        decision: "deny",
+      });
       ports.starts.rejectPreparedStart = async () => {
         throw cause;
       };
