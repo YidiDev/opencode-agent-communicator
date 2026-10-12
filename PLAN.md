@@ -7,6 +7,36 @@ communication and coordination between first-class OpenCode sessions. It is for
 users running several sessions concurrently against the same workspace and
 OpenCode backend.
 
+### Current OpenCode v2 baseline
+
+This section is normative for issue #46 and supersedes the historical OpenCode 1.18 feasibility and
+transport descriptions retained later in this plan.
+
+- The certified host is Linux x64 with Bun `1.4.0` and stable OpenCode `>=2.0.26 <2.1.0`.
+  `@opencode/plugin` and `@opencode/cli` are pinned to `2.0.26` for the build.
+- The entrypoint is a public v2 Effect plugin created with `Plugin.define`. Recovery completes in the
+  scoped plugin effect before `tool.transform` publishes the exact existing 21 tool IDs;
+  `skill.transform` publishes the exact three bundled skills. No private HTTP transport is allowed.
+- OpenCode v2 exposes ID-addressed sessions but no authoritative global inventory. `session_list`
+  therefore queries the bounded communicator-observed participant registry introduced by migration
+  v17, then authoritatively revalidates every candidate through the public session API. Registry
+  presence is discovery evidence, never visibility, deletion, activity, or authorization proof.
+- Transcript-visible message delivery and existing-root ask/wait workflows persist their prepared
+  state before one public queue admission. They require current root visibility but no prior
+  `busy`/`retry` observation. Admission never proves activation, reading, compliance, or completion.
+- `session_read` and `session_export` consume only the bounded public current-model-context snapshot.
+  Both expose sanitized projections, not complete history. Snapshot changes fail cursors closed;
+  neither operation may infer omitted content or call a private transcript endpoint. Export is always
+  sanitized and does not spawn the OpenCode CLI. Its public limits are output bytes, concurrency,
+  and per-source/workspace rates; obsolete CLI stderr, duration, and termination-grace fields are
+  rejected as unknown configuration.
+- Sensitive actions use static `allow`/`deny` policy. Cross-session read, start, stop,
+  cross-session export, and overwrite default to `deny`. Legacy `ask` and unsanitized-export policy
+  are rejected rather than silently widened.
+- Ownership combines monotonic local expiry with nondecreasing persisted wall-clock lease times.
+  Wall-clock regression must not shorten a lease, revive local ownership, reduce fencing, or permit
+  early takeover.
+
 The original `0.1.0` prerelease exposed this fourteen-tool surface:
 
 - `session_list`
@@ -46,16 +76,16 @@ communicator.
 
 Every operation derives its verified source session ID from
 `ToolContext.sessionID`; models cannot supply or override sender identity.
-OpenCode owns prompt execution and transcript storage. The communicator stores bounded context
-envelopes, delivery metadata, durable blocking requests, retained results, start operations,
+OpenCode owns prompt execution and context storage. The communicator stores bounded envelopes,
+delivery metadata, durable blocking requests, retained results, start operations,
 authorization metadata, quotas, and store ownership in SQLite. Existing-root peer delivery defaults
-to provider context injected through `experimental.chat.messages.transform`; it does not create a
-native transcript turn. Peer fields remain explicitly untrusted.
+to a persisted public queue admission and creates a transcript-visible user turn. Peer fields remain
+explicitly untrusted.
 
-Only explicit `session_send` with `delivery: "user"` may wake an existing idle session. Default
-context send, structured questions, milestone waits, and existing-root request-send require a target
-observed as `busy` or `retry`. Idle or unknown status persists nothing. These operations never poll,
-retry, fall back to native queue/steer admission, or create synthetic wake reminders.
+Default message delivery, structured questions, milestone waits, and existing-root request-send use
+durable public queue admission after visibility checks and have no busy prerequisite. Explicit legacy
+context delivery remains active-only. These operations never poll, retry an ambiguous admission, or
+create synthetic wake reminders.
 
 `session_ask` and `session_wait` block while their tool invocation survives,
 but the underlying request is durable. A source can recover a terminal result
@@ -68,7 +98,10 @@ tool surface will be published. Prerelease schemas remain explicitly unstable
 through dogfooding and live acceptance. Compatibility commitments begin at the
 stable schema-freeze gate.
 
-## 2. Fixed Baseline and Feasibility Gate
+## 2. Historical OpenCode 1.18 Baseline and Feasibility Gate
+
+This section records the original implementation gate. It is non-normative for the current v2
+release; the current baseline above controls wherever the descriptions conflict.
 
 Version one targets exactly:
 
@@ -418,28 +451,26 @@ That authoritative lifecycle outcome is not storage corruption.
 
 ### 7.3 Authorization and Approval
 
-Administrator policy supports `allow`, `ask`, or `deny` per operation, subject
-to hard secure defaults:
+Administrator policy supports static `allow` or `deny` per operation. Legacy `ask` is rejected by
+the v2 configuration parser. Sensitive actions use hard deny-by-default policy:
 
 | Operation | Default | Non-bypassable rule |
 | --- | --- | --- |
 | list/inspect own role records | allow | Workspace and role checks |
 | read own current visible root transcript projection | allow | Bounded restricted projection only |
-| read another current visible root transcript projection | ask | Exact source, target, projection, direction, line limit, byte cap, cursor digest, and deadline binding |
+| read another current visible root context projection | deny | Must be explicitly configured `allow`; bounded current context only |
 | send message | allow | Quotas and source/target checks |
 | ask/wait/respond/signal | allow | Quotas, role, and active-target rules |
 | request ack/cancel | allow | Source role only |
-| start | ask | Explicit overrides require allowlisting |
-| stop | ask | Approval cannot be configured away |
+| start | deny | Explicit overrides require allowlisting |
+| stop | deny | Must be explicitly configured `allow` |
 | sanitized self-export | allow | Secure destination and native sanitizer |
-| cross-session export | ask | Exact source, target, destination, and mode binding |
-| unsanitized export | ask | Exact source, target, destination, and mode binding |
-| overwrite existing export | ask | Exact destination and overwrite mode binding |
+| cross-session export | deny | Must be explicitly configured `allow` |
+| unsanitized export | unsupported | Rejected before effect |
+| overwrite existing export | deny | Must be explicitly configured `allow` |
 
-An approval resource binds workspace, source, target, operation, and all
-relevant exact values or cryptographic digests, including export destination
-and sanitization mode. A broad approval must not silently authorize a different
-target or changed parameters.
+Static policy is checked before persistence or effect. Visibility never widens a deny decision, and
+one allowed operation never authorizes another target or capability.
 
 ## 8. Tool Contracts
 
@@ -455,8 +486,9 @@ type SessionListArgs = {
 }
 ```
 
-The default is the 50 newest non-archived visible root sessions. Status is
-evaluated and filtered before `limit` is applied. Each item includes canonical
+The default is the 50 newest non-archived root candidates from the bounded participant registry,
+after authoritative public v2 per-ID revalidation. Status is evaluated and filtered before `limit`
+is applied. Each item includes canonical
 session ID, sanitized unverified title, `busy | retry | idle | unknown`, active
 boolean, updated time, and communicator-managed provenance when applicable.
 
@@ -479,7 +511,8 @@ type SessionReadArgs = {
 }
 ```
 
-With no cursor, `session_read` returns the transcript tail. A supplied cursor defaults to
+With no cursor, `session_read` returns the current-model-context tail. It cannot prove or recover
+complete history. A supplied cursor defaults to
 `direction: "after"`; supplying `direction` without a cursor is `invalid_arguments`. `limit` counts
 rendered lines, defaults to 100, and is bounded to 500. Results remain chronological in every mode,
 contain at most 65,536 UTF-8 bytes, and never split a rendered line. A physical assistant text line
@@ -516,10 +549,9 @@ UTF-8-safe suffix and later projected lines. If the anchor disappears or its pre
 `cursor_stale` is non-retryable; discard that cursor, take a fresh cursorless tail, and reconcile from
 known content rather than guessing a continuation.
 
-The current visible root may read itself without approval. Reading another current visible root
-requires one exact per-invocation approval bound to source, target, projection version, tail/before/
-after mode, line limit, the 65,536-byte cap, cursor digest when present, and invocation deadline.
-Visibility and status checks are abort-aware and occur before approval, after approval, immediately
+The current visible root may read itself under the default policy. Reading another current visible
+root requires static `readCrossSession: "allow"`; the default is `deny` and no imperative approval
+fallback exists. Visibility and status checks are abort-aware and occur immediately
 before every fixed-message or page read, and immediately before disclosure. The caller and target
 must remain visible roots. Visibility loss fails closed; no content gathered earlier is returned.
 
@@ -550,12 +582,11 @@ type SessionSendArgs = {
 }
 ```
 
-`delivery` defaults to `context`. The coordinator validates source, target, authorization, size, and
-quotas, requires the target to be observed `busy` or `retry`, and durably stores one bounded verified
-envelope. The next provider messages transform for that exact active target appends the envelope to
-provider input, atomically claims it, and erases the stored payload. The context is provider-visible,
-transcript-invisible, and explicitly marks peer data as untrusted. Idle or unknown target status
-persists no delivery.
+`delivery` defaults to `user`. The coordinator validates source, target, static authorization, size,
+and quotas, then durably stores one bounded verified envelope before public v2 queue admission. It
+requires visibility but no prior busy observation. Admission is transcript-visible and does not prove
+activation. Explicit `context` retains the bounded active-context path and fails closed when activity
+cannot be established.
 
 The transform's strictly validated transcript session identity is authoritative for admission. It
 does not re-read the lagging native root list during a tool-to-provider transition; participant-gated
@@ -924,17 +955,14 @@ type SessionExportArgs = {
 ```
 
 `session_id` defaults to the caller and `sanitize` defaults to `true`.
-Sanitized self-export is allowed by default. Cross-session export and every
-unsanitized export default to operation-specific approval. An administrator may
-explicitly configure `allow`, `ask`, or `deny`, but the shipped secure defaults
-remain `ask` and a broad unrelated approval never applies.
+Sanitized self-export is allowed by default. Cross-session and overwrite export default to static
+`deny`; an administrator must explicitly configure `allow`. Unsanitized export is unsupported.
 
-`overwrite: true` independently defaults to operation-specific approval even
-for sanitized self-export. Its approval is bound to the exact destination. The
-default self-export permission never authorizes destruction of an existing file.
+`overwrite: true` independently defaults to `deny` even for sanitized self-export. The default
+self-export permission never authorizes destruction of an existing file.
 
-Export uses only the native OpenCode sanitizer. There is no custom or fallback
-sanitizer. It returns summary metadata only: exported session ID, contained
+Export projects only the bounded public v2 current model context and marks
+`history_complete: false`. It returns summary metadata only: exported session ID, contained
 destination, sanitization mode, byte count, and a content digest. It never
 returns transcript content through the tool result.
 

@@ -97,6 +97,10 @@ Additional rules:
 Default exports are reserved for the plugin entrypoint when OpenCode requires
 one. Other modules MUST use named exports.
 
+The production entrypoint MUST use the OpenCode v2 public Effect API: `Plugin.define` with scoped
+effects, `tool.transform` for the exact 21-tool manifest, and `skill.transform` for bundled skills.
+Production code MUST NOT create or depend on a private OpenCode HTTP transport.
+
 ## 4. Naming and API Shape
 
 - Names MUST use complete domain terms rather than unexplained abbreviations.
@@ -140,6 +144,8 @@ Rules:
 - Internal barrel files MUST NOT be introduced when they obscure dependencies
   or permit cycles.
 - Circular imports are prohibited.
+- Domain and tool layers MUST treat both current `@opencode/*` and legacy `@opencode-ai/*` package
+  imports as OpenCode boundary imports. Only native adapters and composition may import them.
 - Classes SHOULD be used only when resource lifetime, identity, or encapsulated
   mutable state requires them. Plain functions and data are preferred.
 
@@ -204,6 +210,10 @@ A correction requires a new migration rather than editing published history.
   bounded streams, a deadline, and process-tree cancellation.
 - New permissions, external effects, retained sensitive fields, or filesystem
   paths REQUIRE a threat-model review.
+- Sensitive operations MUST use deny-by-default static `allow`/`deny` policy. OpenCode v2 has no
+  supported imperative approval equivalent; legacy `ask` configuration MUST be rejected.
+- Session read and export are bounded, sanitized projections of OpenCode's current model context.
+  They MUST NOT claim completeness, history access, or private transcript transport.
 - Deletion documentation MUST say logical deletion unless a stronger guarantee
   is independently proven.
 
@@ -216,7 +226,7 @@ test/
   unit/          # mirrors src/ for pure behavior
   integration/   # real store and adapter boundaries
   black-box/     # packaged plugin behavior
-  live/          # isolated supported OpenCode 1.18 harness
+  live/          # isolated supported OpenCode v2 harness
 ```
 
 ### 9.1 Required Practices
@@ -239,7 +249,7 @@ test/
 - Security boundary tests MUST include malformed, adversarial, and concurrent
   inputs.
 - Snapshot tests MAY supplement but MUST NOT replace semantic assertions.
-- Live tests MUST use isolated, project-selected supported OpenCode 1.18 harnesses and
+- Live tests MUST use isolated, project-selected supported OpenCode v2 harnesses and
   MUST NOT alter the user's active OpenCode installation.
 - The regular suite has an exact reviewed skip declaration budget enforced by
   `tools/verify-test-skips.mjs`; adding or moving a skip requires explicit review.
@@ -302,6 +312,8 @@ Public behavior changes MUST update relevant documentation in the same commit.
 
 - Runtime and OpenCode dependencies MUST be pinned exactly.
 - The lockfile MUST be committed.
+- `@opencode/cli` is the only trusted lifecycle dependency; its pinned
+  postinstall selects the certified Linux x64 binary used by the live harness.
 - New runtime dependencies REQUIRE a documented reason and maintenance/security
   review.
 - Platform APIs are preferred over dependencies for small, well-tested tasks.
@@ -328,6 +340,9 @@ test:live
 
 `check` is the local pre-commit quality gate and MUST run formatting checks,
 linting, custom convention checks, type checking, and non-live tests.
+Type checking uses `skipLibCheck` because the pinned OpenCode 2.0.26 package
+publishes declarations that fail its own exact-optional constraints; project
+source and tests remain fully checked.
 
 ## 12. Git and Review
 

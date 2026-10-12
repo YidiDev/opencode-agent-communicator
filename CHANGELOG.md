@@ -6,6 +6,30 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- Migrated the production plugin to the public OpenCode v2 `Plugin.define` Effect API, with the
+  existing 21 tools and three bundled skills registered through `tool.transform` and
+  `skill.transform`. The supported host range is now `>=2.0.26 <2.1.0` on Linux x64 with Bun
+  `1.4.0`; runtime packages build against `@opencode/plugin@2.0.26` and `@opencode/cli@2.0.26`.
+- Replaced private/legacy host access with ID-addressed public v2 session operations. `session_list`
+  now starts from the communicator-observed participant registry and authoritatively revalidates
+  each candidate. Delivery and durable requests use public queue admission and do not require a
+  prior `busy` observation.
+- Redefined `session_read` and `session_export` as bounded, sanitized projections of the current
+  model context. They do not expose or claim complete session history, and export no longer spawns
+  an OpenCode CLI subprocess.
+- Replaced imperative `ask` approval with deny-by-default static `allow`/`deny` policy for sensitive
+  actions. Legacy `ask` and unsanitized-export configuration are rejected.
+
+### Security
+
+- Added SQLite migration v17 for the bounded communicator participant registry and hardened
+  ownership lease acquisition/renewal against wall-clock regression while preserving monotonic
+  local expiry and fencing.
+- Removed the private HTTP transport surface; OpenCode interaction is confined to the public v2
+  Effect plugin context.
+
 ## [0.7.4] - 2026-09-07
 
 ### Fixed
