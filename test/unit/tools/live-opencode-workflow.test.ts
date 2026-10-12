@@ -11,7 +11,7 @@ interface WorkflowStep {
   readonly run?: string;
 }
 
-test("snapshots build runtime dependencies before selecting the minimum host matrix packages", async () => {
+test("snapshots build runtime dependencies before running the pinned v2 harness", async () => {
   const source = await Bun.file(".github/workflows/live-opencode.yml").text();
   const workflow = Bun.YAML.parse(source) as {
     readonly jobs?: Record<
@@ -19,21 +19,19 @@ test("snapshots build runtime dependencies before selecting the minimum host mat
       { readonly env?: Record<string, unknown>; readonly steps?: readonly WorkflowStep[] }
     >;
   };
-  const job = workflow.jobs?.["opencode-1-18"];
+  const job = workflow.jobs?.["opencode-2"];
   const steps = job?.steps ?? [];
   const names = steps.map((step) => step.name);
 
   const dependencyRoot = "$" + "{{ runner.temp }}/opencode-communicator-packed-runtime";
   const installIndex = names.indexOf("Install locked dependencies");
   const snapshotIndex = names.indexOf("Snapshot packed build runtime dependencies");
-  const selectionIndex = names.indexOf("Select matrix OpenCode packages");
   const harnessIndex = names.indexOf("Run isolated compatibility harness");
-  for (const index of [installIndex, snapshotIndex, selectionIndex, harnessIndex]) {
+  for (const index of [installIndex, snapshotIndex, harnessIndex]) {
     expect(index).toBeGreaterThanOrEqual(0);
   }
   expect(installIndex).toBeLessThan(snapshotIndex);
-  expect(snapshotIndex).toBeLessThan(selectionIndex);
-  expect(selectionIndex).toBeLessThan(harnessIndex);
+  expect(snapshotIndex).toBeLessThan(harnessIndex);
   const snapshot = steps.find((step) => step.name === "Snapshot packed build runtime dependencies");
   const liveHarness = steps.find((step) => step.name === "Run isolated compatibility harness");
   expect(snapshot?.run).toBe("node tools/snapshot-runtime-dependencies.mjs");

@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { alternateTestModelID, testModelID, testProviderID } from "./constants";
+import type { ConfigEntry, JsonValue } from "@opencode/client";
+
+import { alternateTestModelID, liveServerPassword, testModelID, testProviderID } from "./constants";
 
 export interface IsolatedOpenCodeState {
   readonly root: string;
@@ -20,7 +22,7 @@ export type IsolationSetupStage = "after-root" | "after-directories" | "after-co
 interface IsolationOptions {
   readonly providerBaseUrl: string;
   readonly pluginPath: string;
-  readonly pluginOptions?: Readonly<Record<string, unknown>>;
+  readonly pluginOptions?: Readonly<Record<string, JsonValue>>;
   readonly appendPluginPaths?: readonly string[];
   readonly setupOperation?: (input: {
     readonly stage: IsolationSetupStage;
@@ -76,125 +78,53 @@ async function initializeIsolatedOpenCodeState(
   );
   const configPath = join(root, "opencode.json");
   const config = {
-    autoupdate: false,
+    update: "disable",
     share: "disabled",
-    snapshot: false,
+    snapshots: false,
     formatter: false,
     lsp: false,
-    model: `${testProviderID}/${testModelID}`,
-    small_model: `${testProviderID}/${testModelID}`,
-    agent: {
-      build: { model: `${testProviderID}/${testModelID}`, mode: "primary" },
-      alternate: { model: `${testProviderID}/${alternateTestModelID}`, mode: "primary" },
-    },
-    enabled_providers: [testProviderID],
-    skills: { paths: [controlSkillPath] },
-    tools: { diagnostic_context: true },
-    plugin: [
-      [
-        pathToFileURL(options.pluginPath).href,
-        options.pluginOptions ?? { evidencePath, skillPath },
-      ],
-      ...(options.appendPluginPaths ?? []).map((pluginPath) => pathToFileURL(pluginPath).href),
-    ],
-    permission: {
-      live_allow: "allow",
-      live_deny: "deny",
-      live_ask: "ask",
-      session_start: "ask",
-      session_stop: "allow",
-    },
-    provider: {
-      [testProviderID]: {
-        id: testProviderID,
-        name: "Deterministic live test provider",
-        env: ["LIVE_TEST_API_KEY"],
-        npm: "@ai-sdk/openai-compatible",
-        models: {
-          [testModelID]: {
-            id: testModelID,
-            name: "Deterministic model",
-            attachment: false,
-            reasoning: false,
-            temperature: false,
-            tool_call: true,
-            release_date: "2026-01-01",
-            limit: { context: 100_000, output: 1_000 },
-            cost: { input: 0, output: 0 },
-            options: {},
-          },
-          [alternateTestModelID]: {
-            id: alternateTestModelID,
-            name: "Deterministic alternate model",
-            attachment: false,
-            reasoning: false,
-            temperature: false,
-            tool_call: true,
-            release_date: "2026-01-01",
-            limit: { context: 100_000, output: 1_000 },
-            cost: { input: 0, output: 0 },
-            options: {},
-          },
-        },
-        options: { apiKey: "local-test-key", baseURL: options.providerBaseUrl },
-      },
-    },
-  };
-  const v2Config = {
     model: `${testProviderID}/${testModelID}`,
     default_agent: "build",
     agents: {
       build: { model: `${testProviderID}/${testModelID}`, mode: "primary" },
       alternate: { model: `${testProviderID}/${alternateTestModelID}`, mode: "primary" },
     },
+    skills: [controlSkillPath],
+    plugins: [
+      {
+        package: pathToFileURL(options.pluginPath).href,
+        options: options.pluginOptions ?? {},
+      },
+      ...(options.appendPluginPaths ?? []).map((pluginPath) => pathToFileURL(pluginPath).href),
+    ],
     providers: {
       [testProviderID]: {
         name: "Deterministic live test provider",
-        api: {
-          type: "aisdk",
-          package: "@ai-sdk/openai-compatible",
-          url: options.providerBaseUrl,
-        },
-        request: { body: { apiKey: "local-test-key" } },
+        env: ["LIVE_TEST_API_KEY"],
+        package: "@ai-sdk/openai-compatible",
+        settings: { baseURL: options.providerBaseUrl, apiKey: "local-test-key" },
         models: {
           [testModelID]: {
+            modelID: testModelID,
             name: "Deterministic model",
-            api: {
-              id: testModelID,
-              type: "aisdk",
-              package: "@ai-sdk/openai-compatible",
-              url: options.providerBaseUrl,
-            },
+            package: "@ai-sdk/openai-compatible",
             capabilities: { tools: true, input: ["text"], output: ["text"] },
-            request: { body: { apiKey: "local-test-key" } },
-            cost: { input: 0, output: 0 },
             limit: { context: 100_000, output: 1_000 },
+            cost: { input: 0, output: 0 },
           },
           [alternateTestModelID]: {
+            modelID: alternateTestModelID,
             name: "Deterministic alternate model",
-            api: {
-              id: alternateTestModelID,
-              type: "aisdk",
-              package: "@ai-sdk/openai-compatible",
-              url: options.providerBaseUrl,
-            },
+            package: "@ai-sdk/openai-compatible",
             capabilities: { tools: true, input: ["text"], output: ["text"] },
-            request: { body: { apiKey: "local-test-key" } },
-            cost: { input: 0, output: 0 },
             limit: { context: 100_000, output: 1_000 },
+            cost: { input: 0, output: 0 },
           },
         },
       },
     },
-  };
+  } satisfies Extract<ConfigEntry, { type: "document" }>["info"];
   await writeFile(configPath, `${JSON.stringify(config, undefined, 2)}\n`, { mode: 0o600 });
-  await writeFile(
-    join(paths.config, "opencode.json"),
-    `${JSON.stringify(v2Config, undefined, 2)}\n`,
-    {
-      mode: 0o600,
-    },
-  );
   await options.setupOperation?.({ stage: "after-config", root });
 
   const environment = {
@@ -216,6 +146,7 @@ async function initializeIsolatedOpenCodeState(
     OPENCODE_DISABLE_LSP_DOWNLOAD: "1",
     OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
     OPENCODE_AUTH_CONTENT: "{}",
+    OPENCODE_PASSWORD: liveServerPassword,
     LIVE_TEST_API_KEY: "local-test-key",
     ...isolatedNpmEnvironment(paths.npmCache),
     NO_COLOR: "1",

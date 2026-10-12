@@ -7,7 +7,6 @@ RUN bun install --frozen-lockfile
 COPY src ./src
 COPY test/acceptance/export-capability.test.ts ./test/acceptance/export-capability.test.ts
 COPY test/integration/adapters/export/linux-export-destination.test.ts ./test/integration/adapters/export/linux-export-destination.test.ts
-COPY test/integration/adapters/export/opencode-cli-export-adapter.test.ts ./test/integration/adapters/export/opencode-cli-export-adapter.test.ts
 COPY test/support/linux-export-capability.ts ./test/support/linux-export-capability.ts
 COPY tools/run-secure-export-capability-tests.mjs ./tools/run-secure-export-capability-tests.mjs
 
