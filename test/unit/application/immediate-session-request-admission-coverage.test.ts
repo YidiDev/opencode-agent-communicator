@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-
+import { ContextAdmissionRuntime } from "../../../src/application/context-admission-runtime";
 import {
   type ImmediateRequestAdmissionPorts,
   persistAndAdmitImmediateRequest,
@@ -141,7 +141,7 @@ test("immediate persistence contains envelope overflow and ambiguous creation", 
   });
 });
 
-test("immediate persistence returns a coherent record already advanced by the store", async () => {
+test("immediate persistence cannot trust an advanced claim without durable reconciliation", async () => {
   const value = await harness();
   value.ports.requests.createPrepared = async (input) => ({
     ok: true,
@@ -153,10 +153,48 @@ test("immediate persistence returns a coherent record already advanced by the st
     },
   });
   expect(await persistAndAdmitImmediateRequest(value.ports, value.input)).toMatchObject({
-    ok: true,
-    value: { deliveryState: "submitting" },
+    ok: false,
+    error: { code: "storage_unavailable" },
   });
 });
+
+test.each(["rejected", "malformed", "missing-envelope"] as const)(
+  "reconciles a committed %s claim without replaying native I/O",
+  async (mode) => {
+    const value = await harness();
+    const claim = value.ports.requests.claimPrepared;
+    let committed: Awaited<ReturnType<typeof claim>> | undefined;
+    let nativeCalls = 0;
+    value.ports.requests.claimPrepared = async (input) => {
+      committed = await claim(input);
+      if (mode === "rejected") throw new Error("lost claim response");
+      if (mode === "malformed") return null as never;
+      return { ok: true, request: committed.ok ? committed.request : undefined } as never;
+    };
+    value.ports.requests.reconcilePreparedClaim = async () => {
+      if (
+        !committed?.ok ||
+        !committed.envelopeJson ||
+        committed.request.deliveryState !== "submitting"
+      )
+        throw new Error("missing durable claim");
+      return {
+        outcome: "current_claim",
+        request: committed.request as never,
+        envelopeJson: committed.envelopeJson,
+      };
+    };
+    value.ports.nativeQueue.queueMessage = async () => {
+      nativeCalls += 1;
+      return { kind: "unknown" };
+    };
+    expect(await persistAndAdmitImmediateRequest(value.ports, value.input)).toMatchObject({
+      ok: true,
+      value: { deliveryState: "delivery_unknown" },
+    });
+    expect(nativeCalls).toBe(0);
+  },
+);
 
 test("immediate claim ambiguity is never replayed and malformed claims fail closed", async () => {
   for (const outcome of ["rejected", "malformed", "settled", "missing-envelope"] as const) {
@@ -203,3 +241,171 @@ test("immediate admission honors cancellation before persistence and while claim
     error: { code: "request_cancelled" },
   });
 });
+
+test.each(["create", "claim"] as const)(
+  "lifecycle shutdown interrupts %s without a native replay",
+  async (phase) => {
+    const value = await harness();
+    const runtime = new ContextAdmissionRuntime();
+    const ports = { ...value.ports, contextRuntime: runtime };
+    const key = phase === "create" ? "createPrepared" : "claimPrepared";
+    ports.requests[key] = async () => {
+      runtime.stop("shutdown");
+      return new Promise<never>(() => {});
+    };
+    expect(await persistAndAdmitImmediateRequest(ports, value.input)).toMatchObject({
+      ok: false,
+      error: { code: "request_cancelled" },
+    });
+  },
+);
+
+test.each([
+  "malformed",
+  "foreign",
+  "prepared",
+  "settled",
+  "terminal",
+  "submitting",
+  "aborted-read",
+  "aborted-write",
+  "bad-write",
+  "wrong-write",
+  "lost",
+  "error",
+] as const)("ambiguous claim reconciliation stays fail-closed for %s", async (mode) => {
+  const value = await harness();
+  const runtime = new ContextAdmissionRuntime();
+  const ports = { ...value.ports, contextRuntime: runtime };
+  const claim = ports.requests.claimPrepared;
+  let committed: RequestMetadata | undefined;
+  ports.requests.claimPrepared = async (input) => {
+    const result = await claim(input);
+    if (!result.ok) throw new Error("fixture claim failed");
+    committed = result.request;
+    return null as never;
+  };
+  ports.requests.reconcilePreparedClaim = async () => {
+    if (!committed) throw new Error("no committed claim");
+    if (mode === "malformed") return null as never;
+    if (mode === "foreign")
+      return {
+        outcome: "current_claim",
+        request: { ...committed, targetSessionId: committed.sourceSessionId },
+      } as never;
+    if (mode === "prepared")
+      return { outcome: "still_prepared", request: value.prepared() } as never;
+    if (mode === "settled")
+      return {
+        outcome: "settled",
+        request: {
+          ...committed,
+          deliveryState: "delivery_unknown",
+          deliveryUnknownAtMs: 10_002,
+          updatedAtMs: 10_002,
+        },
+      } as never;
+    if (mode === "terminal") {
+      const terminal = {
+        ...committed,
+        resolutionState: "cancelled",
+        resolvedAtMs: 10_002,
+        updatedAtMs: 10_002,
+      };
+      Reflect.deleteProperty(terminal, "payloadSha256");
+      return {
+        outcome: "settled",
+        request: terminal,
+      } as never;
+    }
+    if (mode === "submitting") return { outcome: "settled", request: committed } as never;
+    if (mode === "lost") throw new OwnershipLostFault();
+    if (mode === "error") throw new Error("read failed");
+    if (mode === "aborted-read") {
+      runtime.stop("shutdown");
+      return new Promise<never>(() => {});
+    }
+    return { outcome: "current_claim", request: committed, envelopeJson: "retained" } as never;
+  };
+  const complete = ports.requests.completeDelivery;
+  ports.requests.completeDelivery = async (input) => {
+    if (mode === "aborted-write") {
+      runtime.stop("shutdown");
+      return new Promise<never>(() => {});
+    }
+    if (mode === "bad-write") return null as never;
+    if (mode === "wrong-write") return { ok: true, request: value.prepared() } as never;
+    return complete(input);
+  };
+  let nativeCalls = 0;
+  ports.nativeQueue.queueMessage = async () => {
+    nativeCalls += 1;
+    return { kind: "unknown" };
+  };
+  expect(await persistAndAdmitImmediateRequest(ports, value.input)).toMatchObject(
+    mode === "settled" || mode === "terminal"
+      ? { ok: true }
+      : { ok: false, error: { code: mode === "lost" ? "ownership_lost" : "storage_unavailable" } },
+  );
+  expect(nativeCalls).toBe(0);
+});
+
+test.each(["create", "claim", "queue"] as const)(
+  "caller abort during %s settles the durable claim without restart",
+  async (phase) => {
+    const value = await harness();
+    let queueCalls = 0;
+    let completeCalls = 0;
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const create = value.ports.requests.createPrepared;
+    const claim = value.ports.requests.claimPrepared;
+    const complete = value.ports.requests.completeDelivery;
+    value.ports.requests.createPrepared = async (input) => {
+      if (phase === "create") {
+        entered();
+        await paused;
+      }
+      return create(input);
+    };
+    value.ports.requests.claimPrepared = async (input) => {
+      const result = await claim(input);
+      if (phase === "claim") {
+        entered();
+        await paused;
+      }
+      return result;
+    };
+    value.ports.nativeQueue.queueMessage = async () => {
+      queueCalls += 1;
+      entered();
+      await paused;
+      return { kind: "unknown" };
+    };
+    let settled!: () => void;
+    const persisted = new Promise<void>((resolve) => {
+      settled = resolve;
+    });
+    value.ports.requests.completeDelivery = async (input) => {
+      completeCalls += 1;
+      expect(input.outcome).toBe("delivery_unknown");
+      const result = await complete(input);
+      settled();
+      return result;
+    };
+    const foreground = persistAndAdmitImmediateRequest(value.ports, value.input);
+    await started;
+    value.controller.abort();
+    expect(await foreground).toMatchObject({ ok: false, error: { code: "request_cancelled" } });
+    release();
+    await persisted;
+    expect(completeCalls).toBe(1);
+    expect(queueCalls).toBe(phase === "queue" ? 1 : 0);
+  },
+);

@@ -240,65 +240,65 @@ export function createCompositionFactory(
       directory: input.location.directory,
     });
     const startupAbort = new AbortController();
-    if (hostAbort?.aborted) startupAbort.abort("host_disposal");
-    const startupDeadlineMs = createCommunicatorStartupDeadline(
-      () => dependencies.generationClock.nowMs(),
-      options.startupDeadlineMs,
-    );
-    const compatible = await dependencies.checkCompatibility(
-      dependencies.runtimeIdentity,
-      dependencies.createHealth(input),
-      { abort: startupAbort.signal, deadlineMs: startupDeadlineMs },
-    );
-    if (!compatible.ok) throw new Error(compatible.error.message);
-    const native = dependencies.createNative({
-      context: input,
-      directory: workspace.directory,
-      workspaceKey: workspace.workspaceKey,
-      projectId: workspace.projectId,
-    });
-    const chatBookkeeping = createChatMessagesTransformBookkeeping();
-    const build = (deadlineMs: number, abort: AbortSignal) =>
-      createCommunicatorGeneration({
-        pluginInput: { directory: workspace.directory, worktree: workspace.worktree },
-        options,
-        workspace,
-        native,
-        dependencies,
-        chatBookkeeping,
-        startupDeadlineMs: deadlineMs,
-        startupAbort: abort,
-      });
     const abortStartup = () => startupAbort.abort("host_disposal");
     hostAbort?.addEventListener("abort", abortStartup, { once: true });
-    let initial: Awaited<ReturnType<typeof build>>;
+    if (hostAbort?.aborted) startupAbort.abort("host_disposal");
     try {
-      initial = await build(startupDeadlineMs, startupAbort.signal);
+      const startupDeadlineMs = createCommunicatorStartupDeadline(
+        () => dependencies.generationClock.nowMs(),
+        options.startupDeadlineMs,
+      );
+      const compatible = await dependencies.checkCompatibility(
+        dependencies.runtimeIdentity,
+        dependencies.createHealth(input),
+        { abort: startupAbort.signal, deadlineMs: startupDeadlineMs },
+      );
+      assertGenerationStartupActive(startupAbort.signal);
+      if (!compatible.ok) throw new Error(compatible.error.message);
+      const native = dependencies.createNative({
+        context: input,
+        directory: workspace.directory,
+        workspaceKey: workspace.workspaceKey,
+        projectId: workspace.projectId,
+      });
+      const chatBookkeeping = createChatMessagesTransformBookkeeping();
+      const build = (deadlineMs: number, abort: AbortSignal) =>
+        createCommunicatorGeneration({
+          pluginInput: { directory: workspace.directory, worktree: workspace.worktree },
+          options,
+          workspace,
+          native,
+          dependencies,
+          chatBookkeeping,
+          startupDeadlineMs: deadlineMs,
+          startupAbort: abort,
+        });
+      const initial = await build(startupDeadlineMs, startupAbort.signal);
+      if (startupAbort.signal.aborted || initial.lifecycle.status !== "ready") {
+        const diagnostic =
+          initial.lifecycle.stopState?.diagnostic ?? "Communicator lifecycle is not ready.";
+        try {
+          initial.shutdownUnpublished();
+          if ((await initial.drainInvocations()) === "timed_out") await initial.settleInvocations();
+          await initial.disposeResources();
+        } catch {}
+        throw new Error(diagnostic);
+      }
+      const manager = new CommunicatorGenerationManager(
+        initial,
+        build,
+        dependencies.generationRecoveryDelay,
+        options.startupDeadlineMs,
+      );
+      return {
+        tool: bridgeContracts(manager, workspace),
+        "experimental.chat.messages.transform": (...arguments_) => manager.routeChat(...arguments_),
+        event: (...arguments_) => manager.routeEvent(...arguments_),
+        dispose: () => manager.dispose(),
+      };
     } finally {
       hostAbort?.removeEventListener("abort", abortStartup);
     }
-    if (initial.lifecycle.status !== "ready") {
-      const diagnostic =
-        initial.lifecycle.stopState?.diagnostic ?? "Communicator lifecycle is not ready.";
-      try {
-        initial.shutdownUnpublished();
-        if ((await initial.drainInvocations()) === "timed_out") await initial.settleInvocations();
-        await initial.disposeResources();
-      } catch {}
-      throw new Error(diagnostic);
-    }
-    const manager = new CommunicatorGenerationManager(
-      initial,
-      build,
-      dependencies.generationRecoveryDelay,
-      options.startupDeadlineMs,
-    );
-    return {
-      tool: bridgeContracts(manager, workspace),
-      "experimental.chat.messages.transform": (...arguments_) => manager.routeChat(...arguments_),
-      event: (...arguments_) => manager.routeEvent(...arguments_),
-      dispose: () => manager.dispose(),
-    };
   };
 }
 
@@ -362,16 +362,17 @@ export function createOpenCodeV2Plugin(
     effect: (context) =>
       Effect.gen(function* () {
         // Recovery completes before the transform publishes any of the 21 tools.
-        const hooks = yield* Effect.promise((signal) =>
-          createCompositionFactory(overrides)(context, signal),
+        const hooks = yield* Effect.acquireRelease(
+          Effect.promise((signal) => createCompositionFactory(overrides)(context, signal)),
+          (hooks) => Effect.promise(() => hooks.dispose()).pipe(Effect.orDie),
         );
-        yield* Effect.addFinalizer(() => Effect.promise(() => hooks.dispose()).pipe(Effect.orDie));
         yield* context.tool.transform((editor) => {
           for (const [name, definition] of Object.entries(hooks.tool)) {
             editor.add({
               name,
               description: definition.description,
               input: definition.input,
+              options: { codemode: false },
               execute: (input, toolContext) =>
                 Effect.promise(async (signal) => ({
                   content: await definition.execute(input, {

@@ -19,6 +19,7 @@ import type {
   OperationControl,
   OwnershipPort,
 } from "./delivery-ports";
+import type { ParticipantOperationPort } from "./participant-operation-gate";
 import type { CommittedRequestNotificationPort } from "./request-notification-port";
 import {
   type NativeSteerAdmission,
@@ -42,6 +43,7 @@ export interface ClaimedSessionRequestAdmissionPorts {
   readonly ownership: OwnershipPort;
   readonly notifications: CommittedRequestNotificationPort;
   readonly clock: ClockPort;
+  readonly participantOperations?: ParticipantOperationPort;
 }
 
 export type ClaimedSessionRequestAdmissionOutcome = Readonly<{
@@ -230,6 +232,26 @@ export async function admitClaimedSessionRequest(
   input: ClaimedSessionRequestAdmissionInput,
 ): Promise<DomainResult<ClaimedSessionRequestAdmissionOutcome>> {
   try {
+    if (ports.participantOperations) {
+      return await ports.participantOperations.run(
+        [input.request.sourceSessionId, input.request.targetSessionId],
+        input.effectSignal,
+        async () => {
+          const current = await ports.requests.reconcilePreparedClaim({
+            workspaceKey: input.workspaceKey,
+            fencingToken: input.fencingToken,
+            requestId: input.request.id,
+          });
+          if (
+            current.outcome !== "current_claim" ||
+            !hasRequestIdentity(snapshotRequestIdentity(input.request), current.request) ||
+            current.envelopeJson !== input.envelope
+          )
+            return failure("state_conflict");
+          return admitClaimedSessionRequestInternal(ports, input);
+        },
+      );
+    }
     return await admitClaimedSessionRequestInternal(ports, input);
   } catch {
     return domainFailure("storage_unavailable", "Claimed request admission failed safely.", true);

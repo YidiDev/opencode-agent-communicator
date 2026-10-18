@@ -33,6 +33,31 @@ function compatibilityProbe(health: unknown) {
 }
 
 describe("production OpenCode v2 compatibility", () => {
+  test("host cancellation during compatibility prevents native resource creation", async () => {
+    const host = new AbortController();
+    let nativeCreations = 0;
+    const plugin = createCompositionFactory({
+      parseOptions: (value) => parseCommunicatorOptions(value, { HOME: "/home/operator" }),
+      deriveWorkspace: () => ({
+        workspaceKey,
+        projectId: "project",
+        directory: "/workspace",
+        worktree: "/workspace",
+      }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "2.0.26" }) }),
+      checkCompatibility: async (_identity, _health, control) => {
+        host.abort();
+        expect(control.abort.aborted).toBe(true);
+        return { ok: true, value: { version: "2.0.26" } };
+      },
+      createNative: () => {
+        nativeCreations += 1;
+        throw new Error("unexpected native creation");
+      },
+    });
+    await expect(plugin(context, host.signal)).rejects.toThrow();
+    expect(nativeCreations).toBe(0);
+  });
   test.each(["2.0.26", "2.0.27", "2.0.999"])(
     "accepts supported stable patch %s",
     async (version) => {

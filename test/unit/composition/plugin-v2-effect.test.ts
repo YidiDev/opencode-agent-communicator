@@ -111,10 +111,61 @@ function contextFixture(input: {
 }
 
 describe("OpenCode v2 Effect plugin", () => {
+  test("interrupting scoped startup disposes a late acquisition before publishing tools", async () => {
+    const order: string[] = [];
+    const overrides = dependencies(order);
+    const recover = overrides.recoverStartup;
+    if (!recover) throw new Error("missing recovery fixture");
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const plugin = createOpenCodeV2Plugin({
+      ...overrides,
+      recoverStartup: async (...args: Parameters<typeof recover>) => {
+        entered();
+        await paused;
+        return recover(...args);
+      },
+    });
+    const addedTools: unknown[] = [];
+    const context = contextFixture({
+      addedTools,
+      addedSkills: [],
+      contextHook: {},
+      event: { type: "idle" },
+    });
+    const host = new AbortController();
+    const running = Effect.runPromise(Effect.scoped(plugin.effect(context as never)), {
+      signal: host.signal,
+    });
+    const outcome = running.then(
+      () => "completed",
+      () => "interrupted",
+    );
+    await started;
+    host.abort();
+    release();
+    expect(await outcome).toBe("interrupted");
+    expect(addedTools).toEqual([]);
+    expect(order.slice(-5)).toEqual([
+      "lifecycle-stop",
+      "scheduler-drain",
+      "exporter-drain",
+      "exporter-dispose",
+      "store-close",
+    ]);
+  });
+
   test("publishes tools and skills, routes hooks and events, and finalizes the generation", async () => {
     const order: string[] = [];
     const addedTools: Array<{
       name: string;
+      options: { codemode: boolean };
       execute: (input: unknown, context: unknown) => Effect.Effect<{ content: unknown }>;
     }> = [];
     const addedSkills: Array<{ id: string; content: string }> = [];
@@ -135,6 +186,7 @@ describe("OpenCode v2 Effect plugin", () => {
         Effect.gen(function* () {
           yield* plugin.effect(context as never);
           expect(addedTools.map((tool) => tool.name)).toEqual([...communicatorToolIds]);
+          expect(addedTools.every((tool) => tool.options.codemode === false)).toBe(true);
           expect(addedSkills.map((skill) => skill.id)).toEqual([
             "session-communication",
             "session-request-participant",

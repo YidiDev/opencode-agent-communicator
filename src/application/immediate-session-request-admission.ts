@@ -118,14 +118,31 @@ function inspectStoreRequest(
     : immediateRequestStorageFailure(expected.id);
 }
 
-// The prepared record precedes the sole queue effect. Any interrupted or malformed claim remains
-// durable for startup classification; the native effect is never retried by this invocation.
 export async function persistAndAdmitImmediateRequest(
   ports: ImmediateRequestAdmissionPorts,
   input: ImmediateRequestAdmissionInput,
 ): Promise<DomainResult<RequestMetadata>> {
+  if (input.context.abort.aborted) return input.interrupted();
+  // Caller cancellation releases the foreground, while lifecycle-owned persistence settles the
+  // one claim and records ambiguity. It must not strand a current-generation submitting record.
+  const result = await runUntilAborted(input.context.abort, () =>
+    settleImmediateRequest(ports, input),
+  );
+  return result.kind === "aborted"
+    ? input.interrupted()
+    : result.kind === "rejected"
+      ? immediateRequestStorageFailure()
+      : result.value;
+}
+
+async function settleImmediateRequest(
+  ports: ImmediateRequestAdmissionPorts,
+  input: ImmediateRequestAdmissionInput,
+): Promise<DomainResult<RequestMetadata>> {
   const { context, args, payload, workBytes, workSha256, createdAtMs, deadlineAtMs } = input;
+  const effectSignal = admissionEffectSignal(ports);
   let requestId: RequestId | undefined;
+  let expected: RequestMetadata | undefined;
   try {
     if ((await ports.ownership.isCurrent(context.fencingToken)) !== true)
       throw new OwnershipLostFault();
@@ -150,6 +167,7 @@ export async function persistAndAdmitImmediateRequest(
       updatedAtMs: createdAtMs,
       deadlineAtMs,
     };
+    expected = prepared;
     let envelope: string;
     try {
       envelope = await serializeVerifiedRequestEnvelope(
@@ -170,7 +188,7 @@ export async function persistAndAdmitImmediateRequest(
         );
       throw cause;
     }
-    const created = await runUntilAborted(context.abort, () =>
+    const created = await runUntilAborted(effectSignal, () =>
       ports.requests.createPrepared({
         fencingToken: context.fencingToken,
         creationOperationId: ports.ids.startOperationId(),
@@ -185,9 +203,10 @@ export async function persistAndAdmitImmediateRequest(
     const stored = inspectStoreRequest(created.value, prepared);
     if (!stored.ok) return stored;
     wakeRequestScheduler(ports.scheduler);
-    if (stored.value.deliveryState !== "prepared") return { ok: true, value: stored.value };
+    if (stored.value.deliveryState !== "prepared")
+      return reconcileImmediateClaim(ports, context, prepared, effectSignal);
 
-    const claimed = await runUntilAborted(context.abort, () =>
+    const claimed = await runUntilAborted(effectSignal, () =>
       ports.requests.claimPrepared({
         fencingToken: context.fencingToken,
         workspaceKey: context.workspaceKey,
@@ -203,13 +222,14 @@ export async function persistAndAdmitImmediateRequest(
       !claimedRequest ||
       !hasRequestIdentity(snapshotRequestIdentity(prepared), claimedRequest)
     ) {
-      return immediateRequestStorageFailure(requestId);
+      throw new Error("Immediate claim requires durable reconciliation.");
     }
     if (claimedRequest.deliveryState !== "submitting") return { ok: true, value: claimedRequest };
     if (typeof claimData.envelopeJson !== "string")
-      return immediateRequestStorageFailure(requestId);
+      throw new Error("Immediate claim envelope requires durable reconciliation.");
     const admitted = await admitClaimedSessionRequest(
       {
+        ...ports,
         requests: ports.requests,
         nativeQueue: ports.nativeQueue,
         nativeSteer: {
@@ -230,14 +250,79 @@ export async function persistAndAdmitImmediateRequest(
           abort: context.abort,
           ...(context.deadlineMs === undefined ? {} : { deadlineMs: context.deadlineMs }),
         },
-        effectSignal: context.abort,
+        effectSignal,
         callerAbortPersistsUnknown: true,
       },
     );
     return admitted.ok ? { ok: true, value: admitted.value.request } : admitted;
   } catch (cause: unknown) {
+    return reconcileImmediateFailure(ports, context, expected, effectSignal, cause, requestId);
+  }
+}
+
+function reconcileImmediateFailure(
+  ports: ImmediateRequestAdmissionPorts,
+  context: ImmediateRequestAdmissionContext,
+  expected: RequestMetadata | undefined,
+  signal: AbortSignal,
+  cause: unknown,
+  requestId: RequestId | undefined,
+): Promise<DomainResult<RequestMetadata>> | DomainResult<RequestMetadata> {
+  if (cause instanceof OwnershipLostFault) return ownershipLost(ports, requestId);
+  return expected
+    ? reconcileImmediateClaim(ports, context, expected, signal)
+    : immediateRequestStorageFailure(requestId);
+}
+
+function admissionEffectSignal(ports: ImmediateRequestAdmissionPorts): AbortSignal {
+  return ports.contextRuntime?.effectSignal ?? new AbortController().signal;
+}
+
+async function reconcileImmediateClaim(
+  ports: ImmediateRequestAdmissionPorts,
+  context: ImmediateRequestAdmissionContext,
+  expected: RequestMetadata,
+  signal: AbortSignal,
+): Promise<DomainResult<RequestMetadata>> {
+  try {
+    const input = {
+      workspaceKey: context.workspaceKey,
+      fencingToken: context.fencingToken,
+      requestId: expected.id,
+    };
+    const settled = await runUntilAborted(signal, () =>
+      ports.requests.reconcilePreparedClaim(input),
+    );
+    if (settled.kind === "rejected") throw settled.cause;
+    if (settled.kind !== "settled") return immediateRequestStorageFailure(expected.id);
+    const data = snapshotDataRecord(settled.value, 3);
+    const current = inspectRequestMetadata(data?.request);
+    if (!current || !hasRequestIdentity(snapshotRequestIdentity(expected), current))
+      return immediateRequestStorageFailure(expected.id);
+    if (
+      data?.outcome === "settled" &&
+      (current.deliveryState !== "submitting" || current.resolutionState !== "pending")
+    )
+      return { ok: true, value: current };
+    if (
+      data?.outcome !== "current_claim" ||
+      current.deliveryState !== "submitting" ||
+      current.resolutionState !== "pending"
+    ) {
+      return immediateRequestStorageFailure(expected.id);
+    }
+    const completion = await runUntilAborted(signal, () =>
+      ports.requests.completeDelivery({ ...input, outcome: "delivery_unknown" }),
+    );
+    if (completion.kind === "rejected") throw completion.cause;
+    if (completion.kind !== "settled") return immediateRequestStorageFailure(expected.id);
+    const result = inspectStoreRequest(completion.value, expected);
+    return result.ok && result.value.deliveryState !== "delivery_unknown"
+      ? immediateRequestStorageFailure(expected.id)
+      : result;
+  } catch (cause: unknown) {
     return cause instanceof OwnershipLostFault
-      ? ownershipLost(ports, requestId)
-      : immediateRequestStorageFailure(requestId);
+      ? ownershipLost(ports, expected.id)
+      : immediateRequestStorageFailure(expected.id);
   }
 }
