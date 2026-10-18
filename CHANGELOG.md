@@ -30,6 +30,23 @@ All notable changes to this project are documented in this file. The format is b
 - Removed the private HTTP transport surface; OpenCode interaction is confined to the public v2
   Effect plugin context.
 
+### Fixed
+
+- Kept all communicator tools on the primary tool surface with public v2 `codemode: false`, and
+  corrected Effect timestamp decoding. The packed live harness now verifies actual correlated
+  tool results and the complete tool/skill manifests.
+- Made scoped startup acquisition/disposal atomic and linked host cancellation before compatibility
+  checks. Caller cancellation settles lifecycle-owned queue claims without replay; admission and
+  participant stop share a gate and revalidate the durable claim before a native effect.
+- Charged the full restricted current-context snapshot on every read, including fixed-message
+  misses. Limits describe projection bytes after host materialization, not raw transport bytes.
+- Allowed visible current-context reads when activity is unknown. Context delivery and stop remain
+  explicitly unsupported without authoritative public-v2 activity evidence.
+- Added bounded keyset scanning past stale/filtered discovery candidates and oldest-candidate
+  eviction at registry capacity without deleting protocol state.
+- Corrected the live CI version assertion, prerelease installation instructions, static-policy skill
+  guidance, and secure-export acceptance evidence description.
+
 ## [0.7.4] - 2026-09-07
 
 ### Fixed

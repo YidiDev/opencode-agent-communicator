@@ -21,6 +21,29 @@ test("snapshots build runtime dependencies before running the pinned v2 harness"
   };
   const job = workflow.jobs?.["opencode-2"];
   const steps = job?.steps ?? [];
+  const prerequisites = steps.find((step) => step.name === "Verify live-gate prerequisites");
+  const versionCheck = prerequisites?.run
+    ?.split("\n")
+    .find((line) => line.includes("opencode --version"));
+  expect(versionCheck).toBeDefined();
+  if (!versionCheck) throw new Error("Missing CLI version prerequisite");
+  for (const [output, expected] of [
+    ["opencode v2.0.26", 0],
+    ["2.0.26", 1],
+    ["opencode v2.0.27", 1],
+  ] as const) {
+    const process = Bun.spawn(
+      [
+        "bash",
+        "-c",
+        versionCheck.replace("$(./node_modules/.bin/opencode --version)", "$VERSION_OUTPUT"),
+      ],
+      {
+        env: { VERSION_OUTPUT: output, OPENCODE_COMPAT_VERSION: "2.0.26" },
+      },
+    );
+    expect(await process.exited).toBe(expected);
+  }
   const names = steps.map((step) => step.name);
 
   const dependencyRoot = "$" + "{{ runner.temp }}/opencode-communicator-packed-runtime";

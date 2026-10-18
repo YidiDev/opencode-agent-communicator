@@ -254,9 +254,8 @@ test/
 - The regular suite has an exact reviewed skip declaration budget enforced by
   `tools/verify-test-skips.mjs`; adding or moving a skip requires explicit review.
 - Linux CI MUST run `test:acceptance:secure-export` with the capability requirement enabled. That
-  cell runs the two capability acceptance tests and both export integration files, including all
-  eight normally capability-skipped secure-export tests. The separate process-tree integration file
-  has the ninth reviewed skip site. The cell fails when descriptor-backed installation or
+  cell runs the two capability acceptance tests and `linux-export-destination.test.ts`, including its
+  four normally capability-skipped tests. The cell fails when descriptor-backed installation or
   atomic replacement is absent and parses Bun's JUnit report to require exactly zero skipped tests.
   It uses a reviewed Debian container with no network, a read-only root, bounded CPU/memory/PIDs,
   all capabilities dropped except `DAC_READ_SEARCH`, `no-new-privileges`, and a small private tmpfs;

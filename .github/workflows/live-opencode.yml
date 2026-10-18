@@ -49,7 +49,7 @@ jobs:
             throw new Error(`OpenCode compatibility metadata must equal ${range}`);
           }
           NODE
-          test "$(./node_modules/.bin/opencode --version)" = "$OPENCODE_COMPAT_VERSION"
+          test "$(./node_modules/.bin/opencode --version)" = "opencode v$OPENCODE_COMPAT_VERSION"
       - name: Run isolated compatibility harness
         env:
           OPENCODE_COMMUNICATOR_PACKED_RUNTIME_DEPENDENCIES_ROOT: ${{ runner.temp }}/opencode-communicator-packed-runtime

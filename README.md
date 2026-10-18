@@ -6,9 +6,10 @@
 [![OpenCode v2 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** `0.7.4` supports Linux x64 and stable OpenCode versions
-`>=2.0.26 <2.1.0`. Bun `1.4.0` is required for development and release verification. Other
+**Release status:** The OpenCode v2 migration is unreleased. This checkout supports Linux x64 and
+stable OpenCode versions `>=2.0.26 <2.1.0`. Bun `1.4.0` is required for development and release verification. Other
 architectures, operating systems, OpenCode versions, and prereleases are unsupported.
+The published `v0.7.4` tag targets OpenCode 1.18 and does not contain this migration.
 
 ## Contents
 
@@ -54,18 +55,20 @@ metadata and release gates. Network and clustered filesystems are rejected for t
 
 ### 1. Install the plugin
 
-Install the immutable private release outside OpenCode:
+For this unreleased migration, install an immutable commit from a reviewed v2 checkout. Run these
+commands in that checkout; keep its full commit SHA with the installation:
 
 ```bash
-install_root="$HOME/.local/share/opencode-agent-communicator/v0.7.4"
+v2_commit="$(git rev-parse HEAD)"
+install_root="$HOME/.local/share/opencode-agent-communicator/v2-$v2_commit"
 install -d -m 0700 "$install_root"
 npm install --prefix "$install_root" --save-exact --ignore-scripts \
-  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.7.4"
+  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#$v2_commit"
 test -f "$install_root/node_modules/opencode-agent-communicator/src/index.ts"
 ```
 
 The repository is private, so the account running npm and OpenCode must have working GitHub SSH
-access. Release tags are immutable by project policy; do not replace `v0.7.4` with `main`.
+access. Do not install a mutable branch reference. A future v2 release will provide an immutable tag.
 
 ### 2. Add the plugin
 
@@ -77,7 +80,7 @@ absolute home directory of the account that performed the installation:
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.7.4/node_modules/opencode-agent-communicator/src/index.ts",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v2-<full-reviewed-commit>/node_modules/opencode-agent-communicator/src/index.ts",
       {
         "policies": {
           "message": "allow",
@@ -97,6 +100,24 @@ OpenCode v2 accepts the tuple form for a plugin source and its strict package-sp
 entrypoint uses the public `Plugin.define` Effect API and registers tools and skills through
 `tool.transform` and `skill.transform`; it does not use a private HTTP transport. Keep the private
 installation directory in place while OpenCode uses it.
+Replace `<full-reviewed-commit>` with the SHA used above.
+
+### Current public-v2 capability limits
+
+The public host API has no authoritative current activity query. `session_list` therefore reports
+`unknown` activity; `status: "active"` and `status: "idle"` cannot establish matching peers.
+Context delivery returns `target_status_unknown`; `session_stop` returns `native_unavailable`, both
+before any effect. They remain registered for a stable tool manifest, but are unsupported on this
+host API. Use explicit
+`session_send` user delivery or durable queue-based ask/wait requests for supported communication.
+Queue admission can wake a target and is transcript-visible; it never proves execution.
+`session_read` requires current visibility and applicable static policy, not known activity;
+`is_live: false` with unknown activity is not proof that the peer is idle.
+
+Discovery scans up to ten 100-candidate registry pages to fill a filtered list. If the scan budget is
+exhausted before enough matches or the end is reached, it reports `native_unavailable` rather than
+silently hiding older matches. At capacity, the registry evicts its oldest discovery candidate;
+requests, deliveries and managed-session provenance are retained independently.
 
 ### 3. Prepare private state
 
@@ -831,7 +852,7 @@ exact ordered 21-tool manifest, all three bundled skills, and a reviewed
 fingerprint of every path npm will pack. It rejects path-policy drift, symlinks, executable entries,
 secret-like names, and generated/test output. The black-box test creates an archive without
 publishing it, installs it into an isolated Bun project, imports the package by name, and checks
-packaged runtime assets. Release `0.7.4` is distributed through its immutable Git tag. The separate
+packaged runtime assets. Published releases are distributed through immutable Git tags. The separate
 trusted-publication workflow accepts only an explicit manual dispatch from the exact release tag and
 publishes the previously verified archive to npm with provenance.
 
@@ -842,18 +863,20 @@ the exact build-time patch:
 bun run test:live
 ```
 
-The live suite preserves the diagnostic Phase 0 capability tests and separately packs the archive,
+The live suite checks conservative unsupported observations and separately packs the archive,
 extracts it into an isolated harness, wires its declared runtime dependencies from a reviewed local
 snapshot, and loads the production entry by absolute `file://` URL through the public Effect plugin
-contract. Packed acceptance preserves the exact 21-tool and three-skill manifests.
-Deterministic adversarial suites provide visibility-race and bounded-response evidence. Acceptance must also retain the established lock,
-send/delivery, request, start/stop, and configured export-unavailable journeys.
-
-The supported-range live harness exercises this packed journey at both compatibility endpoints. The live job must assert
-the exact manifest (so partial registration fails), all three bundled skills, correlated outputs,
-consumed permissions, and disposal before that compatibility evidence is claimed. Even then, the
-matrix is boundary evidence for the supported minor line, not proof of every failure, recovery,
-retention, or secure-export branch. Actual consumer installation evidence comes from the black-box
+contract. It verifies the exact 21 primary tools and three skills, a correlated `session_list` result,
+lock publication/list/renewal/release, self-read, queue delivery/recovery, and a durable peer ask with
+target payload retrieval, response, source retrieval and acknowledgement. It also verifies the
+explicit unsupported context/stop outcomes, deny-default start and configured export-unavailable
+result. The minimum and build-time patches currently coincide at `2.0.26`, so one host exercises both
+endpoints.
+The Effect-plugin unit suite verifies the exact 21-tool and three-skill manifests, static policy,
+and scoped disposal. Integration suites cover lock, delivery, durable request, start/stop, export,
+visibility races and projection limits. These are separate from live journey evidence; the live
+suite does not yet prove a complete multi-session lifecycle or the extended soak required by #46.
+Actual consumer installation evidence comes from the black-box
 packed-package test and the package-portability acceptance suite.
 
 ### Tokenless free-model evaluation
