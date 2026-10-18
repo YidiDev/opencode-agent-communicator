@@ -53,8 +53,8 @@ describe("request tool argument contracts", () => {
       },
       { message: "allow", ask: "allow", wait: "allow" },
     );
-    expect(tool.description).toContain("visible active root");
-    expect(tool.description).toContain("never wakes an idle target");
+    expect(tool.description).toContain("public queue");
+    expect(tool.description).toContain("admission is distinct from activation");
   });
 
   test("accepts canonical strict request arguments", () => {

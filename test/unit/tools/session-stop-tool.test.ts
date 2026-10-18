@@ -63,7 +63,7 @@ describe("session_stop tool protocol", () => {
       "invalid_arguments",
       "caller_not_visible",
       "target_not_visible",
-      "approval_rejected",
+      "permission_denied",
       "deadline_expired",
       "native_unavailable",
       "native_outcome_unknown",
@@ -72,8 +72,8 @@ describe("session_stop tool protocol", () => {
     ]);
   });
 
-  test("asks once per invocation with exact binding and emits snake_case success", async () => {
-    const tool = createSessionStopTool(ports(), workspaceKey);
+  test("uses explicit static allow and emits snake_case success", async () => {
+    const tool = createSessionStopTool(ports(), workspaceKey, undefined, "allow");
     const approvals: unknown[] = [];
     const context = {
       sessionID: "ses_source",
@@ -101,72 +101,29 @@ describe("session_stop tool protocol", () => {
         },
       });
     }
-    expect(approvals).toHaveLength(2);
-    expect(approvals[0]).toMatchObject({
-      permission: "session_stop",
-      always: [],
-      metadata: {
-        operation: "session_stop",
-        source_session_id: "ses_source",
-        target_session_id: "ses_target",
-        invocation_message_id: "msg_invocation",
-      },
-    });
-    const serialized = JSON.stringify(approvals[0]);
-    expect(serialized).toContain("workspace%3Atool-stop");
-    expect(serialized).toMatch(/reason_sha256=[0-9a-f]{64}/);
-    expect(serialized).not.toContain('"reason":"done"');
+    expect(approvals).toHaveLength(0);
   });
 
-  test("cannot bypass or reuse the invocation approval capability", async () => {
-    const noAskAbort = new AbortController().signal;
-    const expected = {
-      workspaceKey,
-      sourceSessionId: "ses_source" as never,
-      targetSessionId: "ses_target" as never,
-      abort: noAskAbort,
-      deadlineMs: 10_000,
-    };
-    const noAsk = invocationStopApproval(
-      {
-        sessionID: "ses_source",
-        abort: noAskAbort,
-      },
-      expected,
-    );
-    await expect(
-      noAsk.requestStopApproval(
-        {
-          workspaceKey,
-          sourceSessionId: "ses_source" as never,
-          targetSessionId: "ses_target" as never,
-          reasonSha256: "a".repeat(64) as never,
-        },
-        { abort: noAskAbort, deadlineMs: 10_000 },
-      ),
-    ).rejects.toBeInstanceOf(ToolContractFault);
-
+  test("static stop policy allows or denies and cancellation fails closed", async () => {
     const abort = new AbortController().signal;
-    const capability = invocationStopApproval(
-      {
-        sessionID: "ses_source",
-        abort,
-        ask: async () => undefined,
-      },
-      { ...expected, abort },
-    );
     const binding = {
       workspaceKey,
       sourceSessionId: "ses_source" as never,
       targetSessionId: "ses_target" as never,
       reasonSha256: "b".repeat(64) as never,
     };
-    expect(await capability.requestStopApproval(binding, { abort, deadlineMs: 10_000 })).toBe(
-      "approved",
-    );
-    await expect(
-      capability.requestStopApproval(binding, { abort, deadlineMs: 10_000 }),
-    ).rejects.toBeInstanceOf(ToolContractFault);
+    expect(
+      await invocationStopApproval("allow").requestStopApproval(binding, {
+        abort,
+        deadlineMs: 10_000,
+      }),
+    ).toBe("approved");
+    expect(
+      await invocationStopApproval("deny").requestStopApproval(binding, {
+        abort,
+        deadlineMs: 10_000,
+      }),
+    ).toBe("rejected");
   });
 
   test("rejects mismatched targets, invalid counters, outcomes, and extra result keys", () => {
@@ -228,7 +185,7 @@ describe("session_stop tool protocol", () => {
         },
       ),
     );
-    expect(output).toMatchObject({ ok: false, error: { code: "approval_rejected" } });
+    expect(output).toMatchObject({ ok: false, error: { code: "permission_denied" } });
     expect(JSON.stringify(output)).not.toContain("private rejection");
     expect(didPersist).toBe(false);
   });

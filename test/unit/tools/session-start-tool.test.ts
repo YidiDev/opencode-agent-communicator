@@ -1,4 +1,4 @@
-import { expect, jest, test } from "bun:test";
+import { expect, test } from "bun:test";
 
 import type { StartStep } from "../../../src/application/session-start-ports";
 import type { SessionStartPorts } from "../../../src/application/start-session";
@@ -141,7 +141,7 @@ function ports(creation: "created" | "unknown" = "created"): Omit<SessionStartPo
       nativeMessageId: () => nativeMessageId,
     },
     digest: { sha256: async () => new Uint8Array(32) },
-    policy: createSessionStartPolicy(),
+    policy: createSessionStartPolicy({ decision: "allow" }),
   };
 }
 
@@ -238,53 +238,26 @@ test("bounds a membership read immediately before a prepared native effect", asy
   expect(output).toMatchObject({ ok: false, error: { code: "deadline_expired" } });
 });
 
-test("bounds a never-settling session_start approval by the absolute invocation deadline", async () => {
-  jest.useFakeTimers();
-  try {
-    jest.setSystemTime(10_000);
-    const configured = ports();
-    let nowMs = 10_000;
-    let approvalStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      approvalStarted = resolve;
-    });
-    let nativeCalls = 0;
-    const tool = createSessionStartTool(
+test("denies session_start statically without invoking a host approval callback", async () => {
+  const configured = ports();
+  const tool = createSessionStartTool(
+    { ...configured, policy: createSessionStartPolicy({ decision: "deny" }) },
+    workspaceKeyScope(Date.now() + 10_000),
+  );
+  let asked = false;
+  const output = JSON.parse(
+    await tool.execute(
+      { idempotency_key: "tool:static-deny", initial_message: "Do the work" },
       {
-        ...configured,
-        clock: { nowMs: () => nowMs },
-        nativeStart: {
-          ...configured.nativeStart,
-          async createRootSession() {
-            nativeCalls += 1;
-            return "created";
-          },
+        ...context(),
+        ask: async () => {
+          asked = true;
         },
       },
-      workspaceKeyScope(10_005),
-    );
-    const invocation = context();
-    const pending = tool.execute(
-      { idempotency_key: "tool:approval-deadline", initial_message: "Do the work" },
-      {
-        ...invocation,
-        ask: () => {
-          approvalStarted();
-          return new Promise<never>(() => undefined);
-        },
-      },
-    );
-    await started;
-    nowMs = 10_005;
-    jest.advanceTimersByTime(5);
-    expect(JSON.parse(await pending)).toMatchObject({
-      ok: false,
-      error: { code: "approval_rejected" },
-    });
-    expect(nativeCalls).toBe(0);
-  } finally {
-    jest.useRealTimers();
-  }
+    ),
+  );
+  expect(output).toMatchObject({ ok: false, error: { code: "permission_denied" } });
+  expect(asked).toBeFalse();
 });
 
 test("fails closed for unavailable deadlines and serializes malformed callers", async () => {

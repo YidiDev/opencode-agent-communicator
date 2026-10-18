@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import { admitClaimedSessionRequest } from "../../../src/application/admit-claimed-session-request";
 import { classifyStaleSessionRequests } from "../../../src/application/classify-stale-session-requests";
+import { ParticipantOperationGate } from "../../../src/application/participant-operation-gate";
 import { recoverOnePreparedSessionRequest } from "../../../src/application/recover-one-prepared-session-request";
 import type { RequestAdmissionPersistencePort } from "../../../src/application/request-ports";
 import { validateFencingToken } from "../../../src/domain/ownership";
@@ -15,6 +16,96 @@ function valid<Value>(result: { ok: true; value: Value } | { ok: false }): Value
 }
 
 const token = valid(validateFencingToken(41));
+
+test.each(["stop-first", "admission-first"] as const)(
+  "queue effect serializes with participant stop: %s",
+  async (ordering) => {
+    const fixture = await requestFixture(token);
+    const request = {
+      ...fixture.request,
+      deliveryMode: "queue" as const,
+      deliveryState: "submitting" as const,
+      submittedAtMs: 1_001,
+      updatedAtMs: 1_001,
+    };
+    const gate = new ParticipantOperationGate();
+    const lifecycle = new AbortController();
+    let stopped = false;
+    let queueCalls = 0;
+    let release!: () => void;
+    const pause = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const stop = () =>
+      gate.run([request.targetSessionId], lifecycle.signal, async () => {
+        entered();
+        if (ordering === "stop-first") await pause;
+        stopped = true;
+      });
+    const admit = () =>
+      admitClaimedSessionRequest(
+        {
+          requests: {
+            reconcilePreparedClaim: async () =>
+              stopped
+                ? { outcome: "settled", request: { ...request, resolutionState: "cancelled" } }
+                : { outcome: "current_claim", request, envelopeJson: fixture.envelopeJson },
+            completeDelivery: async () => ({
+              ok: true,
+              request: {
+                ...request,
+                deliveryState: "delivery_unknown",
+                deliveryUnknownAtMs: 1_002,
+                updatedAtMs: 1_002,
+              },
+            }),
+          } as never,
+          participantOperations: gate,
+          nativeSteer: {
+            steerRequest: async () => {
+              throw new Error("unexpected steer");
+            },
+          },
+          nativeQueue: {
+            queueMessage: async () => {
+              queueCalls += 1;
+              entered();
+              await pause;
+              expect(stopped).toBe(false);
+              return { kind: "unknown" };
+            },
+          },
+          ownership: { isCurrent: async () => true, acquire: async () => token },
+          notifications: { notifyTerminal: () => undefined },
+          clock: { nowMs: () => 1_002 },
+        },
+        {
+          workspaceKey: request.workspaceKey,
+          fencingToken: token,
+          request,
+          envelope: fixture.envelopeJson,
+          control: { abort: new AbortController().signal },
+          effectSignal: lifecycle.signal,
+        },
+      );
+    const first = ordering === "stop-first" ? stop() : admit();
+    await started;
+    const second = ordering === "stop-first" ? admit() : stop();
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    release();
+    const outcomes = await Promise.all([first, second]);
+    expect(outcomes[ordering === "stop-first" ? 1 : 0]).toMatchObject(
+      ordering === "stop-first" ? { ok: false, error: { code: "state_conflict" } } : { ok: true },
+    );
+    expect(stopped).toBe(true);
+    expect(queueCalls).toBe(ordering === "stop-first" ? 0 : 1);
+  },
+);
 
 test("startup recovery queues a prepared idle-target request exactly once", async () => {
   const fixture = await requestFixture(token);

@@ -5,6 +5,8 @@ import { OwnershipUnavailableError, type StoreContext, StoreIntegrityError } fro
 interface OwnershipRow {
   readonly ownerGenerationId: string;
   readonly fencingToken: number;
+  readonly acquiredWallMs: number;
+  readonly renewedWallMs: number;
   readonly expiresWallMs: number;
   readonly releasedWallMs: number | null;
 }
@@ -14,8 +16,37 @@ interface CountRow {
 }
 
 const ownershipSql = `SELECT owner_id AS ownerGenerationId, fencing_token AS fencingToken,
+  acquired_wall_ms AS acquiredWallMs, renewed_wall_ms AS renewedWallMs,
   expires_wall_ms AS expiresWallMs, released_wall_ms AS releasedWallMs
   FROM ownership WHERE singleton = 1`;
+
+function wallTimestamp(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new StoreIntegrityError("The ownership wall clock is outside its safe range.");
+  }
+  return value;
+}
+
+function leaseEnd(startWallMs: number, leaseDurationMs: number): number {
+  const endWallMs = startWallMs + leaseDurationMs;
+  if (!Number.isSafeInteger(endWallMs)) {
+    throw new StoreIntegrityError("The ownership lease timing exceeds its safe range.");
+  }
+  return endWallMs;
+}
+
+function localLeaseSchedule(nowMonotonicMs: number, leaseDurationMs: number) {
+  const expiresMonotonicMs = nowMonotonicMs + leaseDurationMs;
+  const nextRenewMonotonicMs = nowMonotonicMs + Math.floor(leaseDurationMs / 3);
+  if (
+    !Number.isFinite(nowMonotonicMs) ||
+    nowMonotonicMs < 0 ||
+    expiresMonotonicMs > Number.MAX_SAFE_INTEGER
+  ) {
+    throw new StoreIntegrityError("The ownership monotonic clock is outside its safe range.");
+  }
+  return { expiresMonotonicMs, nextRenewMonotonicMs };
+}
 
 function currentRow(context: StoreContext): OwnershipRow | undefined {
   const row = context.database.query<OwnershipRow, []>(ownershipSql).get() ?? undefined;
@@ -30,9 +61,39 @@ function validRow(row: OwnershipRow): boolean {
     typeof row.ownerGenerationId === "string" &&
     Number.isSafeInteger(row.fencingToken) &&
     row.fencingToken >= 1 &&
+    Number.isSafeInteger(row.acquiredWallMs) &&
+    row.acquiredWallMs >= 0 &&
+    Number.isSafeInteger(row.renewedWallMs) &&
+    row.renewedWallMs >= row.acquiredWallMs &&
     Number.isSafeInteger(row.expiresWallMs) &&
-    (row.releasedWallMs === null || Number.isSafeInteger(row.releasedWallMs))
+    row.expiresWallMs > row.renewedWallMs &&
+    (row.releasedWallMs === null ||
+      (Number.isSafeInteger(row.releasedWallMs) &&
+        row.releasedWallMs >= row.acquiredWallMs &&
+        row.releasedWallMs <= row.expiresWallMs))
   );
+}
+
+function acquisitionEpoch(
+  context: StoreContext,
+  row: OwnershipRow,
+  nowWallMs: number,
+): { readonly token: number; readonly isSameLiveLease: boolean } {
+  const isSameLiveLease =
+    row.ownerGenerationId === context.ownerGenerationId &&
+    context.localToken === row.fencingToken &&
+    context.nowMonotonicMs() < context.localExpiresMonotonicMs &&
+    row.releasedWallMs === null &&
+    row.expiresWallMs > nowWallMs;
+  if (isSameLiveLease) return { token: row.fencingToken, isSameLiveLease };
+  const takeoverWallMs = leaseEnd(row.expiresWallMs, context.takeoverGraceMs);
+  if (row.releasedWallMs === null && takeoverWallMs > nowWallMs) {
+    throw new OwnershipUnavailableError("SQLite ownership is held by another backend.");
+  }
+  if (row.fencingToken >= Number.MAX_SAFE_INTEGER) {
+    throw new StoreIntegrityError("The SQLite fencing epoch is exhausted.");
+  }
+  return { token: row.fencingToken + 1, isSameLiveLease };
 }
 
 export class OwnershipRepository {
@@ -41,8 +102,12 @@ export class OwnershipRepository {
   constructor(private readonly context: StoreContext) {}
 
   acquire(): FencingToken {
+    const schedule = localLeaseSchedule(
+      this.context.nowMonotonicMs(),
+      this.context.leaseDurationMs,
+    );
     const acquire = this.context.database.transaction(() => {
-      const nowWallMs = this.context.nowWallMs();
+      const nowWallMs = wallTimestamp(this.context.nowWallMs());
       const row = currentRow(this.context);
       let token: number;
       if (!row) {
@@ -56,46 +121,33 @@ export class OwnershipRepository {
             token,
             nowWallMs,
             nowWallMs,
-            nowWallMs + this.context.leaseDurationMs,
+            leaseEnd(nowWallMs, this.context.leaseDurationMs),
             this.context.ownerLabel,
           ],
         );
       } else {
-        if (
-          row.ownerGenerationId === this.context.ownerGenerationId &&
-          this.context.localToken === row.fencingToken &&
-          this.context.nowMonotonicMs() < this.context.localExpiresMonotonicMs &&
-          row.releasedWallMs === null &&
-          row.expiresWallMs > nowWallMs
-        ) {
-          token = row.fencingToken;
-        } else {
-          if (
-            row.releasedWallMs === null &&
-            row.expiresWallMs + this.context.takeoverGraceMs > nowWallMs
-          ) {
-            throw new OwnershipUnavailableError("SQLite ownership is held by another backend.");
-          }
-          if (row.fencingToken >= Number.MAX_SAFE_INTEGER) {
-            throw new StoreIntegrityError("The SQLite fencing epoch is exhausted.");
-          }
-          token = row.fencingToken + 1;
-        }
+        const epoch = acquisitionEpoch(this.context, row, nowWallMs);
+        token = epoch.token;
+        const renewedWallMs = epoch.isSameLiveLease
+          ? Math.max(nowWallMs, row.renewedWallMs)
+          : Math.max(nowWallMs, row.expiresWallMs);
+        const acquiredWallMs = epoch.isSameLiveLease ? row.acquiredWallMs : renewedWallMs;
+        const expiresWallMs = Math.max(
+          row.expiresWallMs,
+          leaseEnd(renewedWallMs, this.context.leaseDurationMs),
+        );
         const changed = this.context.database.run(
           `UPDATE ownership SET owner_id = ?, owner_label = ?, fencing_token = ?,
-             acquired_wall_ms = CASE
-               WHEN fencing_token = ? AND owner_id = ? THEN acquired_wall_ms ELSE ? END,
+             acquired_wall_ms = ?,
              renewed_wall_ms = ?, expires_wall_ms = ?, released_wall_ms = NULL
            WHERE singleton = 1 AND fencing_token = ? AND owner_id = ?`,
           [
             this.context.ownerGenerationId,
             this.context.ownerLabel,
             token,
-            token,
-            this.context.ownerGenerationId,
-            nowWallMs,
-            nowWallMs,
-            nowWallMs + this.context.leaseDurationMs,
+            acquiredWallMs,
+            renewedWallMs,
+            expiresWallMs,
             row.fencingToken,
             row.ownerGenerationId,
           ],
@@ -105,10 +157,9 @@ export class OwnershipRepository {
       return token as FencingToken;
     });
     const token = acquire.immediate();
-    const monotonic = this.context.nowMonotonicMs();
     this.context.localToken = token;
-    this.context.localExpiresMonotonicMs = monotonic + this.context.leaseDurationMs;
-    this.context.nextRenewMonotonicMs = monotonic + Math.floor(this.context.leaseDurationMs / 3);
+    this.context.localExpiresMonotonicMs = schedule.expiresMonotonicMs;
+    this.context.nextRenewMonotonicMs = schedule.nextRenewMonotonicMs;
     this.context.startupBlockedToken = this.staleClassificationComplete(token) ? undefined : token;
     return token;
   }
@@ -117,7 +168,7 @@ export class OwnershipRepository {
     if (this.context.localToken !== token) return false;
     const monotonic = this.context.nowMonotonicMs();
     if (monotonic >= this.context.localExpiresMonotonicMs) return false;
-    const wall = this.context.nowWallMs();
+    const wall = wallTimestamp(this.context.nowWallMs());
     const row = currentRow(this.context);
     if (
       !row ||
@@ -129,15 +180,21 @@ export class OwnershipRepository {
     }
     if (row.expiresWallMs <= wall) return false;
     if (monotonic < this.context.nextRenewMonotonicMs) return true;
+    const schedule = localLeaseSchedule(monotonic, this.context.leaseDurationMs);
+    const renewedWallMs = Math.max(wall, row.renewedWallMs);
+    const expiresWallMs = Math.max(
+      row.expiresWallMs,
+      leaseEnd(renewedWallMs, this.context.leaseDurationMs),
+    );
     const changed = this.context.database.run(
       `UPDATE ownership SET renewed_wall_ms = ?, expires_wall_ms = ?
        WHERE singleton = 1 AND owner_id = ? AND fencing_token = ?
          AND released_wall_ms IS NULL AND expires_wall_ms > ?`,
-      [wall, wall + this.context.leaseDurationMs, this.context.ownerGenerationId, token, wall],
+      [renewedWallMs, expiresWallMs, this.context.ownerGenerationId, token, wall],
     );
     if (changed.changes !== 1) return false;
-    this.context.localExpiresMonotonicMs = monotonic + this.context.leaseDurationMs;
-    this.context.nextRenewMonotonicMs = monotonic + Math.floor(this.context.leaseDurationMs / 3);
+    this.context.localExpiresMonotonicMs = schedule.expiresMonotonicMs;
+    this.context.nextRenewMonotonicMs = schedule.nextRenewMonotonicMs;
     return true;
   }
 
@@ -148,7 +205,7 @@ export class OwnershipRepository {
     if (!Number.isSafeInteger(eligibleWallMs)) {
       throw new StoreIntegrityError("Stored ownership takeover timing is invalid.");
     }
-    return Math.max(0, eligibleWallMs - this.context.nowWallMs());
+    return Math.max(0, eligibleWallMs - wallTimestamp(this.context.nowWallMs()));
   }
 
   assertCurrent(token: FencingToken): void {
@@ -168,7 +225,7 @@ export class OwnershipRepository {
     const token = this.context.localToken;
     if (token === undefined) return false;
     if (this.context.nowMonotonicMs() >= this.context.localExpiresMonotonicMs) return false;
-    const wall = this.context.nowWallMs();
+    const wall = wallTimestamp(this.context.nowWallMs());
     const row = currentRow(this.context);
     return (
       row?.ownerGenerationId === this.context.ownerGenerationId &&
@@ -236,8 +293,21 @@ export class OwnershipRepository {
   relinquish(): void {
     const token = this.context.localToken;
     if (token === undefined || !this.hasCurrentLease()) return;
-    const releasedWallMs = this.context.nowWallMs();
+    const observedWallMs = wallTimestamp(this.context.nowWallMs());
     const release = this.context.database.transaction(() => {
+      const row = currentRow(this.context);
+      if (
+        !row ||
+        row.ownerGenerationId !== this.context.ownerGenerationId ||
+        row.fencingToken !== token ||
+        row.releasedWallMs !== null
+      ) {
+        throw new OwnershipLostFault("SQLite ownership was lost.");
+      }
+      const releasedWallMs = Math.max(observedWallMs, row.renewedWallMs);
+      if (releasedWallMs > row.expiresWallMs) {
+        throw new OwnershipLostFault("SQLite ownership was lost.");
+      }
       const changed = this.context.database.run(
         `UPDATE ownership SET released_wall_ms = ?
          WHERE singleton = 1 AND owner_id = ? AND fencing_token = ?

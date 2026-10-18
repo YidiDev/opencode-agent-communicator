@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-  isOpenCode118SessionDeletedEvent,
-  parseOpenCode118SessionDeletedEvent,
+  isOpenCode2SessionDeletedEvent,
+  parseOpenCode2SessionDeletedEvent,
 } from "../../../src/application/participant-deletion-evidence";
 import { ParticipantDeletionLifecycle } from "../../../src/application/participant-deletion-lifecycle";
 import type {
@@ -27,19 +27,17 @@ const token = valid(validateFencingToken(1));
 const workspace = valid(validateWorkspaceKey("workspace:deletion"));
 
 function event(overrides: Record<string, unknown> = {}) {
+  const sessionID = overrides.id ?? "ses_deleted";
+  const location = Object.hasOwn(overrides, "directory")
+    ? { location: { directory: overrides.directory } }
+    : {};
   return {
+    id: "evt_deleted",
+    created: 1,
     type: "session.deleted",
-    properties: {
-      info: {
-        id: "ses_deleted",
-        projectID: "project",
-        directory: "/workspace",
-        title: "Deleted",
-        version: "1.18.23",
-        time: { created: 1, updated: 2 },
-        ...overrides,
-      },
-    },
+    durable: { aggregateID: String(sessionID), seq: 1, version: 2 },
+    ...location,
+    data: { sessionID },
   };
 }
 
@@ -78,8 +76,23 @@ function fixture(timers?: {
     stop: (reason: string) => calls.push(`stop:${reason}`),
   };
   const requests = {
-    async listParticipantDeletionCandidates(): Promise<ParticipantDeletionCandidatesResult> {
-      return { ok: true as const, sessionIds: [] };
+    async listParticipantDeletionCandidates(_input: {
+      readonly fencingToken: typeof token;
+      readonly workspaceKey: typeof workspace;
+    }): Promise<ParticipantDeletionCandidatesResult> {
+      return {
+        ok: true as const,
+        sessionIds: [
+          valid(validateSessionId("ses_deleted")),
+          valid(validateSessionId("ses_overflow")),
+          ...Array.from({ length: 64 }, (_, index) =>
+            valid(validateSessionId(`ses_deleted${index}`)),
+          ),
+          ...Array.from({ length: 1_025 }, (_, index) =>
+            valid(validateSessionId(`ses_history${index}`)),
+          ),
+        ],
+      };
     },
     async deleteParticipantRequests() {
       calls.push("persist");
@@ -170,18 +183,66 @@ describe("participant deletion application lifecycle", () => {
     expect(value.calls).toEqual([]);
   });
 
-  test("accepts only exact bound root evidence and ignores unrelated events safely", async () => {
+  test("authorizes exact evidence with trusted location and scoped participant registry", async () => {
     const value = fixture();
-    await value.handler.handle({ type: "message.updated", properties: {} });
+    const lookups: unknown[] = [];
+    const list = value.requests.listParticipantDeletionCandidates;
+    value.requests.listParticipantDeletionCandidates = async (input) => {
+      lookups.push(input);
+      return list(input);
+    };
+    await value.handler.handle({ type: "message.updated", data: {} });
     await value.handler.handle(event({ directory: "/other" }));
-    await value.handler.handle(event({ projectID: "other" }));
-    await value.handler.handle(event({ parentID: "ses_parent" }));
-    await value.handler.handle(event());
+    await value.handler.handle(event({ id: "ses_unregistered" }));
+    await value.handler.handle(event({ directory: "/workspace" }));
     await value.handler.handle(event());
     expect(value.calls).toEqual(["persist"]);
+    expect(lookups).toEqual([
+      { fencingToken: token, workspaceKey: workspace },
+      { fencingToken: token, workspaceKey: workspace },
+      { fencingToken: token, workspaceKey: workspace },
+    ]);
     await value.handler.dispose();
     await value.handler.handle(event());
     expect(value.calls).toEqual(["persist"]);
+  });
+
+  test("fails closed on registry lookup failures and recognized negative outcomes", async () => {
+    const rejected = fixture();
+    rejected.requests.listParticipantDeletionCandidates = async () => {
+      throw new Error("registry unavailable");
+    };
+    await expect(rejected.handler.handle(event())).rejects.toThrow("registry lookup failed closed");
+    expect(rejected.calls).toEqual(["stop:shutdown"]);
+
+    for (const [result, stopped] of [
+      [{ ok: false, code: "ownership_lost" }, "stop:ownership_lost"],
+      [{ ok: false, code: "storage_unavailable" }, "stop:shutdown"],
+    ] as const) {
+      const value = fixture();
+      value.requests.listParticipantDeletionCandidates = async () => result;
+      await expect(value.handler.handle(event())).rejects.toThrow("registry lookup failed closed");
+      expect(value.calls).toEqual([stopped]);
+      await value.handler.dispose();
+    }
+  });
+
+  test("rejects malformed registry records, candidate arrays, IDs, and duplicates", async () => {
+    const malformed: unknown[] = [
+      null,
+      { ok: true, sessionIds: [], extra: true },
+      { ok: false, code: "future" },
+      { ok: true, sessionIds: "ses_deleted" },
+      { ok: true, sessionIds: ["invalid"] },
+      { ok: true, sessionIds: ["ses_deleted", "ses_deleted"] },
+    ];
+    for (const result of malformed) {
+      const value = fixture();
+      value.requests.listParticipantDeletionCandidates = async () => result as never;
+      await expect(value.handler.handle(event())).rejects.toThrow("registry lookup failed closed");
+      expect(value.calls).toEqual(["stop:shutdown"]);
+      await value.handler.dispose();
+    }
   });
 
   test("fails lifecycle readiness on malformed relevant evidence and persistence failure", async () => {
@@ -347,45 +408,55 @@ describe("participant deletion periodic reconciliation lifecycle", () => {
     expect(starting.calls).toEqual([]);
     await starting.handler.dispose();
   });
+
+  test("maps periodic registry contract and ownership faults while the lifecycle is active", async () => {
+    for (const [result, stopped] of [
+      [{ ok: true, sessionIds: ["invalid"] }, "stop:shutdown"],
+      [{ ok: false, code: "ownership_lost" }, "stop:ownership_lost"],
+    ] as const) {
+      let callback: (() => void) | undefined;
+      const value = fixture({
+        set(_delay, wake) {
+          callback = wake;
+          return 1;
+        },
+        clear() {},
+      });
+      value.requests.listParticipantDeletionCandidates = async () => result as never;
+      callback?.();
+      for (let index = 0; index < 20 && value.calls.length === 0; index += 1)
+        await Promise.resolve();
+      expect(value.calls).toEqual([stopped]);
+      await value.handler.dispose();
+    }
+  });
 });
 
-describe("OpenCode 1.18.23 participant deletion evidence", () => {
-  test("parses the complete pinned optional session shape without retaining mutable input", () => {
-    const input = event({
-      time: { created: 1, updated: 2, compacting: 3 },
-      summary: {
-        additions: 2,
-        deletions: 1,
-        files: 1,
-        diffs: [{ file: "a.ts", before: "a", after: "b", additions: 1, deletions: 1 }],
-      },
-      share: { url: "https://example.test/session" },
-      revert: { messageID: "msg", partID: "part", snapshot: "snapshot", diff: "diff" },
-    });
-    const parsed = parseOpenCode118SessionDeletedEvent(input);
+describe("OpenCode 2.0.26 participant deletion evidence", () => {
+  test("parses the exact durable public shape without inferring unavailable session fields", () => {
+    const input = {
+      ...event(),
+      location: { directory: "/workspace", workspaceID: "wrk_1" },
+      metadata: { source: "test" },
+    };
+    const parsed = parseOpenCode2SessionDeletedEvent(input);
     expect(parsed).toEqual({
       sessionId: valid(validateSessionId("ses_deleted")),
-      projectId: "project",
       directory: "/workspace",
-      isRoot: true,
     });
     expect(Object.isFrozen(parsed)).toBe(true);
 
-    const nullSession = Object.assign(Object.create(null), event().properties.info);
-    const nullProperties = Object.assign(Object.create(null), { info: nullSession });
-    const nullEvent = Object.assign(Object.create(null), {
-      type: "session.deleted",
-      properties: nullProperties,
-    });
-    expect(parseOpenCode118SessionDeletedEvent(nullEvent)).toMatchObject({
-      sessionId: "ses_deleted",
-      isRoot: true,
+    const nullEvent = Object.assign(Object.create(null), event());
+    nullEvent.data = Object.assign(Object.create(null), event().data);
+    nullEvent.durable = Object.assign(Object.create(null), event().durable);
+    expect(parseOpenCode2SessionDeletedEvent(nullEvent)).toEqual({
+      sessionId: valid(validateSessionId("ses_deleted")),
     });
   });
 
   test("rejects hostile deletion evidence without invoking accessors", () => {
     let reads = 0;
-    const accessor = Object.defineProperty(event(), "properties", {
+    const accessor = Object.defineProperty(event(), "data", {
       enumerable: true,
       get: () => {
         reads += 1;
@@ -404,19 +475,9 @@ describe("OpenCode 1.18.23 participant deletion evidence", () => {
       },
     });
     for (const value of [accessor, symbol, inherited, throwing]) {
-      expect(parseOpenCode118SessionDeletedEvent(value)).toBeUndefined();
+      expect(() => parseOpenCode2SessionDeletedEvent(value)).toThrow("malformed");
     }
     expect(reads).toBe(0);
-
-    for (const properties of [
-      Object.create({ info: event().properties.info }),
-      Object.defineProperty({}, "info", { enumerable: true, get: () => event().properties.info }),
-      Object.defineProperty({ info: event().properties.info }, Symbol("hidden"), { value: true }),
-    ]) {
-      expect(() =>
-        parseOpenCode118SessionDeletedEvent({ type: "session.deleted", properties }),
-      ).toThrow("malformed");
-    }
 
     const typeAccessor = Object.defineProperty({}, "type", {
       enumerable: true,
@@ -425,9 +486,9 @@ describe("OpenCode 1.18.23 participant deletion evidence", () => {
         return "session.deleted";
       },
     });
-    expect(isOpenCode118SessionDeletedEvent(typeAccessor)).toBe(false);
+    expect(isOpenCode2SessionDeletedEvent(typeAccessor)).toBe(false);
     expect(
-      isOpenCode118SessionDeletedEvent(
+      isOpenCode2SessionDeletedEvent(
         new Proxy(
           {},
           {
@@ -438,61 +499,27 @@ describe("OpenCode 1.18.23 participant deletion evidence", () => {
         ),
       ),
     ).toBe(false);
-    expect(isOpenCode118SessionDeletedEvent(null)).toBe(false);
-    expect(isOpenCode118SessionDeletedEvent([])).toBe(false);
+    expect(isOpenCode2SessionDeletedEvent(null)).toBe(false);
+    expect(isOpenCode2SessionDeletedEvent([])).toBe(false);
     expect(reads).toBe(0);
   });
 
-  test("fails closed on malformed optional session fields and dense diff violations", () => {
-    const sparseDiffs = new Array(1);
-    const indexedAccessor: unknown[] = [];
-    Object.defineProperty(indexedAccessor, "0", { enumerable: true, get: () => "ignored" });
-    Object.defineProperty(indexedAccessor, "length", { value: 1 });
-    const inheritedDiffs = Object.setPrototypeOf([], null);
-    const malformed: Record<string, unknown>[] = [
-      { time: { created: -1, updated: 2 } },
-      { time: { created: 1, updated: 2, compacting: -1 } },
-      { summary: { additions: -1, deletions: 0, files: 0 } },
-      { summary: { additions: 0, deletions: Number.NaN, files: 0 } },
-      { summary: { additions: 0, deletions: 0, files: 0, diffs: sparseDiffs } },
-      { summary: { additions: 0, deletions: 0, files: 0, diffs: indexedAccessor } },
-      { summary: { additions: 0, deletions: 0, files: 0, diffs: inheritedDiffs } },
-      {
-        summary: {
-          additions: 0,
-          deletions: 0,
-          files: 0,
-          diffs: [{ file: "a", before: "", after: "", additions: -1, deletions: 0 }],
-        },
-      },
-      {
-        summary: {
-          additions: 0,
-          deletions: 0,
-          files: 0,
-          diffs: [{ file: 1, before: "", after: "", additions: 0, deletions: 0 }],
-        },
-      },
-      {
-        summary: {
-          additions: 0,
-          deletions: 0,
-          files: 0,
-          diffs: [{ file: "a", before: "", after: "", additions: 0, deletions: -1 }],
-        },
-      },
-      { share: { url: 1 } },
-      { share: { url: "x".repeat(8_193) } },
-      { revert: { messageID: 1 } },
-      { revert: { messageID: "msg", partID: 1 } },
-      { parentID: "invalid" },
-      { projectID: "" },
-      { directory: "" },
-      { title: "x".repeat(65_537) },
-      { version: "x".repeat(257) },
+  test("fails closed on malformed v2 envelopes, durable metadata, locations, and data", () => {
+    const malformed = [
+      { ...event(), id: "" },
+      { ...event(), created: Number.NaN },
+      { ...event(), durable: { aggregateID: "ses_deleted", seq: -1, version: 2 } },
+      { ...event(), durable: { aggregateID: "ses_other", seq: 1, version: 2 } },
+      { ...event(), durable: { aggregateID: "ses_deleted", seq: 1, version: 1 } },
+      { ...event(), durable: { aggregateID: "ses_deleted", seq: 1 } },
+      { ...event(), data: { sessionID: "invalid" } },
+      { ...event(), data: { sessionID: "ses_deleted", projectID: "project" } },
+      { ...event(), location: { directory: "" } },
+      { ...event(), location: { directory: "/workspace", extra: true } },
+      { ...event(), properties: { info: {} } },
     ];
-    for (const override of malformed) {
-      expect(() => parseOpenCode118SessionDeletedEvent(event(override))).toThrow("malformed");
+    for (const value of malformed) {
+      expect(() => parseOpenCode2SessionDeletedEvent(value)).toThrow("malformed");
     }
   });
 });

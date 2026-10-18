@@ -160,7 +160,7 @@ describe("stop session application workflow", () => {
     rejected.rejectApproval();
     expect(await execute(rejected)).toMatchObject({
       ok: false,
-      error: { code: "approval_rejected" },
+      error: { code: "permission_denied" },
     });
     expect(rejected.calls).toEqual(["ready", "observe", "approval"]);
   });

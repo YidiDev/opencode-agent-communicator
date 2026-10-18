@@ -15,16 +15,16 @@ function isContained(parent: string, candidate: string): boolean {
 }
 
 export async function resolveExactProjectCli(projectRoot: string): Promise<string> {
-  const packageDirectory = await realpath(join(projectRoot, "node_modules", "opencode-ai"));
+  const packageDirectory = await realpath(join(projectRoot, "node_modules", "@opencode", "cli"));
   const expectedDirectory = await realpath(join(projectRoot, "node_modules"));
   if (!isContained(expectedDirectory, packageDirectory)) {
-    throw new Error("opencode-ai resolved outside project node_modules");
+    throw new Error("@opencode/cli resolved outside project node_modules");
   }
 
   const manifestText = await readFile(join(packageDirectory, "package.json"), "utf8");
   const manifest: PackageManifest = JSON.parse(manifestText);
-  if (manifest.name !== "opencode-ai" || manifest.version !== exactOpenCodeVersion) {
-    throw new Error(`expected project-local opencode-ai ${exactOpenCodeVersion}`);
+  if (manifest.name !== "@opencode/cli" || manifest.version !== exactOpenCodeVersion) {
+    throw new Error(`expected project-local @opencode/cli ${exactOpenCodeVersion}`);
   }
   if (
     typeof manifest.bin !== "object" ||
@@ -32,7 +32,7 @@ export async function resolveExactProjectCli(projectRoot: string): Promise<strin
     !("opencode" in manifest.bin) ||
     typeof manifest.bin.opencode !== "string"
   ) {
-    throw new Error("opencode-ai does not declare the expected CLI binary");
+    throw new Error("@opencode/cli does not declare the expected CLI binary");
   }
 
   const cliPath = await realpath(join(packageDirectory, manifest.bin.opencode));

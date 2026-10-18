@@ -31,12 +31,11 @@ export interface SessionExportSummary {
   readonly contentSha256: Sha256Digest;
 }
 
-export type ExportPolicyDecision = "allow" | "ask" | "deny";
+export type ExportPolicyDecision = "allow" | "deny";
 
 export interface SessionExportPolicy {
   readonly selfSanitized: ExportPolicyDecision;
   readonly crossSession: ExportPolicyDecision;
-  readonly unsanitized: ExportPolicyDecision;
   readonly overwrite: ExportPolicyDecision;
 }
 
@@ -44,15 +43,14 @@ export function createSessionExportPolicy(
   input: Partial<SessionExportPolicy> = {},
 ): SessionExportPolicy {
   const valid = (value: unknown): value is ExportPolicyDecision =>
-    value === "allow" || value === "ask" || value === "deny";
+    value === "allow" || value === "deny";
   for (const value of Object.values(input)) {
     if (!valid(value)) throw new TypeError("Export policy contains an unsupported decision.");
   }
   return Object.freeze({
     selfSanitized: input.selfSanitized ?? "allow",
-    crossSession: input.crossSession ?? "ask",
-    unsanitized: input.unsanitized ?? "ask",
-    overwrite: input.overwrite ?? "ask",
+    crossSession: input.crossSession ?? "deny",
+    overwrite: input.overwrite ?? "deny",
   });
 }
 

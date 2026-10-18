@@ -413,7 +413,7 @@ export async function readSession(
         return failure("native_unavailable", "Session read approval is unavailable.", true);
       }
       if (decision === "rejected")
-        return failure("approval_rejected", "Session read approval was rejected.");
+        return failure("permission_denied", "Cross-session read is denied by policy.");
     }
 
     if (cursorBoundary && isEmptyBoundary) {

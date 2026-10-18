@@ -8,7 +8,7 @@ COPY test/unit/composition/plugin-factory.test.ts ./test/unit/composition/plugin
 COPY skills ./skills
 COPY docs ./docs
 COPY CHANGELOG.md LICENSE README.md SECURITY.md ./
-RUN bun -e 'import plugin from "./src/index.ts"; if (typeof plugin !== "function") throw new Error("source entry is not a plugin")'
+RUN bun -e 'import plugin from "./src/index.ts"; if (plugin.id !== "opencode-agent-communicator" || typeof plugin.effect !== "function") throw new Error("source entry is not a v2 Effect plugin")'
 RUN bun test test/unit/adapters/export/a-linux-syscalls.test.ts test/unit/composition/plugin-factory.test.ts
 
 FROM source AS packed
@@ -17,4 +17,4 @@ RUN apk add --no-cache npm
 RUN mkdir /consumer
 WORKDIR /consumer
 RUN npm install --ignore-scripts --no-audit --no-fund /package/opencode-agent-communicator-0.7.4.tgz
-RUN bun -e 'import plugin from "opencode-agent-communicator"; if (typeof plugin !== "function") throw new Error("packed entry is not a plugin")'
+RUN bun -e 'import plugin from "opencode-agent-communicator"; if (plugin.id !== "opencode-agent-communicator" || typeof plugin.effect !== "function") throw new Error("packed entry is not a v2 Effect plugin")'

@@ -111,13 +111,14 @@ async function execute(
   fake: ReturnType<typeof fixture>,
   args: Record<string, unknown>,
   deadlineMs = Date.now() + 10_000,
+  abort = new AbortController().signal,
 ) {
   return exportSession(
     fake.ports,
     {
       workspaceKey,
       sourceSessionId,
-      abort: new AbortController().signal,
+      abort,
       deadlineMs,
     },
     { destination: "safe/export.json", ...args },
@@ -151,7 +152,7 @@ describe("export session application workflow", () => {
     expect(JSON.stringify(result)).not.toContain("messages");
   });
 
-  test("asks for cross-session/unsanitized mode and independently for overwrite", async () => {
+  test("rejects unsanitized mode before export", async () => {
     const fake = fixture();
     expect(
       await execute(fake, {
@@ -159,18 +160,16 @@ describe("export session application workflow", () => {
         sanitize: false,
         overwrite: true,
       }),
-    ).toMatchObject({ ok: true });
-    expect(fake.approvals).toEqual(["mode", "overwrite"]);
+    ).toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
+    expect(fake.approvals).toEqual([]);
   });
 
   test("does not let permissive mode policy bypass overwrite approval", async () => {
-    const fake = fixture(
-      createSessionExportPolicy({ crossSession: "allow", unsanitized: "allow" }),
-    );
+    const fake = fixture(createSessionExportPolicy({ crossSession: "allow", overwrite: "allow" }));
     expect(await execute(fake, { session_id: "ses_target", overwrite: true })).toMatchObject({
       ok: true,
     });
-    expect(fake.approvals).toEqual(["overwrite"]);
+    expect(fake.approvals).toEqual([]);
   });
 
   test("fails before effects for invalid arguments, visibility, policy, and ownership", async () => {
@@ -198,10 +197,10 @@ describe("export session application workflow", () => {
     });
     expect(hidden.calls).not.toContain("export");
 
-    const denied = fixture(createSessionExportPolicy({ unsanitized: "deny" }));
+    const denied = fixture();
     expect(await execute(denied, { sanitize: false })).toMatchObject({
       ok: false,
-      error: { code: "permission_denied" },
+      error: { code: "invalid_arguments" },
     });
     expect(denied.calls).not.toContain("export");
 
@@ -254,25 +253,16 @@ describe("export session application workflow", () => {
     expect(ownershipRace.calls).toContain("export");
   });
 
-  test("a rejected overwrite approval remains independent from allowed mode", async () => {
-    const fake = fixture(createSessionExportPolicy({ overwrite: "ask" }));
-    fake.overrideApproval((kind) => (kind === "overwrite" ? "rejected" : "approved"));
+  test("overwrite remains independently denied by static policy", async () => {
+    const fake = fixture(createSessionExportPolicy({ overwrite: "deny" }));
     expect(await execute(fake, { overwrite: true })).toMatchObject({
       ok: false,
-      error: { code: "approval_rejected" },
+      error: { code: "permission_denied" },
     });
     expect(fake.calls).not.toContain("export");
   });
 
-  test("bounds approval and exporter calls by the absolute deadline", async () => {
-    const approval = fixture(createSessionExportPolicy({ unsanitized: "ask" }));
-    approval.ports.approval.requestExportApproval = () => new Promise(() => {});
-    expect(await execute(approval, { sanitize: false }, Date.now() + 20)).toMatchObject({
-      ok: false,
-      error: { code: "export_limit_exceeded" },
-    });
-    expect(approval.calls).not.toContain("export");
-
+  test("bounds exporter calls by the absolute deadline", async () => {
     const exporter = fixture();
     exporter.ports.exporter.writeExport = () =>
       new Promise((resolve) =>
@@ -354,21 +344,16 @@ describe("export session application failure boundaries", () => {
     });
   });
 
-  test("maps approval transport and runtime failures without invoking the exporter", async () => {
-    for (const approval of [
-      async () => {
-        throw new Error("approval offline");
-      },
-      async () => "unexpected",
-    ]) {
-      const fake = fixture(createSessionExportPolicy({ unsanitized: "ask" }));
-      fake.ports.approval.requestExportApproval = approval as never;
-      expect(await execute(fake, { sanitize: false })).toMatchObject({
-        ok: false,
-        error: { code: "export_unavailable" },
-      });
-      expect(fake.calls).not.toContain("export");
-    }
+  test("never invokes obsolete approval transport", async () => {
+    const fake = fixture(createSessionExportPolicy({ overwrite: "deny" }));
+    fake.ports.approval.requestExportApproval = async () => {
+      throw new Error("obsolete approval transport must not run");
+    };
+    expect(await execute(fake, { overwrite: true })).toMatchObject({
+      ok: false,
+      error: { code: "permission_denied" },
+    });
+    expect(fake.calls).not.toContain("export");
   });
 
   test("requires the recovered lifecycle epoch and never reacquires for ordinary export", async () => {
@@ -446,6 +431,140 @@ describe("export session application failure boundaries", () => {
     expect(await execute(storage, {})).toMatchObject({
       ok: false,
       error: { code: "native_outcome_unknown" },
+    });
+  });
+});
+
+describe("export session projection and policy coverage", () => {
+  test("fails closed for every malformed membership projection shape", async () => {
+    const malformedValues: unknown[] = [
+      null,
+      { sourceVisible: "yes", targetVisible: true, sourceTitle: undefined },
+      { sourceVisible: true, targetVisible: "yes", sourceTitle: undefined },
+      { sourceVisible: true, targetVisible: true, sourceTitle: 1 },
+    ];
+    for (const value of malformedValues) {
+      const fake = fixture();
+      fake.ports.membership.readCurrentRoots = (async () => value) as never;
+      expect(await execute(fake, {})).toMatchObject({
+        ok: false,
+        error: { code: "export_unavailable" },
+      });
+      expect(fake.calls).not.toContain("export");
+    }
+
+    const rejected = fixture();
+    rejected.ports.membership.readCurrentRoots = async () => {
+      throw new Error("projection transport failed");
+    };
+    expect(await execute(rejected, {})).toMatchObject({
+      ok: false,
+      error: { code: "export_unavailable" },
+    });
+  });
+
+  test("applies mode deny and rejects malformed overwrite policy decisions", async () => {
+    const denied = fixture();
+    expect(await execute(denied, { session_id: "ses_target" })).toMatchObject({
+      ok: false,
+      error: { code: "permission_denied" },
+    });
+    expect(denied.calls).not.toContain("export");
+
+    for (const decision of [
+      { mode: "allow", overwrite: "sometimes" },
+      { mode: "allow", injected: "allow" },
+    ]) {
+      const malformed = fixture();
+      (malformed.ports as unknown as { policy: unknown }).policy = {
+        decisionFor: () => decision,
+      };
+      expect(await execute(malformed, { overwrite: true })).toMatchObject({
+        ok: false,
+        error: { code: "export_unavailable" },
+      });
+    }
+  });
+
+  test("fails closed when the second membership observation is rejected", async () => {
+    const fake = fixture();
+    let observations = 0;
+    fake.ports.membership.readCurrentRoots = async () => {
+      observations += 1;
+      if (observations === 2) throw new Error("membership changed");
+      return { sourceVisible: true, targetVisible: true, sourceTitle: undefined };
+    };
+    expect(await execute(fake, {})).toMatchObject({
+      ok: false,
+      error: { code: "export_unavailable" },
+    });
+    expect(fake.calls).not.toContain("export");
+  });
+
+  test("maps caller and target loss during the effect guard before invoking the exporter", async () => {
+    for (const [hidden, code] of [
+      ["source", "caller_not_visible"],
+      ["target", "target_not_visible"],
+    ] as const) {
+      const fake = fixture();
+      let observations = 0;
+      fake.ports.membership.readCurrentRoots = async () => {
+        observations += 1;
+        return {
+          sourceVisible: hidden !== "source" || observations < 3,
+          targetVisible: hidden !== "target" || observations < 3,
+          sourceTitle: undefined,
+        };
+      };
+      expect(await execute(fake, {})).toMatchObject({ ok: false, error: { code } });
+      expect(fake.calls).not.toContain("export");
+    }
+  });
+
+  test("maps guard deadline, membership failure, and aborted ownership checks to unavailable", async () => {
+    const deadline = fixture();
+    deadline.ports.ownership.isCurrent = () => new Promise(() => {});
+    expect(await execute(deadline, {}, Date.now() + 20)).toMatchObject({
+      ok: false,
+      error: { code: "export_unavailable" },
+    });
+
+    const membership = fixture();
+    let observations = 0;
+    membership.ports.membership.readCurrentRoots = async () => {
+      observations += 1;
+      if (observations === 3) throw new Error("membership unavailable at effect boundary");
+      return { sourceVisible: true, targetVisible: true, sourceTitle: undefined };
+    };
+    expect(await execute(membership, {})).toMatchObject({
+      ok: false,
+      error: { code: "export_unavailable" },
+    });
+
+    const aborted = fixture();
+    const controller = new AbortController();
+    let ownershipChecks = 0;
+    aborted.ports.ownership.isCurrent = async () => {
+      ownershipChecks += 1;
+      if (ownershipChecks === 1) controller.abort();
+      return true;
+    };
+    expect(await execute(aborted, {}, Date.now() + 10_000, controller.signal)).toMatchObject({
+      ok: false,
+      error: { code: "export_unavailable" },
+    });
+  });
+
+  test("maps unexpected lifecycle epoch access to storage unavailable", async () => {
+    const fake = fixture();
+    Object.defineProperty(fake.ports.readiness, "fencingToken", {
+      get() {
+        throw new Error("broken lifecycle state");
+      },
+    });
+    expect(await execute(fake, {})).toMatchObject({
+      ok: false,
+      error: { code: "storage_unavailable" },
     });
   });
 });

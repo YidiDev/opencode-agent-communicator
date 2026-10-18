@@ -3,8 +3,11 @@ import { communicatorToolIds } from "../../src/composition/tools";
 import sessionCommunicatorPlugin from "../../src/index";
 
 describe("package entrypoint", () => {
-  test("exports the production initializer and freezes the exact public tool manifest", () => {
-    expect(sessionCommunicatorPlugin).toBeInstanceOf(Function);
+  test("exports the production Effect plugin and freezes the exact public tool manifest", () => {
+    expect(sessionCommunicatorPlugin).toEqual({
+      id: "opencode-agent-communicator",
+      effect: expect.any(Function),
+    });
     expect(communicatorToolIds).toEqual([
       "session_list",
       "session_read",

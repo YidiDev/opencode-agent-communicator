@@ -1,5 +1,4 @@
 import type { NativeMessageId, RequestId, StartOperationId } from "../domain/generated-ids";
-import { digestMessageContent } from "../domain/message-payload";
 import { blockingRequestDeadlineMarginMs } from "../domain/request-constants";
 import {
   canonicalizeSerializeAndDigestPendingRequestPayload,
@@ -13,11 +12,12 @@ import {
   requestCancelledFailure as cancelledFailure,
   currentRequestOwnership as currentOwnership,
   linkedAdmissionController,
-  observeActiveRequestParticipants as observeActive,
   proveCurrentCallerVisibility,
+  proveCurrentRequestVisibility,
   requestStorageFailure as storageFailure,
   wakeRequestScheduler as wakeScheduler,
 } from "./blocking-request-creation-preconditions";
+import { claimAndAdmitBlockingRequest } from "./blocking-session-request-admission";
 import {
   blockingCheckpoint,
   type SessionBlockingRequestContext,
@@ -111,7 +111,7 @@ async function createInternal(
     sourceSessionId: validated.value.sourceSessionId,
     targetSessionId: validated.value.targetSessionId,
     nativeMessageId,
-    deliveryMode: "context",
+    deliveryMode: "queue",
     kind: operation,
     resolutionState: "pending",
     deliveryState: "prepared",
@@ -130,27 +130,15 @@ async function createInternal(
   );
   if (envelopeSettlement.kind === "aborted") return cancelledFailure();
   if (envelopeSettlement.kind !== "settled") return storageFailure();
-  const envelopeBytes = new TextEncoder().encode(envelopeSettlement.value);
-  const envelopeDigest = await runUntilAborted(context.abort, () =>
-    digestMessageContent(ports.digest, envelopeBytes),
-  );
-  if (envelopeDigest.kind === "aborted") return cancelledFailure();
-  if (envelopeDigest.kind !== "settled") return storageFailure();
   const approved = await authorize(ports, context, prepared, payload.value.timeoutSeconds);
   if (!approved.ok) return approved;
   const prepareInput = {
     fencingToken: context.fencingToken,
     creationOperationId,
-    deliveryMode: "context",
+    deliveryMode: "queue",
     request: prepared,
     payloadJson: payload.serialized,
     envelopeJson: envelopeSettlement.value,
-    contextAdmission: {
-      requestId,
-      envelopeJson: envelopeSettlement.value,
-      contentByteLength: envelopeBytes.length,
-      contentSha256: envelopeDigest.value,
-    },
   } as const;
   let gated: DomainResult<{
     readonly provisional: RequestRuntimeRegistration;
@@ -161,13 +149,13 @@ async function createInternal(
       [context.sourceSessionId, validated.value.targetSessionId],
       context.abort,
       async () => {
-        // This is the sole target observation and remains serialized through durable creation.
-        const persistenceActivity = await observeActive(
+        // Visibility is authorization scope, not an activity or activation assertion.
+        const persistenceVisibility = await proveCurrentRequestVisibility(
           ports,
           context,
           validated.value.targetSessionId,
         );
-        if (!persistenceActivity.ok) return persistenceActivity;
+        if (!persistenceVisibility.ok) return persistenceVisibility;
         const current = await currentOwnership(ports, context);
         if (!current.ok) return current;
         let provisional: RequestRuntimeRegistration;
@@ -204,6 +192,17 @@ async function createInternal(
   const { provisional } = gated.value;
   wakeScheduler(ports.scheduler);
   const admissionController = linkedAdmissionController(context.abort, ports.runtime.effectSignal);
+  const admitted = await claimAndAdmitBlockingRequest(
+    ports,
+    context,
+    prepared,
+    admissionController,
+  );
+  if (!admitted.ok) {
+    admissionController.abort("admission_failed");
+    provisional.detach();
+    return admitted;
+  }
   return blockUntilRequestTerminal(
     ports,
     context,

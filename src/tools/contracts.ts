@@ -28,7 +28,6 @@ export {
 
 export {
   type InternalToolContract,
-  type StructuralApprovalInput,
   type StructuralToolContext,
   serializeDomainResult,
   ToolContractFault,
@@ -180,7 +179,7 @@ export const sessionExportArgumentsSchema = z
       const validation = validateExportDestination(value);
       if (!validation.ok) context.addIssue({ code: "custom", message: validation.message });
     }),
-    sanitize: z.boolean().optional().default(true),
+    sanitize: z.literal(true).optional().default(true),
     overwrite: z.boolean().optional().default(false),
   })
   .strict();
@@ -230,7 +229,6 @@ export const sessionSendFailureCodes = [
   "target_idle",
   "target_status_unknown",
   "permission_denied",
-  "approval_rejected",
   "deadline_expired",
   "quota_exceeded",
   "rate_limited",
@@ -254,7 +252,7 @@ export const sessionStopFailureCodes = [
   "invalid_arguments",
   "caller_not_visible",
   "target_not_visible",
-  "approval_rejected",
+  "permission_denied",
   "deadline_expired",
   "native_unavailable",
   "native_outcome_unknown",
@@ -284,7 +282,6 @@ export const sessionExportFailureCodes = [
   "invalid_arguments",
   "caller_not_visible",
   "target_not_visible",
-  "approval_rejected",
   "permission_denied",
   "ownership_lost",
   "export_unavailable",

@@ -1,10 +1,7 @@
 import type { GeneratedIdFactory, RequestId } from "../domain/generated-ids";
-import {
-  digestMessageContent,
-  type Sha256Digest,
-  type Sha256DigestPort,
-} from "../domain/message-payload";
+import type { Sha256Digest, Sha256DigestPort } from "../domain/message-payload";
 import { type FencingToken, OwnershipLostFault } from "../domain/ownership";
+import { hasRequestIdentity, snapshotRequestIdentity } from "../domain/request-identity";
 import type { canonicalizeSerializeAndDigestPendingRequestPayload } from "../domain/request-serialization";
 import { serializeVerifiedRequestEnvelope } from "../domain/request-serialization";
 import type { PendingRequestMetadata, RequestMetadata } from "../domain/request-types";
@@ -12,37 +9,31 @@ import { type DomainResult, domainFailure } from "../domain/results";
 import type { SessionId } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
 import { runUntilAborted } from "./abortable-operation";
+import { admitClaimedSessionRequest } from "./admit-claimed-session-request";
 import { wakeRequestScheduler } from "./blocking-request-creation-preconditions";
 import type { RequestDeadlineWakePort } from "./blocking-session-request-boundaries";
-import { boundedExternalCall } from "./bounded-external-call";
 import {
   type CommunicatorReadinessPort,
   stopCommunicatorForOwnershipLoss,
 } from "./communicator-readiness-port";
 import type { ContextAdmissionPersistencePort } from "./context-admission-ports";
-import type {
-  ContextAdmissionRegistration,
-  ContextAdmissionRuntimePort,
-} from "./context-admission-runtime";
+import type { ContextAdmissionRuntimePort } from "./context-admission-runtime";
 import type { ClockPort, NativeQueueAdmissionPort, OwnershipPort } from "./delivery-ports";
 import type { ParticipantOperationPort } from "./participant-operation-gate";
-import {
-  ParticipantOperationAbortedFault,
-  ParticipantOperationCapacityFault,
-} from "./participant-operation-gate";
 import type {
   RequestAdmissionPersistencePort,
   RequestParticipantActivityPort,
 } from "./request-ports";
-import { waitForContextAdmission } from "./wait-for-context-admission";
+import { inspectRequestMetadata } from "./request-recovery-boundaries";
+import { snapshotDataRecord } from "./strict-port-boundaries";
 
 export interface ImmediateRequestAdmissionPorts {
   readonly readiness: CommunicatorReadinessPort;
   readonly requests: RequestAdmissionPersistencePort;
   readonly scheduler: RequestDeadlineWakePort;
-  readonly contexts?: ContextAdmissionPersistencePort;
-  /** Legacy test and persisted-recovery seam; new existing-root requests never call it. */
   readonly nativeQueue: NativeQueueAdmissionPort;
+  /** Retained composition compatibility; public queue admission does not consume context state. */
+  readonly contexts?: ContextAdmissionPersistencePort;
   readonly contextRuntime?: ContextAdmissionRuntimePort;
   readonly activity?: RequestParticipantActivityPort;
   readonly participantOperations?: ParticipantOperationPort;
@@ -102,274 +93,236 @@ function ownershipLost(
   );
 }
 
-function readContextAdmission(
-  contexts: ContextAdmissionPersistencePort,
-  context: ImmediateRequestAdmissionContext,
-  requestId: RequestId,
-  deadlineMs: number,
-) {
-  return boundedExternalCall(
-    () =>
-      contexts.getContextAdmission({
-        fencingToken: context.fencingToken,
-        workspaceKey: context.workspaceKey,
-        id: requestId,
-      }),
-    new AbortController().signal,
-    deadlineMs,
-  );
+function inspectStoreRequest(
+  raw: unknown,
+  expected: RequestMetadata,
+): DomainResult<RequestMetadata> {
+  const result = snapshotDataRecord(raw, 3);
+  if (!result) return immediateRequestStorageFailure(expected.id);
+  if (result.ok === false) {
+    return result.code === "ownership_lost"
+      ? domainFailure("ownership_lost", "Coordinator ownership was lost.", false, {
+          request_id: expected.id,
+        })
+      : result.code === "quota_exceeded"
+        ? domainFailure("quota_exceeded", "Request quota is exhausted.", false)
+        : result.code === "rate_limited"
+          ? domainFailure("rate_limited", "Request creation is rate limited.", true)
+          : immediateRequestStorageFailure(expected.id);
+  }
+  const request = inspectRequestMetadata(result.request);
+  return result.ok === true &&
+    request &&
+    hasRequestIdentity(snapshotRequestIdentity(expected), request)
+    ? { ok: true, value: request }
+    : immediateRequestStorageFailure(expected.id);
 }
 
-function contextReadDeadline(clock: ClockPort, invocationDeadlineMs: number | undefined) {
-  const nowMs = clock.nowMs();
-  if (!Number.isSafeInteger(nowMs) || nowMs < 0) return undefined;
-  return (
-    Date.now() +
-    (invocationDeadlineMs === undefined ? 1_000 : Math.max(0, invocationDeadlineMs - nowMs))
-  );
-}
-
-function readAdmittedRequest(
-  requests: RequestAdmissionPersistencePort,
-  getRequestMetadata: NonNullable<RequestAdmissionPersistencePort["getRequestMetadata"]>,
-  context: ImmediateRequestAdmissionContext,
-  requestId: RequestId,
-  deadlineMs: number,
-) {
-  return boundedExternalCall(
-    () =>
-      getRequestMetadata.call(requests, {
-        fencingToken: context.fencingToken,
-        workspaceKey: context.workspaceKey,
-        requestId,
-      }),
-    new AbortController().signal,
-    deadlineMs,
-  );
-}
-
-function immediatePreparedRequest(
-  input: ImmediateRequestAdmissionInput,
-  requestId: RequestId,
-  nativeMessageId: ReturnType<GeneratedIdFactory["nativeMessageId"]>,
-): PendingRequestMetadata & { readonly deliveryState: "prepared" } {
-  const { context, args, payload, createdAtMs, deadlineAtMs } = input;
-  return {
-    id: requestId,
-    workspaceKey: context.workspaceKey,
-    sourceSessionId: context.sourceSessionId,
-    targetSessionId: args.session_id,
-    nativeMessageId,
-    deliveryMode: "context",
-    kind: payload.value.kind,
-    resolutionState: "pending",
-    deliveryState: "prepared",
-    resultState: "none",
-    payloadByteLength: payload.byteLength,
-    payloadSha256: payload.sha256,
-    createdAtMs,
-    updatedAtMs: createdAtMs,
-    deadlineAtMs,
-  };
-}
-
-// One linear persistence and admission boundary preserves the auditable no-replay transition.
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: persistence, ownership, and the single native effect must remain ordered.
 export async function persistAndAdmitImmediateRequest(
   ports: ImmediateRequestAdmissionPorts,
   input: ImmediateRequestAdmissionInput,
 ): Promise<DomainResult<RequestMetadata>> {
-  const { context, args, payload, workBytes, workSha256 } = input;
-  const contexts = ports.contexts;
-  const contextRuntime = ports.contextRuntime;
-  const activity = ports.activity;
-  const participantOperations = ports.participantOperations;
-  const getRequestMetadata = ports.requests.getRequestMetadata;
-  if (!contexts || !contextRuntime || !activity || !participantOperations || !getRequestMetadata) {
-    return immediateRequestStorageFailure();
-  }
-  let registration: ContextAdmissionRegistration | undefined;
+  if (input.context.abort.aborted) return input.interrupted();
+  // Caller cancellation releases the foreground, while lifecycle-owned persistence settles the
+  // one claim and records ambiguity. It must not strand a current-generation submitting record.
+  const result = await runUntilAborted(input.context.abort, () =>
+    settleImmediateRequest(ports, input),
+  );
+  return result.kind === "aborted"
+    ? input.interrupted()
+    : result.kind === "rejected"
+      ? immediateRequestStorageFailure()
+      : result.value;
+}
+
+async function settleImmediateRequest(
+  ports: ImmediateRequestAdmissionPorts,
+  input: ImmediateRequestAdmissionInput,
+): Promise<DomainResult<RequestMetadata>> {
+  const { context, args, payload, workBytes, workSha256, createdAtMs, deadlineAtMs } = input;
+  const effectSignal = admissionEffectSignal(ports);
+  let requestId: RequestId | undefined;
+  let expected: RequestMetadata | undefined;
   try {
     if ((await ports.ownership.isCurrent(context.fencingToken)) !== true)
       throw new OwnershipLostFault();
     if (context.abort.aborted) return input.interrupted();
-    const requestId = ports.ids.requestId();
+    const generatedRequestId = ports.ids.requestId();
+    requestId = generatedRequestId;
     const nativeMessageId = ports.ids.nativeMessageId();
-    const creationOperationId = ports.ids.startOperationId();
-    const prepared = immediatePreparedRequest(input, requestId, nativeMessageId);
+    const prepared: PendingRequestMetadata & { readonly deliveryState: "prepared" } = {
+      id: generatedRequestId,
+      workspaceKey: context.workspaceKey,
+      sourceSessionId: context.sourceSessionId,
+      targetSessionId: args.session_id,
+      nativeMessageId,
+      deliveryMode: "queue",
+      kind: payload.value.kind,
+      resolutionState: "pending",
+      deliveryState: "prepared",
+      resultState: "none",
+      payloadByteLength: payload.byteLength,
+      payloadSha256: payload.sha256,
+      createdAtMs,
+      updatedAtMs: createdAtMs,
+      deadlineAtMs,
+    };
+    expected = prepared;
     let envelope: string;
     try {
       envelope = await serializeVerifiedRequestEnvelope(
         {
           ...prepared,
-          requestId,
+          requestId: generatedRequestId,
           payload: payload.value,
           work: { content: args.content, byteLength: workBytes.length, sha256: workSha256 },
         },
         ports.digest,
       );
     } catch (cause: unknown) {
-      if (cause instanceof RangeError) {
+      if (cause instanceof RangeError)
         return domainFailure(
           "invalid_arguments",
           "Combined work and request content exceeds the request envelope limit.",
           false,
         );
-      }
       throw cause;
     }
-    const envelopeBytes = new TextEncoder().encode(envelope);
-    const envelopeDigest = await runUntilAborted(context.abort, () =>
-      digestMessageContent(ports.digest, envelopeBytes),
+    const created = await runUntilAborted(effectSignal, () =>
+      ports.requests.createPrepared({
+        fencingToken: context.fencingToken,
+        creationOperationId: ports.ids.startOperationId(),
+        deliveryMode: "queue",
+        request: prepared,
+        payloadJson: payload.serialized,
+        envelopeJson: envelope,
+      }),
     );
-    if (envelopeDigest.kind !== "settled") return input.interrupted();
-    try {
-      registration = contextRuntime.attach({
-        id: requestId,
-        kind: "request",
-        sourceSessionId: context.sourceSessionId,
-        workspaceKey: context.workspaceKey,
-      });
-    } catch {
-      return domainFailure(
-        "quota_exceeded",
-        "Context delivery waiter capacity is exhausted.",
-        false,
-      );
-    }
-    const persisted = await participantOperations.run(
-      [context.sourceSessionId, args.session_id],
-      context.abort,
-      async () => {
-        const observed = await activity.observeRequestParticipants(
-          context.workspaceKey,
-          context.sourceSessionId,
-          args.session_id,
-          context.abort,
-        );
-        if (!observed.sourceVisible) {
-          return {
-            kind: "failure" as const,
-            result: domainFailure("caller_not_visible", "Caller is not visible.", false),
-          };
-        }
-        if (!observed.targetVisible) {
-          return {
-            kind: "failure" as const,
-            result: domainFailure("target_not_visible", "Target is not visible.", false),
-          };
-        }
-        if (observed.targetStatus === "idle") {
-          return {
-            kind: "failure" as const,
-            result: domainFailure("target_idle", "Target is idle.", true),
-          };
-        }
-        if (observed.targetStatus !== "busy" && observed.targetStatus !== "retry") {
-          return {
-            kind: "failure" as const,
-            result: domainFailure("target_status_unknown", "Target activity is unknown.", true),
-          };
-        }
-        return {
-          kind: "store" as const,
-          result: await ports.requests.createPrepared({
-            fencingToken: context.fencingToken,
-            creationOperationId,
-            deliveryMode: "context",
-            request: prepared,
-            payloadJson: payload.serialized,
-            envelopeJson: envelope,
-            contextAdmission: {
-              requestId,
-              envelopeJson: envelope,
-              contentByteLength: envelopeBytes.length,
-              contentSha256: envelopeDigest.value,
-            },
-          }),
-        };
-      },
-    );
-    if (persisted.kind === "failure") {
-      return persisted.result;
-    }
-    const stored = persisted.result;
-    if (!stored.ok) {
-      return stored.code === "ownership_lost"
-        ? ownershipLost(ports, requestId)
-        : stored.code === "quota_exceeded"
-          ? domainFailure("quota_exceeded", "Request quota is exhausted.", false)
-          : stored.code === "rate_limited"
-            ? domainFailure("rate_limited", "Request creation is rate limited.", true)
-            : immediateRequestStorageFailure(requestId);
-    }
+    if (created.kind === "aborted") return input.interrupted();
+    if (created.kind === "rejected") throw created.cause;
+    const stored = inspectStoreRequest(created.value, prepared);
+    if (!stored.ok) return stored;
     wakeRequestScheduler(ports.scheduler);
-    const readDeadlineMs = contextReadDeadline(ports.clock, context.deadlineMs);
-    if (readDeadlineMs === undefined) return immediateRequestStorageFailure(requestId);
-    const contextAdmissionRead = await readContextAdmission(
-      contexts,
-      context,
-      requestId,
-      readDeadlineMs,
-    );
-    if (
-      contextAdmissionRead.kind === "rejected" &&
-      contextAdmissionRead.cause instanceof OwnershipLostFault
-    ) {
-      return ownershipLost(ports, requestId);
-    }
-    if (contextAdmissionRead.kind !== "value" || !contextAdmissionRead.value) {
-      return immediateRequestStorageFailure(requestId);
-    }
-    const contextAdmission = contextAdmissionRead.value;
-    const admissionRegistration = registration;
-    registration = undefined;
-    const admission = await waitForContextAdmission(
-      {
-        contexts,
-        requests: {
-          getRequestMetadata: (requestInput) =>
-            getRequestMetadata.call(ports.requests, requestInput),
-        },
-      },
-      {
+    if (stored.value.deliveryState !== "prepared")
+      return reconcileImmediateClaim(ports, context, prepared, effectSignal);
+
+    const claimed = await runUntilAborted(effectSignal, () =>
+      ports.requests.claimPrepared({
         fencingToken: context.fencingToken,
         workspaceKey: context.workspaceKey,
-        admission: contextAdmission,
-        registration: admissionRegistration,
-        abort: context.abort,
-        ...(context.deadlineMs === undefined ? {} : { deadlineMs: context.deadlineMs }),
+        requestId: generatedRequestId,
+      }),
+    );
+    if (claimed.kind === "aborted") return input.interrupted();
+    if (claimed.kind === "rejected") throw claimed.cause;
+    const claimData = snapshotDataRecord(claimed.value, 3);
+    const claimedRequest = inspectRequestMetadata(claimData?.request);
+    if (
+      claimData?.ok !== true ||
+      !claimedRequest ||
+      !hasRequestIdentity(snapshotRequestIdentity(prepared), claimedRequest)
+    ) {
+      throw new Error("Immediate claim requires durable reconciliation.");
+    }
+    if (claimedRequest.deliveryState !== "submitting") return { ok: true, value: claimedRequest };
+    if (typeof claimData.envelopeJson !== "string")
+      throw new Error("Immediate claim envelope requires durable reconciliation.");
+    const admitted = await admitClaimedSessionRequest(
+      {
+        ...ports,
+        requests: ports.requests,
+        nativeQueue: ports.nativeQueue,
+        nativeSteer: {
+          steerRequest: async () => {
+            throw new Error("queue request cannot use steer admission");
+          },
+        },
+        ownership: ports.ownership,
+        notifications: { notifyTerminal: () => undefined },
+        clock: ports.clock,
+      },
+      {
+        workspaceKey: context.workspaceKey,
+        fencingToken: context.fencingToken,
+        request: claimedRequest,
+        envelope: claimData.envelopeJson,
+        control: {
+          abort: context.abort,
+          ...(context.deadlineMs === undefined ? {} : { deadlineMs: context.deadlineMs }),
+        },
+        effectSignal,
+        callerAbortPersistsUnknown: true,
       },
     );
-    if (!admission.ok) {
-      return admission.error.code === "ownership_lost"
-        ? ownershipLost(ports, requestId)
-        : admission;
-    }
-    const requestRead = await readAdmittedRequest(
-      ports.requests,
-      getRequestMetadata,
-      context,
-      requestId,
-      readDeadlineMs,
+    return admitted.ok ? { ok: true, value: admitted.value.request } : admitted;
+  } catch (cause: unknown) {
+    return reconcileImmediateFailure(ports, context, expected, effectSignal, cause, requestId);
+  }
+}
+
+function reconcileImmediateFailure(
+  ports: ImmediateRequestAdmissionPorts,
+  context: ImmediateRequestAdmissionContext,
+  expected: RequestMetadata | undefined,
+  signal: AbortSignal,
+  cause: unknown,
+  requestId: RequestId | undefined,
+): Promise<DomainResult<RequestMetadata>> | DomainResult<RequestMetadata> {
+  if (cause instanceof OwnershipLostFault) return ownershipLost(ports, requestId);
+  return expected
+    ? reconcileImmediateClaim(ports, context, expected, signal)
+    : immediateRequestStorageFailure(requestId);
+}
+
+function admissionEffectSignal(ports: ImmediateRequestAdmissionPorts): AbortSignal {
+  return ports.contextRuntime?.effectSignal ?? new AbortController().signal;
+}
+
+async function reconcileImmediateClaim(
+  ports: ImmediateRequestAdmissionPorts,
+  context: ImmediateRequestAdmissionContext,
+  expected: RequestMetadata,
+  signal: AbortSignal,
+): Promise<DomainResult<RequestMetadata>> {
+  try {
+    const input = {
+      workspaceKey: context.workspaceKey,
+      fencingToken: context.fencingToken,
+      requestId: expected.id,
+    };
+    const settled = await runUntilAborted(signal, () =>
+      ports.requests.reconcilePreparedClaim(input),
     );
-    if (requestRead.kind === "rejected" && requestRead.cause instanceof OwnershipLostFault) {
-      return ownershipLost(ports, requestId);
+    if (settled.kind === "rejected") throw settled.cause;
+    if (settled.kind !== "settled") return immediateRequestStorageFailure(expected.id);
+    const data = snapshotDataRecord(settled.value, 3);
+    const current = inspectRequestMetadata(data?.request);
+    if (!current || !hasRequestIdentity(snapshotRequestIdentity(expected), current))
+      return immediateRequestStorageFailure(expected.id);
+    if (
+      data?.outcome === "settled" &&
+      (current.deliveryState !== "submitting" || current.resolutionState !== "pending")
+    )
+      return { ok: true, value: current };
+    if (
+      data?.outcome !== "current_claim" ||
+      current.deliveryState !== "submitting" ||
+      current.resolutionState !== "pending"
+    ) {
+      return immediateRequestStorageFailure(expected.id);
     }
-    if (requestRead.kind !== "value") return immediateRequestStorageFailure(requestId);
-    const request = requestRead.value;
-    return request?.deliveryState === "context_admitted"
-      ? { ok: true, value: request }
-      : immediateRequestStorageFailure(requestId);
-  } catch (cause) {
-    if (cause instanceof OwnershipLostFault) {
-      return ownershipLost(ports);
-    }
-    if (cause instanceof ParticipantOperationAbortedFault) return input.interrupted();
-    return cause instanceof ParticipantOperationCapacityFault
-      ? domainFailure("quota_exceeded", "Participant operation capacity is exhausted.", false)
-      : immediateRequestStorageFailure();
-  } finally {
-    registration?.detach();
+    const completion = await runUntilAborted(signal, () =>
+      ports.requests.completeDelivery({ ...input, outcome: "delivery_unknown" }),
+    );
+    if (completion.kind === "rejected") throw completion.cause;
+    if (completion.kind !== "settled") return immediateRequestStorageFailure(expected.id);
+    const result = inspectStoreRequest(completion.value, expected);
+    return result.ok && result.value.deliveryState !== "delivery_unknown"
+      ? immediateRequestStorageFailure(expected.id)
+      : result;
+  } catch (cause: unknown) {
+    return cause instanceof OwnershipLostFault
+      ? ownershipLost(ports, expected.id)
+      : immediateRequestStorageFailure(expected.id);
   }
 }

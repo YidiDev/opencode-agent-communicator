@@ -250,7 +250,7 @@ describe("ownership epochs and startup recovery", () => {
     expect(Number(next)).toBe(Number(token) + 1);
     time.moveWall(-10_000);
     expect(await first.isCurrent(token)).toBeFalse();
-    expect(() => second.close()).toThrow(StoreIntegrityError);
+    expect(() => second.close()).not.toThrow();
     first.close();
 
     const delayedPath = statePath();

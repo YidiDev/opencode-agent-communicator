@@ -108,7 +108,7 @@ function effectFixture(step: StartStep) {
     clock: { nowMs: () => 3 },
     ids: {} as never,
     digest: { sha256: async () => new Uint8Array(32) },
-    policy: createSessionStartPolicy(),
+    policy: createSessionStartPolicy({ decision: "allow" }),
   };
   return { ports, initial, claimed };
 }
@@ -276,22 +276,17 @@ describe("session start approval and orchestration boundaries", () => {
     ).toMatchObject({ ok: false, error: { code: "state_conflict" } });
   });
 
-  test("commits a rejected approval deterministically when control is concurrently aborted", async () => {
+  test("commits static policy denial without consulting approval", async () => {
     const current = effectFixture("creation");
     (current.ports as { policy: SessionStartPorts["policy"] }).policy = createSessionStartPolicy({
-      decision: "ask",
+      decision: "deny",
     });
-    const controller = new AbortController();
-    current.ports.approval.requestStartApproval = async () => {
-      controller.abort();
-      return "rejected";
-    };
     expect(
-      await approvePreparedStart(current.ports, context(controller.signal), token, {
+      await approvePreparedStart(current.ports, context(), token, {
         operation: current.initial,
         argumentsSha256: current.initial.argumentsSha256,
       }),
-    ).toMatchObject({ ok: false, error: { code: "approval_rejected" } });
+    ).toMatchObject({ ok: false, error: { code: "permission_denied" } });
   });
 
   function applicationFixture() {

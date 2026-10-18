@@ -19,6 +19,7 @@ import type {
   DeleteAbsentParticipantRequestsInput,
   ParticipantDeletionPersistencePort,
 } from "../../application/participant-deletion-ports";
+import type { ParticipantRegistryPersistencePort } from "../../application/participant-registry-ports";
 import type { ParticipantStopPersistencePort } from "../../application/participant-stop-ports";
 import type {
   CompleteRequestDeliveryInput,
@@ -66,8 +67,30 @@ export class LinuxBunSqliteStore
     AdvisoryLockPersistencePort,
     ContextAdmissionPersistencePort,
     ParticipantContextPersistencePort,
-    ContextAdmissionParticipantQueryPort
+    ContextAdmissionParticipantQueryPort,
+    ParticipantRegistryPersistencePort
 {
+  async recordParticipantObservations(
+    input: Parameters<ParticipantRegistryPersistencePort["recordParticipantObservations"]>[0],
+  ): ReturnType<ParticipantRegistryPersistencePort["recordParticipantObservations"]> {
+    this.assertOpen();
+    return this.access.mutate(() => this.participantRegistryRepository.record(input));
+  }
+
+  async listParticipantRootCandidates(
+    input: Parameters<ParticipantRegistryPersistencePort["listParticipantRootCandidates"]>[0],
+  ): ReturnType<ParticipantRegistryPersistencePort["listParticipantRootCandidates"]> {
+    this.assertOpen();
+    return this.access.inspect(() => this.participantRegistryRepository.listRoots(input));
+  }
+
+  async getParticipantRootCandidate(
+    input: Parameters<ParticipantRegistryPersistencePort["getParticipantRootCandidate"]>[0],
+  ): ReturnType<ParticipantRegistryPersistencePort["getParticipantRootCandidate"]> {
+    this.assertOpen();
+    return this.access.inspect(() => this.participantRegistryRepository.getRoot(input));
+  }
+
   async createContextMessage(
     input: Parameters<ContextAdmissionPersistencePort["createContextMessage"]>[0],
   ): ReturnType<ContextAdmissionPersistencePort["createContextMessage"]> {

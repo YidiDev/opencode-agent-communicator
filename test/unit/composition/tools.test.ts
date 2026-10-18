@@ -20,12 +20,13 @@ describe("atomic communicator tool construction", () => {
       invocationDeadlineMs: Number.MAX_SAFE_INTEGER,
       policies: {
         message: "deny",
-        ask: "ask",
+        ask: "allow",
         wait: "deny",
         start: "allow",
         exportSelfSanitized: "deny",
         exportCrossSession: "allow",
-        exportUnsanitized: "deny",
+        readCrossSession: "allow",
+        stop: "allow",
         exportOverwrite: "allow",
       },
       start: {
@@ -67,7 +68,7 @@ describe("atomic communicator tool construction", () => {
     ).rejects.toThrow("overflowed");
   });
 
-  test("fails closed on ambiguous context creation without manufacturing a native workflow fault", async () => {
+  test("fails closed on ambiguous queue request creation without manufacturing a native workflow fault", async () => {
     const setup = await blockingRequestFixture(async () => ({ kind: "unknown" }));
     const store = openRequestStore({
       workspaceKey: setup.context.workspaceKey,
@@ -107,6 +108,7 @@ describe("atomic communicator tool construction", () => {
       readCurrentRoots: setup.ports.membership.readCurrentRoots,
       observeRequestParticipants: setup.ports.activity.observeRequestParticipants,
       steerRequest: setup.ports.nativeSteer.steerRequest,
+      queueMessage: setup.ports.nativeQueue.queueMessage,
     };
     const contracts = constructToolContracts({
       options: {
@@ -144,7 +146,7 @@ describe("atomic communicator tool construction", () => {
 
   test("composes a finite maximum-request invocation beyond the durable deadline", async () => {
     const setup = await blockingRequestFixture(async () => {
-      throw new Error("invalid arguments must not steer");
+      throw new Error("invalid arguments must not queue");
     });
     const nowMs = 200_000;
     const delays: number[] = [];

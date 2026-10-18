@@ -17,7 +17,7 @@ describe("session send validation", () => {
   });
 
   test.each([
-    [undefined, "context"],
+    [undefined, "user"],
     ["context", "context"],
     ["user", "user"],
   ] as const)("accepts delivery %s as %s", (delivery, expected) => {

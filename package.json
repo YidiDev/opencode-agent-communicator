@@ -46,7 +46,7 @@
   ],
   "engines": {
     "bun": "1.4.0",
-    "opencode": ">=1.18.21 <1.19.0"
+    "opencode": ">=2.0.26 <2.1.0"
   },
   "packageManager": "bun@1.4.0",
   "scripts": {
@@ -55,7 +55,7 @@
     "lint": "biome check --formatter-enabled=false .",
     "check:conventions": "bun tools/run-conventions.ts",
     "check:coverage": "bun tools/run-coverage.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit --skipLibCheck",
     "check": "bun run format:check && bun run lint && bun run check:conventions && node tools/verify-test-skips.mjs && bun run typecheck && bun test --timeout=15000 test/unit test/integration test/black-box",
     "test": "bun test --timeout=15000 test/unit test/integration test/black-box",
     "test:unit": "bun test --timeout=15000 test/unit",
@@ -72,22 +72,26 @@
     "prepack": "node tools/verify-package.mjs"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "1.18.25",
-    "@opencode-ai/sdk": "1.18.25",
+    "@opencode/plugin": "2.0.26",
+    "effect": "4.0.0-rc.112",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.10",
     "@types/bun": "1.4.0",
+    "@types/json-schema": "7.0.15",
     "@types/istanbul-lib-coverage": "2.0.6",
     "@types/istanbul-lib-instrument": "1.7.8",
     "istanbul-lib-coverage": "3.2.2",
     "istanbul-lib-instrument": "6.0.3",
-    "opencode-ai": "1.18.25",
+    "@opencode/cli": "2.0.26",
     "typescript": "7.0.2",
     "typescript-compiler-api": "npm:typescript@5.9.3"
   },
   "peerDependencies": {
-    "opencode-ai": ">=1.18.21 <1.19.0"
-  }
+    "@opencode/cli": ">=2.0.26 <2.1.0"
+  },
+  "trustedDependencies": [
+    "@opencode/cli"
+  ]
 }

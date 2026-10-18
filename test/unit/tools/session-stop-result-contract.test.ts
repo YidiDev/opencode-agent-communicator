@@ -93,7 +93,7 @@ describe("session_stop result contract", () => {
         },
       },
     };
-    const tool = createSessionStopTool(ports, workspaceKey);
+    const tool = createSessionStopTool(ports, workspaceKey, undefined, "allow");
     const output = JSON.parse(
       await tool.execute(
         { session_id: "ses_target" },

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { SessionReadPorts } from "../../../src/application/session-read-ports";
 import { sessionReadLimits, sessionReadProjectionVersion } from "../../../src/domain/session-read";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
-import { type StructuralApprovalInput, ToolContractFault } from "../../../src/tools/contracts";
+import { ToolContractFault } from "../../../src/tools/contracts";
 import { invocationSessionReadApproval } from "../../../src/tools/invocation-session-read-approval";
 import { createSessionReadTool } from "../../../src/tools/session-read";
 import {
@@ -86,7 +86,6 @@ describe("session_read tool contract", () => {
       "caller_not_visible",
       "target_not_visible",
       "permission_denied",
-      "approval_rejected",
       "deadline_expired",
       "native_unavailable",
       "cursor_stale",
@@ -184,10 +183,14 @@ describe("session_read tool boundaries", () => {
       armed += 1;
       return { cancel: () => undefined };
     };
-    const output = await createSessionReadTool(configured, {
-      workspaceKey,
-      invocationDeadlineMs: () => 2_000,
-    }).execute(
+    const output = await createSessionReadTool(
+      configured,
+      {
+        workspaceKey,
+        invocationDeadlineMs: () => 2_000,
+      },
+      "allow",
+    ).execute(
       { session_id: "ses_target", limit: 100 },
       { sessionID: "invalid", abort: new AbortController().signal },
     );
@@ -219,10 +222,14 @@ describe("session_read tool boundaries", () => {
         },
       };
     };
-    const output = await createSessionReadTool(configured, {
-      workspaceKey,
-      invocationDeadlineMs: () => 2_000,
-    }).execute(
+    const output = await createSessionReadTool(
+      configured,
+      {
+        workspaceKey,
+        invocationDeadlineMs: () => 2_000,
+      },
+      "allow",
+    ).execute(
       { session_id: "ses_target", limit: 10 },
       {
         sessionID: "ses_source",
@@ -236,7 +243,7 @@ describe("session_read tool boundaries", () => {
     expect({ armedDelay, cancelled, approvals }).toEqual({
       armedDelay: 1_000,
       cancelled: 1,
-      approvals: 1,
+      approvals: 0,
     });
   });
 });
@@ -260,10 +267,14 @@ describe("session_read cross-session boundaries", () => {
       reads += 1;
       throw new Error("transcript read must not start");
     };
-    const output = await createSessionReadTool(configured, {
-      workspaceKey,
-      invocationDeadlineMs: () => 2_000,
-    }).execute(
+    const output = await createSessionReadTool(
+      configured,
+      {
+        workspaceKey,
+        invocationDeadlineMs: () => 2_000,
+      },
+      "allow",
+    ).execute(
       { session_id: "ses_target", limit: 10 },
       {
         sessionID: "ses_source",
@@ -277,7 +288,7 @@ describe("session_read cross-session boundaries", () => {
       ok: false,
       error: { code: "target_not_visible" },
     });
-    expect({ observations, approvals, reads }).toEqual({ observations: 2, approvals: 1, reads: 0 });
+    expect({ observations, approvals, reads }).toEqual({ observations: 2, approvals: 0, reads: 0 });
   });
 
   test("requires cross-session caller visibility again at final disclosure", async () => {
@@ -298,10 +309,14 @@ describe("session_read cross-session boundaries", () => {
       reads += 1;
       return readPage(request);
     };
-    const output = await createSessionReadTool(configured, {
-      workspaceKey,
-      invocationDeadlineMs: () => 2_000,
-    }).execute(
+    const output = await createSessionReadTool(
+      configured,
+      {
+        workspaceKey,
+        invocationDeadlineMs: () => 2_000,
+      },
+      "allow",
+    ).execute(
       { session_id: "ses_target", limit: 10 },
       {
         sessionID: "ses_source",
@@ -317,17 +332,8 @@ describe("session_read cross-session boundaries", () => {
     expect(reads).toBe(1);
   });
 
-  test("binds one abort-aware cross-session ask without exposing a raw cursor", async () => {
-    const asks: StructuralApprovalInput[] = [];
-    const context = {
-      sessionID: "ses_source",
-      messageID: "msg_invocation",
-      abort: new AbortController().signal,
-      async ask(input: StructuralApprovalInput) {
-        asks.push(input);
-      },
-    };
-    const approval = invocationSessionReadApproval(context);
+  test("uses static policy and fails closed when cancelled", async () => {
+    const approval = invocationSessionReadApproval("allow");
     const rawCursor = "RawCursorMustNotAppear";
     const cursorSha256 = createHash("sha256").update(rawCursor).digest("hex") as never;
     const binding = {
@@ -346,24 +352,6 @@ describe("session_read cross-session boundaries", () => {
         deadlineMs: 2_000,
       }),
     ).toBe("approved");
-    expect(asks).toHaveLength(1);
-    expect(asks[0]).toMatchObject({
-      permission: "session_read",
-      always: [],
-      metadata: {
-        operation: "session_read",
-        projection_version: 1,
-        workspace_key: workspaceKey,
-        source_session_id: "ses_source",
-        target_session_id: "ses_target",
-        mode: "after",
-        line_limit: 25,
-        aggregate_byte_cap: 65_536,
-        cursor_sha256: cursorSha256,
-        deadline_ms: 2_000,
-      },
-    });
-    expect(JSON.stringify(asks[0])).not.toContain(rawCursor);
     await expect(
       approval.requestReadApproval(binding, {
         abort: new AbortController().signal,
@@ -374,11 +362,10 @@ describe("session_read cross-session boundaries", () => {
     const aborted = new AbortController();
     aborted.abort();
     expect(
-      await invocationSessionReadApproval(context).requestReadApproval(binding, {
+      await invocationSessionReadApproval("allow").requestReadApproval(binding, {
         abort: aborted.signal,
         deadlineMs: 2_000,
       }),
     ).toBe("rejected");
-    expect(asks).toHaveLength(1);
   });
 });

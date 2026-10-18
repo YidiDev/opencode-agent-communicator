@@ -71,6 +71,7 @@ export const sessionStartValidationPolicy = Object.freeze({
   overrideCharacters: 128,
   idempotencyKeyPattern: /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/,
   overridePattern: /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/,
+  modelOverridePattern: /^[A-Za-z0-9][A-Za-z0-9._:-]*\/[A-Za-z0-9._:/-]+(?:#[A-Za-z0-9._:/-]+)?$/,
 });
 
 type Validation<Value> =
@@ -106,7 +107,11 @@ function validateOverride(
   label: "agent" | "model",
 ): Validation<string | undefined> {
   if (value === undefined) return { ok: true, value: undefined };
-  return typeof value === "string" && sessionStartValidationPolicy.overridePattern.test(value)
+  const pattern =
+    label === "model"
+      ? sessionStartValidationPolicy.modelOverridePattern
+      : sessionStartValidationPolicy.overridePattern;
+  return typeof value === "string" && value.length <= 128 && pattern.test(value)
     ? { ok: true, value }
     : { ok: false, message: `${label} is malformed.` };
 }

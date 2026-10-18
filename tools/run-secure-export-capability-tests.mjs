@@ -5,7 +5,6 @@ const reportPath = "/tmp/secure-export-junit.xml";
 const testFiles = [
   "test/acceptance/export-capability.test.ts",
   "test/integration/adapters/export/linux-export-destination.test.ts",
-  "test/integration/adapters/export/opencode-cli-export-adapter.test.ts",
 ];
 
 if (process.env.REQUIRE_SECURE_EXPORT_CAPABILITY !== "1") {

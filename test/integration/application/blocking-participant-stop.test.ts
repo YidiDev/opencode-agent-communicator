@@ -44,10 +44,10 @@ function contextMessageInput(
 test.each(["ask", "wait"] as const)(
   "approved session_stop releases a blocked %s with target_stopped",
   async (kind) => {
-    const steered = deferred<void>();
+    const queued = deferred<void>();
     const setup = await blockingRequestFixture(async () => {
-      steered.resolve();
-      return { kind: "admitted", admittedSeq: 1, observedAtMs: 25_000 };
+      queued.resolve();
+      return { kind: "public_message", observedAtMs: 25_000 };
     });
     const blocked =
       kind === "ask"
@@ -61,7 +61,7 @@ test.each(["ask", "wait"] as const)(
             milestone: "complete",
             timeout_seconds: 30,
           });
-    await steered.promise;
+    await queued.promise;
     const stopped = await stopSession(
       {
         readiness: { fencingToken: setup.token, assertReady: () => undefined },
@@ -94,11 +94,7 @@ test.each(["ask", "wait"] as const)(
 );
 
 test("missed idle events reconcile message-only context participants with role-correct outcomes", async () => {
-  const setup = await blockingRequestFixture(async () => ({
-    kind: "admitted",
-    admittedSeq: 1,
-    observedAtMs: 25_000,
-  }));
+  const setup = await blockingRequestFixture(async () => ({ kind: "unknown" }));
   const idleTarget = validateSessionId("ses_idleTarget");
   const idleSource = validateSessionId("ses_idleSource");
   const otherA = validateSessionId("ses_otherA");
@@ -175,17 +171,17 @@ test("missed idle events reconcile message-only context participants with role-c
 });
 
 test("stopping the source releases its blocked request with source_stopped", async () => {
-  const steered = deferred<void>();
+  const queued = deferred<void>();
   const setup = await blockingRequestFixture(async () => {
-    steered.resolve();
-    return { kind: "admitted", admittedSeq: 1, observedAtMs: 25_000 };
+    queued.resolve();
+    return { kind: "public_message", observedAtMs: 25_000 };
   });
   const blocked = waitSession(setup.ports, setup.context, {
     session_id: setup.target,
     milestone: "complete",
     timeout_seconds: 30,
   });
-  await steered.promise;
+  await queued.promise;
   const operator = validateSessionId("ses_operator");
   if (!operator.ok) throw new Error("invalid fixture");
   await stopSession(
@@ -218,26 +214,35 @@ test("stopping the source releases its blocked request with source_stopped", asy
 });
 
 test.each(["ask", "wait"] as const)(
-  "an authoritatively idle native participant releases a blocked %s",
+  "an idle event does not terminalize a queue-delivered %s",
   async (kind) => {
-    const steered = deferred<void>();
+    const queued = deferred<void>();
     const setup = await blockingRequestFixture(async () => {
-      steered.resolve();
-      return { kind: "admitted", admittedSeq: 1, observedAtMs: 25_000 };
+      queued.resolve();
+      return { kind: "public_message", observedAtMs: 25_000 };
     });
+    const abort = new AbortController();
     const blocked =
       kind === "ask"
-        ? askSession(setup.ports, setup.context, {
-            session_id: setup.target,
-            questions: [{ prompt: "Continue?", options: ["yes"] }],
-            timeout_seconds: 30,
-          })
-        : waitSession(setup.ports, setup.context, {
-            session_id: setup.target,
-            milestone: "complete",
-            timeout_seconds: 30,
-          });
-    await steered.promise;
+        ? askSession(
+            setup.ports,
+            { ...setup.context, abort: abort.signal },
+            {
+              session_id: setup.target,
+              questions: [{ prompt: "Continue?", options: ["yes"] }],
+              timeout_seconds: 30,
+            },
+          )
+        : waitSession(
+            setup.ports,
+            { ...setup.context, abort: abort.signal },
+            {
+              session_id: setup.target,
+              milestone: "complete",
+              timeout_seconds: 30,
+            },
+          );
+    await queued.promise;
     const lifecycle = new ParticipantStopLifecycle({
       requests: setup.store,
       activity: {
@@ -257,79 +262,66 @@ test.each(["ask", "wait"] as const)(
     });
     await lifecycle.handle(
       kind === "ask"
-        ? { type: "session.idle", properties: { sessionID: setup.target } }
+        ? { id: "evt_idle", created: 1, type: "session.idle", data: { sessionID: setup.target } }
         : {
+            id: "evt_status",
+            created: 1,
             type: "session.status",
-            properties: { sessionID: setup.target, status: { type: "idle" } },
+            data: { sessionID: setup.target, status: { type: "idle" } },
           },
     );
-    expect(await blocked).toMatchObject({ ok: false, error: { code: "target_stopped" } });
+    expect(
+      await setup.store.listForParticipant({
+        fencingToken: setup.token,
+        workspaceKey: requestTestWorkspace(),
+        callerSessionId: setup.source,
+        role: "outbox",
+        limit: 1,
+      }),
+    ).toMatchObject({ items: [{ deliveryMode: "queue", resolutionState: "pending" }] });
+    abort.abort("test_cleanup");
+    expect(await blocked).toMatchObject({ ok: false, error: { code: "request_cancelled" } });
     await lifecycle.dispose();
     setup.store.close();
   },
 );
 
-test("request creation that acquires the gate first is terminalized by the queued idle hint", async () => {
-  const creationObserved = deferred<void>();
-  const releaseCreation = deferred<void>();
-  const steered = deferred<void>();
+test("queue request creation does not require a participant activity observation", async () => {
+  const queued = deferred<void>();
   const setup = await blockingRequestFixture(async () => {
-    steered.resolve();
-    return { kind: "admitted", admittedSeq: 1, observedAtMs: 25_000 };
+    queued.resolve();
+    return { kind: "public_message", observedAtMs: 25_000 };
   });
+  let activityCalls = 0;
   setup.ports.activity.observeRequestParticipants = async () => {
-    creationObserved.resolve();
-    await releaseCreation.promise;
+    activityCalls += 1;
     return { sourceVisible: true, targetVisible: true, targetStatus: "busy" as const };
   };
-  const lifecycle = new ParticipantStopLifecycle({
-    requests: setup.store,
-    activity: {
-      observeParticipantActivities: async (_workspace, sessionIds) =>
-        sessionIds.map((sessionId) => ({ sessionId, activity: "idle" as const })),
+  const abort = new AbortController();
+  const blocked = waitSession(
+    setup.ports,
+    { ...setup.context, abort: abort.signal },
+    {
+      session_id: setup.target,
+      milestone: "complete",
+      timeout_seconds: 30,
     },
-    operations: setup.ports.participantOperations,
-    notifications: setup.runtime,
-    lifecycle: {
-      fencingToken: setup.token,
-      status: "ready",
-      effectSignal: setup.runtime.effectSignal,
-      stop: () => undefined,
-    } as never,
-    workspaceKey: requestTestWorkspace(),
-    timers: { set: () => 1, clear: () => undefined },
-  });
-  const blocked = waitSession(setup.ports, setup.context, {
-    session_id: setup.target,
-    milestone: "complete",
-    timeout_seconds: 30,
-  });
-  await creationObserved.promise;
-  const idle = lifecycle.handle({
-    type: "session.idle",
-    properties: { sessionID: setup.target },
-  });
-  releaseCreation.resolve();
-  await steered.promise;
-  await idle;
-  expect(await blocked).toMatchObject({ ok: false, error: { code: "target_stopped" } });
-  await lifecycle.dispose();
+  );
+  await queued.promise;
+  expect(activityCalls).toBe(0);
+  abort.abort("test_cleanup");
+  expect(await blocked).toMatchObject({ ok: false, error: { code: "request_cancelled" } });
   setup.store.close();
 });
 
-test("idle reconciliation that acquires the gate first completes before request creation", async () => {
+test("idle reconciliation that acquires the gate first does not stop a later queue request", async () => {
   const idleObserved = deferred<void>();
   const releaseIdle = deferred<void>();
-  const authorized = deferred<void>();
-  const steered = deferred<void>();
+  const queued = deferred<void>();
   const setup = await blockingRequestFixture(async () => {
-    steered.resolve();
-    return { kind: "admitted", admittedSeq: 1, observedAtMs: 25_000 };
+    queued.resolve();
+    return { kind: "public_message", observedAtMs: 25_000 };
   });
-  setup.ports.authorization.authorizeRequest = async () => {
-    authorized.resolve();
-    return { kind: "allow" as const };
-  };
   const lifecycle = new ParticipantStopLifecycle({
     requests: setup.store,
     activity: {
@@ -351,25 +343,42 @@ test("idle reconciliation that acquires the gate first completes before request 
     timers: { set: () => 1, clear: () => undefined },
   });
   const firstIdle = lifecycle.handle({
+    id: "evt_idle_first",
+    created: 1,
     type: "session.idle",
-    properties: { sessionID: setup.target },
+    data: { sessionID: setup.target },
   });
   await idleObserved.promise;
-  const blocked = waitSession(setup.ports, setup.context, {
-    session_id: setup.target,
-    milestone: "complete",
-    timeout_seconds: 30,
-  });
-  await authorized.promise;
-  await Promise.resolve();
+  const abort = new AbortController();
+  const blocked = waitSession(
+    setup.ports,
+    { ...setup.context, abort: abort.signal },
+    {
+      session_id: setup.target,
+      milestone: "complete",
+      timeout_seconds: 30,
+    },
+  );
   releaseIdle.resolve();
   await firstIdle;
-  await steered.promise;
+  await queued.promise;
   await lifecycle.handle({
+    id: "evt_idle_second",
+    created: 2,
     type: "session.idle",
-    properties: { sessionID: setup.target },
+    data: { sessionID: setup.target },
   });
-  expect(await blocked).toMatchObject({ ok: false, error: { code: "target_stopped" } });
+  expect(
+    await setup.store.listForParticipant({
+      fencingToken: setup.token,
+      workspaceKey: requestTestWorkspace(),
+      callerSessionId: setup.source,
+      role: "outbox",
+      limit: 1,
+    }),
+  ).toMatchObject({ items: [{ deliveryMode: "queue", resolutionState: "pending" }] });
+  abort.abort("test_cleanup");
+  expect(await blocked).toMatchObject({ ok: false, error: { code: "request_cancelled" } });
   await lifecycle.dispose();
   setup.store.close();
 });

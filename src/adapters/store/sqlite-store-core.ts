@@ -19,6 +19,7 @@ import { DeliveryRepository } from "./delivery-repository";
 import { type PreparedPrivateState, preparePrivateStatePath } from "./linux-private-path";
 import { applyMigrations, sqliteStoreMigrations } from "./migrations";
 import { OwnershipRepository } from "./ownership-repository";
+import { ParticipantRegistryRepository } from "./participant-registry-repository";
 import { RequestDeletionRepository } from "./request-deletion-repository";
 import { RequestDeliveryRepository } from "./request-delivery-repository";
 import { RequestParticipantQueryRepository } from "./request-participant-query-repository";
@@ -70,6 +71,7 @@ export class SqliteStoreCore {
   protected readonly requestTerminalRepository: RequestTerminalRepository;
   protected readonly requestResultRetentionRepository: RequestResultRetentionRepository;
   protected readonly requestStopRepository: RequestStopRepository;
+  protected readonly participantRegistryRepository: ParticipantRegistryRepository;
   protected readonly maintenanceRepository: StoreMaintenanceRepository;
   protected readonly startRepository: StartOperationRepository;
   protected readonly access: SqliteStoreOperationAccess;
@@ -227,6 +229,10 @@ export class SqliteStoreCore {
       this.ownershipRepository,
     );
     this.requestStopRepository = new RequestStopRepository(this.context, this.ownershipRepository);
+    this.participantRegistryRepository = new ParticipantRegistryRepository(
+      this.context,
+      this.ownershipRepository,
+    );
     this.startRepository = new StartOperationRepository(this.context, this.ownershipRepository);
     this.starts = createStartOperationStoreFacade(this.startRepository, (operation) =>
       this.access.mutate(operation),

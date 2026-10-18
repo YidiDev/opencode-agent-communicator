@@ -10,7 +10,7 @@ import {
   unresolvedStartProvenancePerWorkspaceHardCeiling,
 } from "../domain/safety-ceilings";
 
-const decision = z.enum(["allow", "ask", "deny"]);
+const decision = z.enum(["allow", "deny"]);
 const positiveInteger = (maximum: number) => z.number().int().min(1).max(maximum);
 const absolutePath = z
   .string()
@@ -49,10 +49,7 @@ const startSchema = z
 const exportLimitsSchema = z
   .object({
     maximumOutputBytes: positiveInteger(sessionExportHardLimits.maximumOutputBytes).optional(),
-    maximumStderrBytes: positiveInteger(sessionExportHardLimits.maximumStderrBytes).optional(),
-    maximumDurationMs: positiveInteger(sessionExportHardLimits.maximumDurationMs).optional(),
     maximumConcurrent: positiveInteger(sessionExportHardLimits.maximumConcurrent).optional(),
-    terminationGraceMs: positiveInteger(5_000).optional(),
     maximumSourceExportsPerMinute: positiveInteger(
       sessionExportHardLimits.maximumSourceExportsPerMinute,
     ).optional(),
@@ -65,24 +62,9 @@ const exportLimitsSchema = z
 const exportSchema = z
   .object({
     root: absolutePath.optional(),
-    executable: absolutePath.optional(),
-    trustedWorkingDirectory: absolutePath.optional(),
     limits: exportLimitsSchema.optional(),
   })
-  .strict()
-  .superRefine((value, context) => {
-    const configured = [value.root, value.executable, value.trustedWorkingDirectory];
-    if (
-      configured.some((item) => item !== undefined) &&
-      configured.some((item) => item === undefined)
-    ) {
-      context.addIssue({
-        code: "custom",
-        message:
-          "Export root, executable, and trustedWorkingDirectory must be configured together.",
-      });
-    }
-  });
+  .strict();
 
 const optionsSchema = z
   .object({
@@ -94,10 +76,11 @@ const optionsSchema = z
         message: decision.optional(),
         ask: decision.optional(),
         wait: decision.optional(),
+        readCrossSession: decision.optional(),
         start: decision.optional(),
+        stop: decision.optional(),
         exportSelfSanitized: decision.optional(),
         exportCrossSession: decision.optional(),
-        exportUnsanitized: decision.optional(),
         exportOverwrite: decision.optional(),
       })
       .strict()
@@ -146,6 +129,22 @@ export function parseCommunicatorOptions(
   input: unknown,
   environment: NodeJS.ProcessEnv = process.env,
 ): CommunicatorOptions {
+  const configuredPolicies =
+    typeof input === "object" && input !== null ? Reflect.get(input, "policies") : undefined;
+  if (typeof configuredPolicies === "object" && configuredPolicies !== null) {
+    for (const [name, value] of Object.entries(configuredPolicies)) {
+      if (value === "ask") {
+        throw new TypeError(
+          `Policy ${name} uses legacy decision "ask"; OpenCode v2 requires explicit "allow" or "deny".`,
+        );
+      }
+    }
+    if (Object.hasOwn(configuredPolicies, "exportUnsanitized")) {
+      throw new TypeError(
+        "Policy exportUnsanitized is unsupported; OpenCode v2 exports are always sanitized.",
+      );
+    }
+  }
   const parsed = optionsSchema.parse(input ?? {});
   const stateDirectory = parsed.stateDirectory ?? defaultStateDirectory(environment);
   assertDedicatedRoot(stateDirectory, environment, "stateDirectory");

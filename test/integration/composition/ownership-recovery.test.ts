@@ -85,6 +85,10 @@ function nativeFixture(onQueue: () => void, onObserve: () => void = () => undefi
       onObserve();
       return "present" as const;
     },
+    revalidateRoot: async () => {
+      onObserve();
+      return undefined;
+    },
     observeRequestParticipants: async () => {
       onObserve();
       return { sourceVisible: true, targetVisible: true, targetStatus: "busy" as const };
@@ -119,7 +123,7 @@ function generationDependencies(
     createHealth: () => ({ readHealth: async () => ({}) }),
     runtimeIdentity: { readIdentity: () => ({}) },
     createNative: () => native,
-    checkCompatibility: async () => ({ ok: true, value: { version: "1.18.25" } }),
+    checkCompatibility: async () => ({ ok: true, value: { version: "2.0.26" } }),
     createStore: (options) => {
       const store = new LinuxBunSqliteStore({
         ...options,
@@ -374,10 +378,10 @@ describe("real SQLite composition ownership recovery", () => {
         return result;
       },
     });
-    const hooks = await Reflect.apply(plugin, undefined, [
-      {},
-      { stateDirectory: path, startupDeadlineMs: 5_000 },
-    ]);
+    const hooks = await plugin({
+      options: { stateDirectory: path, startupDeadlineMs: 5_000 },
+      location: { project: { canonical: "/" }, directory: "/" },
+    } as never);
     const initialStore = stores[0];
     const sessionList = hooks.tool?.session_list;
     if (!initialStore || !sessionList)
@@ -390,11 +394,9 @@ describe("real SQLite composition ownership recovery", () => {
       {
         sessionID: source,
         messageID: "baseline",
-        agent: "build",
         directory: "/",
         worktree: "/",
         abort: new AbortController().signal,
-        metadata: () => undefined,
         ask: async () => undefined,
       },
     );
@@ -424,11 +426,9 @@ describe("real SQLite composition ownership recovery", () => {
         {
           sessionID: source,
           messageID: "message",
-          agent: "build",
           directory: "/",
           worktree: "/",
           abort: new AbortController().signal,
-          metadata: () => undefined,
           ask: async () => undefined,
         },
       ),

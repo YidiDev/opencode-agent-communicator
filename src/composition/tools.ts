@@ -1,4 +1,4 @@
-import type { OpenCodeNativeAdapter } from "../adapters/native/opencode-1-18";
+import type { OpenCodeNativeAdapter } from "../adapters/native/opencode-2";
 import type { LinuxBunSqliteStore } from "../adapters/store/sqlite-store";
 import type {
   AdvisoryLockPostCommitNotificationPort,
@@ -12,7 +12,9 @@ import type { ParticipantOperationPort } from "../application/participant-operat
 import type { RequestRuntime } from "../application/request-runtime";
 import { sessionExportPolicyPort } from "../application/session-export-policy";
 import type { SessionExportAdapterPort } from "../application/session-export-ports";
+import type { PolicyDecision } from "../domain/authorization-policy";
 import { createGeneratedIdFactory } from "../domain/generated-ids";
+import { sanitizeDisplayTitle } from "../domain/sanitize-display";
 import { createSessionExportPolicy } from "../domain/session-export";
 import { createSessionStartPolicy } from "../domain/session-start-policy";
 import type { WorkspaceKey } from "../domain/workspaces";
@@ -58,7 +60,7 @@ export function configuredStartPolicy(options: CommunicatorOptions) {
   const configured = options.start;
   const limits = configured?.limits;
   return createSessionStartPolicy({
-    decision: options.policies?.start ?? "ask",
+    decision: options.policies?.start ?? "deny",
     ...(configured?.allowedAgents === undefined ? {} : { allowedAgents: configured.allowedAgents }),
     ...(configured?.allowedModels === undefined ? {} : { allowedModels: configured.allowedModels }),
     ...(configured?.allowManagedSessionRecursion === undefined
@@ -111,6 +113,7 @@ function configuredSessionReadTool(
   clock: ClockPort,
   timer: RequestDeadlineTimerPort,
   invocationDeadlineMs: () => number,
+  crossSessionPolicy: PolicyDecision,
 ) {
   const { native, lifecycle, workspaceKey } = input;
   return createSessionReadTool(
@@ -123,10 +126,11 @@ function configuredSessionReadTool(
       timer,
     },
     { workspaceKey, invocationDeadlineMs },
+    crossSessionPolicy,
   );
 }
 
-export function constructToolContracts(input: {
+type ToolContractConstructionInput = {
   readonly options: CommunicatorOptions;
   readonly workspaceKey: WorkspaceKey;
   readonly native: OpenCodeNativeAdapter;
@@ -141,12 +145,13 @@ export function constructToolContracts(input: {
   readonly blockingTimers?: RequestDeadlineTimerPort;
   readonly advisoryLockWake?: AdvisoryLockWakePort;
   readonly advisoryLockNotifications?: AdvisoryLockPostCommitNotificationPort;
-}) {
-  const { options, workspaceKey, native, store, runtime, contextRuntime, lifecycle } = input;
-  const clock = input.clock ?? productionClock;
-  const blockingTimers = input.blockingTimers ?? productionBlockingTimers;
-  const ids = createGeneratedIdFactory(productionEntropy);
-  const invocationDeadlineMs = (minimumDurationMs = 0): number => {
+};
+
+function configuredInvocationDeadline(
+  options: CommunicatorOptions,
+  clock: ClockPort,
+): (minimumDurationMs?: number) => number {
+  return (minimumDurationMs = 0): number => {
     if (!Number.isSafeInteger(minimumDurationMs) || minimumDurationMs < 0) {
       throw new Error("Minimum invocation duration is invalid.");
     }
@@ -154,9 +159,73 @@ export function constructToolContracts(input: {
     if (!Number.isSafeInteger(value)) throw new Error("Invocation deadline overflowed.");
     return value;
   };
+}
+
+function configuredRegistryMembership(input: ToolContractConstructionInput, clock: ClockPort) {
+  const { native, store, lifecycle } = input;
+  return {
+    async readCurrentRoots(
+      candidateWorkspaceKey: WorkspaceKey,
+      sourceSessionId: Parameters<OpenCodeNativeAdapter["readCurrentRoots"]>[1],
+      targetSessionId: Parameters<OpenCodeNativeAdapter["readCurrentRoots"]>[2],
+      abort?: AbortSignal,
+    ) {
+      const membership = await native.readCurrentRoots(
+        candidateWorkspaceKey,
+        sourceSessionId,
+        targetSessionId,
+        abort,
+      );
+      if (abort?.aborted) throw new Error("Participant observation was cancelled.");
+      const observations = [];
+      if (membership.sourceVisible) {
+        observations.push({
+          sessionId: sourceSessionId,
+          rootKind: "root" as const,
+          parentSessionId: null,
+          ...(membership.sourceTitle === undefined
+            ? {}
+            : { title: sanitizeDisplayTitle(membership.sourceTitle) }),
+          isArchived: false,
+          visibility: "visible" as const,
+        });
+      }
+      if (membership.targetVisible && targetSessionId !== sourceSessionId) {
+        observations.push({
+          sessionId: targetSessionId,
+          rootKind: "root" as const,
+          parentSessionId: null,
+          isArchived: false,
+          visibility: "visible" as const,
+        });
+      }
+      if (observations.length > 0) {
+        const recorded = await store.recordParticipantObservations({
+          fencingToken: lifecycle.fencingToken,
+          workspaceKey: candidateWorkspaceKey,
+          observedAtMs: clock.nowMs(),
+          observations,
+        });
+        if (!recorded.ok) throw new Error("Participant registry observation failed.");
+      }
+      return membership;
+    },
+  };
+}
+
+function configuredToolDependencies(
+  input: ToolContractConstructionInput,
+  clock: ClockPort,
+  blockingTimers: RequestDeadlineTimerPort,
+  ids: ReturnType<typeof createGeneratedIdFactory>,
+  invocationDeadlineMs: (minimumDurationMs?: number) => number,
+) {
+  const { options, workspaceKey, native, store, runtime, lifecycle } = input;
   const identityScope = { workspaceKey, fencingToken: lifecycle.fencingToken };
   const requestScope = { ...identityScope, invocationDeadlineMs };
-  const common = { readiness: lifecycle, membership: native };
+  const registryMembership = configuredRegistryMembership(input, clock);
+  const policies = options.policies ?? {};
+  const common = { readiness: lifecycle, membership: registryMembership };
   const mutation = {
     ...common,
     clock,
@@ -182,8 +251,6 @@ export function constructToolContracts(input: {
     ids,
     digest: productionSha256,
   };
-  const policies = options.policies ?? {};
-  const sessionRead = configuredSessionReadTool(input, clock, blockingTimers, invocationDeadlineMs);
   const advisoryLocks = {
     ...common,
     locks: store,
@@ -191,9 +258,39 @@ export function constructToolContracts(input: {
     ...(input.advisoryLockWake ? { wake: input.advisoryLockWake } : {}),
     ...(input.advisoryLockNotifications ? { notifications: input.advisoryLockNotifications } : {}),
   };
+  return { identityScope, requestScope, policies, common, mutation, blocking, advisoryLocks };
+}
+
+export function constructToolContracts(input: ToolContractConstructionInput) {
+  const { options, workspaceKey, native, store, runtime, contextRuntime, lifecycle } = input;
+  const clock = input.clock ?? productionClock;
+  const blockingTimers = input.blockingTimers ?? productionBlockingTimers;
+  const ids = createGeneratedIdFactory(productionEntropy);
+  const invocationDeadlineMs = configuredInvocationDeadline(options, clock);
+  const { identityScope, requestScope, policies, common, mutation, blocking, advisoryLocks } =
+    configuredToolDependencies(input, clock, blockingTimers, ids, invocationDeadlineMs);
+  const sessionRead = configuredSessionReadTool(
+    input,
+    clock,
+    blockingTimers,
+    invocationDeadlineMs,
+    policies.readCrossSession ?? "deny",
+  );
   return Object.freeze({
     session_list: createSessionListTool(
-      { ...common, sessions: native },
+      {
+        ...common,
+        registry: {
+          listRootCandidates: (candidateWorkspaceKey, limit, cursor) =>
+            store.listParticipantRootCandidates({
+              fencingToken: lifecycle.fencingToken,
+              workspaceKey: candidateWorkspaceKey,
+              limit,
+              ...(cursor ? { cursor } : {}),
+            }),
+        },
+        revalidation: native,
+      },
       workspaceKey,
       invocationDeadlineMs,
     ),
@@ -291,6 +388,7 @@ export function constructToolContracts(input: {
       },
       workspaceKey,
       invocationDeadlineMs,
+      policies.stop ?? "deny",
     ),
     session_start: createSessionStartTool(
       {
@@ -312,9 +410,8 @@ export function constructToolContracts(input: {
         policy: sessionExportPolicyPort(
           createSessionExportPolicy({
             selfSanitized: policies.exportSelfSanitized ?? "allow",
-            crossSession: policies.exportCrossSession ?? "ask",
-            unsanitized: policies.exportUnsanitized ?? "ask",
-            overwrite: policies.exportOverwrite ?? "ask",
+            crossSession: policies.exportCrossSession ?? "deny",
+            overwrite: policies.exportOverwrite ?? "deny",
           }),
         ),
         exporter: input.exporter,

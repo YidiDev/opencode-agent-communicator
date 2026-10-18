@@ -42,7 +42,7 @@ export function createSessionRequestSendTool(
 ): InternalToolContract<SessionRequestSendToolArguments> {
   return {
     description:
-      "Queue work to a visible active root and establish a durable ask or wait request. Returns immediately with recoverable request metadata; it never wakes an idle target.",
+      "Durably admit work and an ask or wait request to a visible root through the public queue. Returns recoverable request metadata immediately; admission is distinct from activation.",
     args: sessionRequestSendArgumentsSchema,
     async execute(arguments_, context) {
       const adapted = requestToolContext(scope, context);
@@ -53,11 +53,11 @@ export function createSessionRequestSendTool(
           ? await createImmediateSessionRequest(
               {
                 ...ports,
-                messageAuthorization: invocationMessageAuthorization(policies.message, context),
-                requestAuthorization: invocationRequestAuthorization(
-                  { ask: policies.ask, wait: policies.wait },
-                  context,
-                ),
+                messageAuthorization: invocationMessageAuthorization(policies.message),
+                requestAuthorization: invocationRequestAuthorization({
+                  ask: policies.ask,
+                  wait: policies.wait,
+                }),
               },
               adapted.value,
               { session_id: target.value, content: arguments_.content, request },

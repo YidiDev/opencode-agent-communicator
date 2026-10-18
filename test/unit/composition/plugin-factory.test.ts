@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import type { OpenCodeNativeAdapter } from "../../../src/adapters/native/opencode-1-18";
+import type { OpenCodeNativeAdapter } from "../../../src/adapters/native/opencode-2";
 import { parseCommunicatorOptions } from "../../../src/composition/config";
 import { createCompositionFactory } from "../../../src/composition/plugin";
 import { communicatorToolIds } from "../../../src/composition/tools";
@@ -8,6 +8,13 @@ import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 
 const workspace = validateWorkspaceKey("workspace");
 if (!workspace.ok) throw new Error("Invalid workspace fixture.");
+
+function pluginContext(options: object = {}) {
+  return {
+    options,
+    location: { project: { canonical: "/workspace" }, directory: "/workspace" },
+  } as never;
+}
 
 function incompatibleNative(): OpenCodeNativeAdapter {
   return {
@@ -45,6 +52,7 @@ function incompatibleNative(): OpenCodeNativeAdapter {
     admitInitialMessage: async () => "unknown",
     readParticipantPresence: async () => "present",
     isEligibleContextTarget: async () => true,
+    revalidateRoot: async () => undefined,
   };
 }
 
@@ -73,7 +81,7 @@ describe("composition factory ordering", () => {
       },
       createHealth() {
         order.push("health-adapter");
-        return { readHealth: async () => ({ healthy: true, version: "1.18.23" }) };
+        return { readHealth: async () => ({ healthy: true, version: "2.0.26" }) };
       },
       createNative() {
         order.push("native");
@@ -89,7 +97,7 @@ describe("composition factory ordering", () => {
         throw new Error("store must not open");
       },
     });
-    await expect(Reflect.apply(plugin, undefined, [{}, {}])).rejects.toThrow("incompatible");
+    await expect(plugin(pluginContext())).rejects.toThrow("incompatible");
     expect(order).toEqual(["config", "workspace", "health-adapter", "compatibility", "runtime"]);
   });
 
@@ -109,7 +117,7 @@ describe("composition factory ordering", () => {
       createHealth: () => ({
         async readHealth(): Promise<unknown> {
           order.push("health-read");
-          return { healthy: true, version: "1.18.23" };
+          return { healthy: true, version: "2.0.26" };
         },
       }),
       createStore(): never {
@@ -118,9 +126,7 @@ describe("composition factory ordering", () => {
       },
     });
 
-    await expect(Reflect.apply(plugin, undefined, [{}, {}])).rejects.toThrow(
-      "requires Linux x64 and a healthy OpenCode >=1.18.21 <1.19.0 host",
-    );
+    await expect(plugin(pluginContext())).rejects.toThrow("requires Linux x64 and OpenCode 2.0.26");
     expect(order).toEqual([]);
   });
 
@@ -144,8 +150,8 @@ describe("composition factory ordering", () => {
         throw new Error("store must not open");
       },
     });
-    await expect(Reflect.apply(plugin, undefined, [{}, { startupDeadlineMs: 5 }])).rejects.toThrow(
-      "requires Linux x64 and a healthy OpenCode >=1.18.21 <1.19.0 host",
+    await expect(plugin(pluginContext({ startupDeadlineMs: 5 }))).rejects.toThrow(
+      "OpenCode v2 compatibility proof timed out",
     );
     rejectLate?.(new Error("late health rejection"));
     await Promise.resolve();
@@ -164,6 +170,10 @@ describe("composition factory ordering", () => {
     };
     const store = {
       starts: {},
+      listParticipantDeletionCandidates: async () => ({
+        ok: true,
+        sessionIds: ["ses_deleted"],
+      }),
       deleteParticipantRequests: async () => {
         order.push("participant-delete");
         return { ok: true, terminalized: [] };
@@ -181,8 +191,8 @@ describe("composition factory ordering", () => {
         directory: "/workspace",
         worktree: "/workspace",
       }),
-      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
-      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "2.0.26" }) }),
+      checkCompatibility: async () => ({ ok: true, value: { version: "2.0.26" } }),
       createNative: () => ({
         ...incompatibleNative(),
         readParticipantPresence: async () => "absent" as const,
@@ -206,32 +216,18 @@ describe("composition factory ordering", () => {
         dispose: () => order.push("exporter-dispose"),
       }),
     });
-    const hooks = await Reflect.apply(plugin, undefined, [{}, {}]);
+    const hooks = await plugin(pluginContext());
     expect(order).toEqual(["recovery"]);
     expect(Object.keys(hooks.tool ?? {})).toEqual([...communicatorToolIds]);
     expect(Object.keys(hooks.tool ?? {})).toHaveLength(21);
-    const config: {
-      permission?: unknown;
-      experimental?: { primary_tools?: string[] };
-      skills?: { paths: string[] };
-    } = {};
-    await hooks.config?.(config as never);
-    expect(config.permission).toEqual({ session_stop: "ask", session_read: "ask" });
-    expect(config.experimental?.primary_tools).toEqual([...communicatorToolIds]);
-    expect(config.skills?.paths[0]).toEndWith("/skills");
     await hooks.event?.({
       event: {
+        id: "evt_deleted",
+        created: 1,
         type: "session.deleted",
-        properties: {
-          info: {
-            id: "ses_deleted",
-            projectID: "project",
-            directory: "/workspace",
-            title: "Deleted",
-            version: "1.18.23",
-            time: { created: 1, updated: 2 },
-          },
-        },
+        durable: { aggregateID: "ses_deleted", seq: 1, version: 2 },
+        location: { directory: "/workspace" },
+        data: { sessionID: "ses_deleted" },
       },
     });
     expect(order).toEqual(["recovery", "participant-delete"]);
@@ -259,8 +255,8 @@ describe("composition factory failure cleanup", () => {
         directory: "/workspace",
         worktree: "/workspace",
       }),
-      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
-      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "2.0.26" }) }),
+      checkCompatibility: async () => ({ ok: true, value: { version: "2.0.26" } }),
       createNative: () => incompatibleNative(),
       createStore: () => ({ starts: {}, close: () => order.push("store-close") }) as never,
       createRuntime: () =>
@@ -293,7 +289,7 @@ describe("composition factory failure cleanup", () => {
     });
     const warning = spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      const hooks = await Reflect.apply(plugin, undefined, [{}, {}]);
+      const hooks = await plugin(pluginContext());
       expect(Object.keys(hooks.tool ?? {})).toEqual([...communicatorToolIds]);
       expect(warning).toHaveBeenCalledWith(
         "Session export is unavailable because secure initialization failed.",
@@ -315,8 +311,8 @@ describe("composition factory failure cleanup", () => {
         directory: "/workspace",
         worktree: "/workspace",
       }),
-      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
-      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "2.0.26" }) }),
+      checkCompatibility: async () => ({ ok: true, value: { version: "2.0.26" } }),
       createNative: () => incompatibleNative(),
       createStore: () => ({ close: () => order.push("store-close") }) as never,
       createRuntime: () =>
@@ -327,7 +323,7 @@ describe("composition factory failure cleanup", () => {
       recoverStartup: async () => domainFailure("storage_unavailable", "recovery failed", true),
     });
 
-    await expect(Reflect.apply(plugin, undefined, [{}, {}])).rejects.toThrow(
+    await expect(plugin(pluginContext())).rejects.toThrow(
       "storage became unavailable during recovery",
     );
     expect(order).toEqual(["runtime-stop", "store-close"]);
@@ -356,8 +352,8 @@ describe("composition factory failure cleanup", () => {
         directory: "/workspace",
         worktree: "/workspace",
       }),
-      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
-      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "2.0.26" }) }),
+      checkCompatibility: async () => ({ ok: true, value: { version: "2.0.26" } }),
       createNative: () => incompatibleNative(),
       createStore: () => ({ starts: {}, close: () => order.push("store-close") }) as never,
       recoverStartup: async () => ({ ok: true, value: lifecycle as never }),
@@ -373,7 +369,7 @@ describe("composition factory failure cleanup", () => {
         },
       }),
     });
-    const hooks = await Reflect.apply(plugin, undefined, [{}, {}]);
+    const hooks = await plugin(pluginContext());
 
     const first = hooks.dispose?.();
     const second = hooks.dispose?.();
@@ -399,8 +395,8 @@ describe("composition factory failure cleanup", () => {
         directory: "/workspace",
         worktree: "/workspace",
       }),
-      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
-      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "2.0.26" }) }),
+      checkCompatibility: async () => ({ ok: true, value: { version: "2.0.26" } }),
       createNative: () => incompatibleNative(),
       createStore: () => ({ starts: {}, close: () => order.push("store-close") }) as never,
       recoverStartup: async () => ({
@@ -428,7 +424,7 @@ describe("composition factory failure cleanup", () => {
         dispose: () => order.push("exporter-dispose"),
       }),
     });
-    const hooks = await Reflect.apply(plugin, undefined, [{}, {}]);
+    const hooks = await plugin(pluginContext());
     const disposal = hooks.dispose?.();
     while (!releaseDrain) await Promise.resolve();
     expect(order).toEqual(["lifecycle-stop", "scheduler-drain", "exporter-drain-start"]);

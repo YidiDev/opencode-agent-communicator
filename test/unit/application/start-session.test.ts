@@ -206,7 +206,7 @@ function fixture(input: { creation?: "created" | "unknown"; title?: "updated" | 
         return new Uint8Array(32);
       },
     },
-    policy: createSessionStartPolicy(),
+    policy: createSessionStartPolicy({ decision: "allow" }),
   };
   return { calls, ports, arguments_ };
 }
@@ -225,18 +225,17 @@ test("persists before approval and runs fenced create, title, and fixed-ID admis
     titleState: "outcome_unknown",
     admissionState: "admitted",
   });
-  expect(testFixture.calls.indexOf("persist")).toBeLessThan(testFixture.calls.indexOf("approval"));
+  expect(testFixture.calls).not.toContain("approval");
   expect(
     testFixture.calls.some((call) => call === `native:admit:${nativeMessageId}:Do the work`),
   ).toBe(true);
 });
 
-test("replays a rejected start deterministically without approval or native effects", async () => {
+test("replays a policy-denied start deterministically without native effects", async () => {
   const testFixture = fixture();
-  testFixture.ports.approval.requestStartApproval = async () => {
-    testFixture.calls.push("approval");
-    return "rejected";
-  };
+  (testFixture.ports as { policy: SessionStartPorts["policy"] }).policy = createSessionStartPolicy({
+    decision: "deny",
+  });
   const invoke = () =>
     startSession(
       testFixture.ports,
@@ -248,12 +247,12 @@ test("replays a rejected start deterministically without approval or native effe
   expect(first).toMatchObject({
     ok: false,
     error: {
-      code: "approval_rejected",
-      details: { operation: { creationState: "approval_rejected" } },
+      code: "permission_denied",
+      details: { operation: { creationState: "policy_denied" } },
     },
   });
   expect(repeated).toEqual(first);
-  expect(testFixture.calls.filter((call) => call === "approval")).toHaveLength(1);
+  expect(testFixture.calls).not.toContain("approval");
   expect(testFixture.calls.some((call) => call.startsWith("native:"))).toBe(false);
 });
 

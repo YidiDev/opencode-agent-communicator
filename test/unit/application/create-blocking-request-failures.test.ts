@@ -125,7 +125,7 @@ test("creation maps caller membership abort, rejection, malformed data, and invi
   setup.store.close();
 });
 
-test("creation fails closed for digest, generated ID, authorization, and activity port faults", async () => {
+test("creation fails closed for digest, generated ID, and authorization faults", async () => {
   const setup = await blockingRequestFixture(async () => ({ kind: "unknown" }));
   const failures: Array<readonly [Partial<SessionBlockingRequestPorts>, string]> = [
     [
@@ -172,30 +172,6 @@ test("creation fails closed for digest, generated ID, authorization, and activit
       } as never,
       "storage_unavailable",
     ],
-    [
-      { activity: { observeRequestParticipants: async () => ({ malformed: true }) } } as never,
-      "native_unavailable",
-    ],
-    [
-      {
-        activity: {
-          observeRequestParticipants: async () => {
-            throw new OwnershipLostFault("lost");
-          },
-        },
-      } as never,
-      "ownership_lost",
-    ],
-    [
-      {
-        activity: {
-          observeRequestParticipants: async () => {
-            throw new Error("native");
-          },
-        },
-      } as never,
-      "native_unavailable",
-    ],
   ];
   for (const [override, code] of failures) {
     expect(
@@ -210,9 +186,9 @@ test("creation fails closed for digest, generated ID, authorization, and activit
   setup.store.close();
 });
 
-test("creation checkpoints cancellation after membership, authorization, and activity effects", async () => {
+test("creation checkpoints cancellation after membership and authorization effects", async () => {
   const setup = await blockingRequestFixture(async () => ({ kind: "unknown" }));
-  for (const phase of ["membership", "authorization", "activity"] as const) {
+  for (const phase of ["membership", "authorization"] as const) {
     const abort = new AbortController();
     const override =
       phase === "membership"
@@ -224,27 +200,14 @@ test("creation checkpoints cancellation after membership, authorization, and act
               },
             },
           }
-        : phase === "authorization"
-          ? {
-              authorization: {
-                authorizeRequest: async () => {
-                  abort.abort("authorization_race");
-                  return { kind: "allow" as const };
-                },
+        : {
+            authorization: {
+              authorizeRequest: async () => {
+                abort.abort("authorization_race");
+                return { kind: "allow" as const };
               },
-            }
-          : {
-              activity: {
-                observeRequestParticipants: async () => {
-                  abort.abort("activity_race");
-                  return {
-                    sourceVisible: true,
-                    targetVisible: true,
-                    targetStatus: "busy" as const,
-                  };
-                },
-              },
-            };
+            },
+          };
     expect(
       await createBlockingSessionRequest(
         { ...setup.ports, ...override } as SessionBlockingRequestPorts,

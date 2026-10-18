@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 
@@ -6,7 +6,7 @@ import { cleanupAll } from "./cleanup";
 import { runBoundedProcess } from "./process";
 
 export interface PackedPluginInstallation {
-  readonly entryPath: string;
+  readonly packagePath: string;
   remove(): Promise<void>;
 }
 
@@ -198,8 +198,15 @@ export async function installPackedPlugin(repository: string): Promise<PackedPlu
       dependencies: dependencyRecord(packageManifest.dependencies),
       runtimeDependenciesRoot,
     });
+    const hostPluginDirectory = join(consumer, "plugin");
+    await mkdir(hostPluginDirectory);
+    await writeFile(
+      join(hostPluginDirectory, "index.ts"),
+      'export { default } from "opencode-agent-communicator";\n',
+      { mode: 0o600 },
+    );
     return {
-      entryPath: await realpath(join(packageDirectory, "src/index.ts")),
+      packagePath: await realpath(hostPluginDirectory),
       async remove(): Promise<void> {
         await rm(staging, { recursive: true, force: true });
       },

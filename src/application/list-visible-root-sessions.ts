@@ -15,6 +15,11 @@ import {
   type CommunicatorReadinessPort,
 } from "./communicator-readiness-port";
 import type { CurrentWorkspaceMembershipPort } from "./delivery-ports";
+import type {
+  ParticipantRegistryCursor,
+  ParticipantRegistryListingPort,
+  ParticipantRootRevalidationPort,
+} from "./participant-registry-ports";
 
 const defaultSessionLimit = 50;
 const maximumSessionLimit = 100;
@@ -55,12 +60,15 @@ async function invoke<Value>(
 export interface SessionListPorts {
   readonly readiness: CommunicatorReadinessPort;
   readonly membership: CurrentWorkspaceMembershipPort;
-  readonly sessions: VisibleRootSessionPort & {
+  readonly sessions?: VisibleRootSessionPort & {
     readVisibleRoots(
       includeArchived: boolean,
       abort?: AbortSignal,
     ): ReturnType<VisibleRootSessionPort["readVisibleRoots"]>;
   };
+  /** OpenCode 2 composition supplies both ports; partial registry wiring fails closed. */
+  readonly registry?: ParticipantRegistryListingPort;
+  readonly revalidation?: ParticipantRootRevalidationPort;
 }
 
 export interface VisibleRootSession {
@@ -77,6 +85,17 @@ function matchesStatus(status: ActivityStatus, filter: SessionStatusFilter): boo
   if (filter === "all") return true;
   if (filter === "active") return status === "busy" || status === "retry";
   return status === "idle";
+}
+
+function cursorAdvances(
+  last: ParticipantRegistryCursor,
+  cursor?: ParticipantRegistryCursor,
+): boolean {
+  return (
+    !cursor ||
+    last.lastObservedAtMs < cursor.lastObservedAtMs ||
+    (last.lastObservedAtMs === cursor.lastObservedAtMs && last.id > cursor.id)
+  );
 }
 
 function compareNewest(left: VisibleRootSession, right: VisibleRootSession): number {
@@ -127,9 +146,37 @@ export async function listVisibleRootSessions(
     }
   }
   {
-    const sessionCall = await invoke(context, (signal) =>
-      ports.sessions.readVisibleRoots(includeArchived, signal),
-    );
+    const registryMode = ports.registry !== undefined || ports.revalidation !== undefined;
+    if (registryMode && (!ports.registry || !ports.revalidation)) {
+      return domainFailure(
+        "native_unavailable",
+        "Visible session state is temporarily unavailable.",
+        true,
+      );
+    }
+    const sessionCall = await invoke(context, async (signal) => {
+      if (!ports.registry || !ports.revalidation) {
+        if (!ports.sessions) throw new Error("visible-root listing port is unavailable");
+        return ports.sessions.readVisibleRoots(includeArchived, signal);
+      }
+      const sessions: import("../domain/sessions").RootSessionObservation[] = [];
+      let cursor: ParticipantRegistryCursor | undefined;
+      for (let batch = 0; batch < 10; batch += 1) {
+        const candidates = await ports.registry.listRootCandidates(context.workspaceKey, maximumSessionLimit, cursor);
+        if (candidates.length > maximumSessionLimit) throw new Error("participant registry returned an unbounded candidate set");
+        const observations = await Promise.all(candidates.map((candidate) =>
+          ports.revalidation?.revalidateRoot(context.workspaceKey, candidate.id, signal)));
+        sessions.push(...observations.filter((item): item is import("../domain/sessions").RootSessionObservation => item !== undefined &&
+          (includeArchived || !item.isArchived) && matchesStatus(item.status, status)));
+        if (candidates.length < maximumSessionLimit || sessions.length >= limit) return sessions;
+        const last = candidates.at(-1);
+        if (!last || !cursorAdvances(last, cursor)) {
+          throw new Error("participant registry cursor did not advance");
+        }
+        cursor = { id: last.id, lastObservedAtMs: last.lastObservedAtMs };
+      }
+      throw new Error("participant registry revalidation budget exhausted");
+    });
     if (sessionCall.kind === "expired") {
       return domainFailure("deadline_expired", "Session list invocation deadline expired.", false);
     }
