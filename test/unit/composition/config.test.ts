@@ -9,12 +9,12 @@ describe("communicator PluginOptions", () => {
     expect(options.invocationDeadlineMs).toBe(3_600_000);
   });
 
-  test("rejects unknown keys, relative paths, partial export trust, and hard-ceiling excess", () => {
+  test("rejects unknown keys, relative paths, legacy ask policy, and hard-ceiling excess", () => {
     expect(() => parseCommunicatorOptions({ mystery: true }, { HOME: "/home/operator" })).toThrow();
     expect(() => parseCommunicatorOptions({ stateDirectory: "state" }, {})).toThrow();
     expect(() =>
-      parseCommunicatorOptions({ export: { root: "/safe/export" } }, { HOME: "/home/operator" }),
-    ).toThrow();
+      parseCommunicatorOptions({ policies: { message: "ask" } }, { HOME: "/home/operator" }),
+    ).toThrow('legacy decision "ask"');
     expect(() =>
       parseCommunicatorOptions({ startupDeadlineMs: 60_001 }, { HOME: "/home/operator" }),
     ).toThrow();
@@ -29,12 +29,10 @@ describe("communicator PluginOptions", () => {
     const options = parseCommunicatorOptions(
       {
         stateDirectory: "/var/lib/communicator",
-        policies: { message: "ask", ask: "deny", wait: "allow", start: "allow" },
+        policies: { message: "allow", ask: "deny", wait: "allow", start: "allow" },
         start: { allowedAgents: ["build"], allowedModels: ["provider/model"] },
         export: {
           root: "/var/lib/communicator-exports",
-          executable: "/usr/bin/opencode",
-          trustedWorkingDirectory: "/var/empty",
           limits: { maximumConcurrent: 1 },
         },
       },
@@ -43,6 +41,21 @@ describe("communicator PluginOptions", () => {
     expect(options.policies?.start).toBe("allow");
     expect(options.export?.limits?.maximumConcurrent).toBe(1);
   });
+
+  test.each(["maximumStderrBytes", "maximumDurationMs", "terminationGraceMs"])(
+    "rejects removed CLI export limit %s",
+    (name) => {
+      expect(() =>
+        parseCommunicatorOptions(
+          {
+            stateDirectory: "/var/lib/communicator",
+            export: { limits: { [name]: 1 } },
+          },
+          {},
+        ),
+      ).toThrow();
+    },
+  );
 
   test("rejects HOME and broad system roots instead of changing their modes", () => {
     for (const stateDirectory of ["/home/operator", "/etc", "/var", "/tmp"]) {
@@ -55,8 +68,6 @@ describe("communicator PluginOptions", () => {
         {
           export: {
             root: "/etc",
-            executable: "/usr/bin/opencode",
-            trustedWorkingDirectory: "/var/empty",
           },
         },
         { HOME: "/home/operator" },

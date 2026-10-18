@@ -10,6 +10,34 @@ export const sessionIdPolicy = {
 export type ActivityStatus = "busy" | "retry" | "idle" | "unknown";
 export type SessionStatusFilter = "active" | "idle" | "all";
 
+export const participantRegistryPolicy = {
+  maximumRowsPerWorkspace: 262_144,
+  maximumObservationBatch: 100,
+  maximumListLimit: 100,
+  maximumTitleUtf8Bytes: 512,
+} as const;
+
+export type ParticipantRootKind = "root" | "child";
+export type ParticipantVisibility = "visible" | "not_visible" | "unknown";
+
+/**
+ * Bounded host evidence retained by the communicator. Activity and visibility are observations,
+ * not authorization: callers must still revalidate a candidate against the current host state.
+ */
+export interface ParticipantRegistryRecord {
+  readonly id: SessionId;
+  readonly rootKind: ParticipantRootKind;
+  readonly parentSessionId: SessionId | null;
+  readonly title: string | null;
+  readonly isArchived: boolean | null;
+  readonly activityStatus: ActivityStatus;
+  readonly activityObservedAtMs: number | null;
+  readonly visibility: ParticipantVisibility;
+  readonly visibilityObservedAtMs: number | null;
+  readonly firstObservedAtMs: number;
+  readonly lastObservedAtMs: number;
+}
+
 export interface RootSessionObservation {
   readonly id: SessionId;
   readonly title: string;

@@ -73,3 +73,34 @@ test("queue admission fails closed when no native queue surface is available", a
     error: { code: "storage_unavailable" },
   });
 });
+
+test("public queue evidence never invents request sequence evidence", async () => {
+  const setup = await harness();
+  setup.input.request = { ...setup.input.request, deliveryMode: "queue" };
+  let completion: unknown;
+  const ports = {
+    ...setup.ports,
+    nativeQueue: {
+      queueMessage: async () => ({ kind: "public_message" as const, observedAtMs: 1_002 }),
+    },
+  };
+  setup.ports.requests.completeDelivery = async (input) => {
+    completion = input;
+    return {
+      ok: true,
+      request: {
+        ...setup.input.request,
+        deliveryState: "delivery_unknown",
+        deliveryUnknownAtMs: 1_002,
+        updatedAtMs: 1_002,
+      },
+    } as never;
+  };
+
+  expect(await admitClaimedSessionRequest(ports, setup.input)).toMatchObject({
+    ok: true,
+    value: { outcome: "delivery_unknown" },
+  });
+  expect(completion).toMatchObject({ outcome: "delivery_unknown" });
+  expect(completion).not.toHaveProperty("admittedSeq");
+});

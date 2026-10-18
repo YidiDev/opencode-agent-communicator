@@ -3,12 +3,13 @@
 > Durable, workspace-scoped communication between independent OpenCode agent sessions on Linux x64.
 
 [![Linux x64 verification](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/ci.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/ci.yml)
-[![OpenCode 1.18 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
+[![OpenCode v2 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** `0.7.4` supports Linux x64 and stable OpenCode versions
-`>=1.18.21 <1.19.0`. Bun `1.4.0` is required for development and release verification. Other
+**Release status:** The OpenCode v2 migration is unreleased. This checkout supports Linux x64 and
+stable OpenCode versions `>=2.0.26 <2.1.0`. Bun `1.4.0` is required for development and release verification. Other
 architectures, operating systems, OpenCode versions, and prereleases are unsupported.
+The published `v0.7.4` tag targets OpenCode 1.18 and does not contain this migration.
 
 ## Contents
 
@@ -39,7 +40,7 @@ execution.
 ## Requirements
 
 - Linux x64 with a local filesystem suitable for SQLite WAL
-- A stable OpenCode version in `>=1.18.21 <1.19.0`
+- A stable OpenCode version in `>=2.0.26 <2.1.0`
 - npm with Git and SSH support for private package installation
 - Bun `1.4.0` for development and release verification
 - A dedicated private state directory owned by the account running OpenCode
@@ -54,19 +55,20 @@ metadata and release gates. Network and clustered filesystems are rejected for t
 
 ### 1. Install the plugin
 
-OpenCode `1.18.x` does not reliably populate its package cache from a private `git+ssh` plugin spec.
-Install the immutable release outside OpenCode instead:
+For this unreleased migration, install an immutable commit from a reviewed v2 checkout. Run these
+commands in that checkout; keep its full commit SHA with the installation:
 
 ```bash
-install_root="$HOME/.local/share/opencode-agent-communicator/v0.7.4"
+v2_commit="$(git rev-parse HEAD)"
+install_root="$HOME/.local/share/opencode-agent-communicator/v2-$v2_commit"
 install -d -m 0700 "$install_root"
 npm install --prefix "$install_root" --save-exact --ignore-scripts \
-  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.7.4"
+  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#$v2_commit"
 test -f "$install_root/node_modules/opencode-agent-communicator/src/index.ts"
 ```
 
 The repository is private, so the account running npm and OpenCode must have working GitHub SSH
-access. Release tags are immutable by project policy; do not replace `v0.7.4` with `main`.
+access. Do not install a mutable branch reference. A future v2 release will provide an immutable tag.
 
 ### 2. Add the plugin
 
@@ -78,13 +80,15 @@ absolute home directory of the account that performed the installation:
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.7.4/node_modules/opencode-agent-communicator/src/index.ts",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v2-<full-reviewed-commit>/node_modules/opencode-agent-communicator/src/index.ts",
       {
         "policies": {
           "message": "allow",
           "ask": "allow",
           "wait": "allow",
-          "start": "ask"
+          "readCrossSession": "deny",
+          "start": "deny",
+          "stop": "deny"
         }
       }
     ]
@@ -92,9 +96,28 @@ absolute home directory of the account that performed the installation:
 }
 ```
 
-Supported OpenCode `1.18.x` versions accept plugin entries as either a source string or
-`[source, options]`. This plugin uses the tuple form because its options are strict and
-package-specific. Keep the private installation directory in place while OpenCode uses it.
+OpenCode v2 accepts the tuple form for a plugin source and its strict package-specific options. The
+entrypoint uses the public `Plugin.define` Effect API and registers tools and skills through
+`tool.transform` and `skill.transform`; it does not use a private HTTP transport. Keep the private
+installation directory in place while OpenCode uses it.
+Replace `<full-reviewed-commit>` with the SHA used above.
+
+### Current public-v2 capability limits
+
+The public host API has no authoritative current activity query. `session_list` therefore reports
+`unknown` activity; `status: "active"` and `status: "idle"` cannot establish matching peers.
+Context delivery returns `target_status_unknown`; `session_stop` returns `native_unavailable`, both
+before any effect. They remain registered for a stable tool manifest, but are unsupported on this
+host API. Use explicit
+`session_send` user delivery or durable queue-based ask/wait requests for supported communication.
+Queue admission can wake a target and is transcript-visible; it never proves execution.
+`session_read` requires current visibility and applicable static policy, not known activity;
+`is_live: false` with unknown activity is not proof that the peer is idle.
+
+Discovery scans up to ten 100-candidate registry pages to fill a filtered list. If the scan budget is
+exhausted before enough matches or the end is reached, it reports `native_unavailable` rather than
+silently hiding older matches. At capacity, the registry evicts its oldest discovery candidate;
+requests, deliveries and managed-session provenance are retained independently.
 
 ### 3. Prepare private state
 
@@ -114,18 +137,16 @@ filesystem, and SQLite sidecars before use.
 Restart every OpenCode backend that should load the plugin. Configuration and plugin changes are
 read at startup. Open a primary root session and confirm that the tool list contains all 21 names
 from the table below. Registration is atomic: startup exposes all 21 or fails instead of leaving a
-partial tool set. The config hook marks these tools as primary-only, so newly created native `task`
-children do not receive them. A child returns through the native task result instead of opening a
-second communicator channel to the waiting parent.
+partial tool set. Visible-root checks remain authoritative: task children cannot use the root-to-root
+communicator even if a host snapshot happens to expose a tool name.
 
 If startup fails, run `opencode --version` and verify the installed entry first. OpenCode must report
-a stable version in `>=1.18.21 <1.19.0`; the configured absolute file must exist and remain readable
+a stable version in `>=2.0.26 <2.1.0`; the configured absolute file must exist and remain readable
 by the OpenCode account.
 
 ## Configure
 
-This example shows every public option. Omit values you do not need; unknown keys and partial export
-configuration are startup errors.
+This example shows every public option. Omit values you do not need; unknown keys are startup errors.
 
 ```json
 {
@@ -141,11 +162,12 @@ configuration are startup errors.
           "message": "allow",
           "ask": "allow",
           "wait": "allow",
-          "start": "ask",
+          "readCrossSession": "deny",
+          "start": "deny",
+          "stop": "deny",
           "exportSelfSanitized": "allow",
-          "exportCrossSession": "ask",
-          "exportUnsanitized": "ask",
-          "exportOverwrite": "ask"
+          "exportCrossSession": "deny",
+          "exportOverwrite": "deny"
         },
         "start": {
           "allowedAgents": ["build"],
@@ -164,14 +186,9 @@ configuration are startup errors.
         },
         "export": {
           "root": "/home/operator/private-exports",
-          "executable": "/usr/bin/opencode",
-          "trustedWorkingDirectory": "/var/empty",
           "limits": {
             "maximumOutputBytes": 16777216,
-            "maximumStderrBytes": 16384,
-            "maximumDurationMs": 30000,
             "maximumConcurrent": 2,
-            "terminationGraceMs": 500,
             "maximumSourceExportsPerMinute": 4,
             "maximumWorkspaceExportsPerMinute": 16
           }
@@ -182,15 +199,23 @@ configuration are startup errors.
 }
 ```
 
-Policy values are `allow`, `ask`, or `deny`. Defaults are:
+Policy values are `allow` or `deny`. OpenCode v2 has no supported imperative approval equivalent;
+legacy `ask` values are rejected during startup rather than weakened to another decision. Defaults
+are:
 
 | Policy | Default |
 | --- | --- |
 | `message`, `ask`, `wait` | `allow` |
-| `start` | `ask` |
+| cross-session read, `start`, `stop` | `deny` |
 | sanitized self-export | `allow` |
-| cross-session, unsanitized, or overwrite export | `ask` |
-| stop | always `ask`; configuration cannot bypass it |
+| cross-session or overwrite export | `deny` |
+
+Unsanitized export is unsupported. Sensitive capabilities are deny-by-default; set the exact policy
+to `allow` only when the deployment should grant it.
+
+Current-context export accepts only output-size, concurrency, and per-source/workspace rate limits.
+The former CLI-process fields `maximumStderrBytes`, `maximumDurationMs`, and `terminationGraceMs` are
+unknown configuration and fail startup; v2 export does not spawn a CLI process.
 
 `allowedAgents` and `allowedModels` are exact allowlists for explicit start overrides. An empty or
 omitted list does not turn an arbitrary override into an allowed value. The established
@@ -199,7 +224,7 @@ start another session; "managed" denotes communicator-tracked provenance, not su
 
 `invocationDeadlineMs` is at most one hour. Blocking asks and waits may extend their internal
 invocation to place the requested timeout, a 30-second pre-persistence margin, and a 30-second
-terminal-settlement margin inside one finite boundary. `ToolContext.abort` is the only explicit
+terminal-settlement margin inside one finite boundary. The v2 invocation signal is the explicit
 request-cancellation signal.
 
 For all defaults, hard ceilings, and path rules, read
@@ -214,27 +239,27 @@ not happen.
 
 | Tool | Arguments | Who can use it | Result or effect |
 | --- | --- | --- | --- |
-| `session_list` | optional `status`, `include_archived`, `limit` | visible root caller | Current visible roots with sanitized titles and observed status. |
-| `session_read` | `session_id`, optional `cursor`, `direction`, `limit` (default 100, maximum 500) | self, or another visible root after exact approval | Chronological bounded restricted transcript projection with opaque cursors. |
+| `session_list` | optional `status`, `include_archived`, `limit` | visible root caller | Communicator-observed root candidates after authoritative public v2 per-ID revalidation. |
+| `session_read` | `session_id`, optional `cursor`, `direction`, `limit` (default 100, maximum 500) | self, or another visible root when static policy allows | Bounded sanitized current-model-context projection with opaque snapshot cursors; not history. |
 | `session_lock_list` | optional `cursor`, optional `limit` (default 50) | visible root caller | Active workspace locks as `{ locks, next_cursor? }`; each lock has `lock_id`, `held_by_session_id`, Markdown fields, and ISO 8601 UTC `created_at`, `renewed_at`, and `expires_at`. |
 | `session_lock_publish` | `ttl_seconds`, `title`, `description`, `instructions` | visible root caller | Publishes a caller-held advisory lock. The compatibility notification summary does not represent native fan-out. |
 | `session_lock_release` | `lock_id` | current lock holder | Removes an unexpired caller-held lock without sending native steer turns. |
 | `session_lock_renew` | `lock_id`, `ttl_seconds` | current lock holder | Replaces an unexpired caller-held lock's expiry without sending native steer turns. |
-| `session_send` | `session_id`, `content`, optional `delivery` (`context` or `user`) | visible source targeting a visible root | Defaults to durable provider-context delivery for a `busy`/`retry` target. Explicit `delivery: "user"` creates a native transcript-visible user turn and is the only existing-root delivery that may wake idle. |
+| `session_send` | `session_id`, `content`, optional `delivery` (`user` or `context`) | visible source targeting a visible root | Defaults to durable transcript-visible public queue admission without a busy prerequisite. Legacy context mode remains active-only. |
 | `session_delivery_get` | `delivery_id` | delivery source or target | Payload-free delivery metadata. |
-| `session_ask` | `session_id`, 1-10 `questions`, `timeout_seconds` 1-3600 | visible source targeting an observed-active root | Blocks for validated answers or a durable terminal state. Never wakes idle work. |
+| `session_ask` | `session_id`, 1-10 `questions`, `timeout_seconds` 1-3600 | visible source targeting a visible root | Durably queues the request, then blocks for validated answers or a terminal state. |
 | `session_respond` | `request_id`, `answers` | pending ask target | Atomically stores the answer and terminalizes the ask. |
-| `session_wait` | `session_id`, `milestone`, `timeout_seconds` 1-3600 | visible source targeting an observed-active root | Blocks for a milestone signal or durable terminal state. Never wakes idle work. |
+| `session_wait` | `session_id`, `milestone`, `timeout_seconds` 1-3600 | visible source targeting a visible root | Durably queues the request, then blocks for a milestone signal or terminal state. |
 | `session_signal` | `request_id`, optional `evidence` | pending wait target | Atomically records the milestone and optional evidence. |
 | `session_request_list` | optional `role`, `cursor`, `limit` | request participant | Payload-free inbox/outbox/all metadata, newest first. |
 | `session_request_get` | `request_id` | request participant | Target pending payload, source retained result, or authorized metadata view. |
 | `session_request_ack` | `request_id` | source of an available result | Acknowledges the result and logically erases retained result content. |
 | `session_request_cancel` | `request_id` | pending request source | Durably cancels a pending request. |
-| `session_request_send` | `session_id`, `content`, discriminated `request` | visible source targeting an observed-active root | Persists an ask/wait and admits one canonical envelope through provider context; never wakes idle work. |
+| `session_request_send` | `session_id`, `content`, discriminated `request` | visible source targeting a visible root | Persists an ask/wait and admits one canonical envelope through the public queue; no busy prerequisite. |
 | `session_request_start` | `idempotency_key`, `initial_message`, discriminated `request`, optional `title`, `agent`, `model` | visible root under start policy | Persists a linked ask/wait before one canonical initial envelope creates and starts a managed root. |
-| `session_stop` | `session_id`, optional `reason` | visible root after user approval | Interrupts the target and terminalizes its pending participant requests. |
+| `session_stop` | `session_id`, optional `reason` | visible root when static stop policy allows | Interrupts the target and terminalizes its pending participant requests. |
 | `session_start` | `idempotency_key`, `initial_message`, optional `title`, `agent`, `model` | visible root under start policy | Creates and admits another independent root session, or resumes the same durable operation. |
-| `session_export` | optional `session_id`, `destination`, optional `sanitize`, `overwrite` | visible root under export policies | Writes one transcript below the configured export root. |
+| `session_export` | optional `session_id`, `destination`, optional `sanitize`, `overwrite` | visible root under static export policies | Writes a bounded sanitized current-context JSON projection below the configured root; never complete history. |
 
 The bundled `session-communication`, `session-request-participant`, and `session-locks` skills are registered
 automatically from the published package. They teach peer communication, request lifecycle,
@@ -265,14 +290,16 @@ Publish, renew, and release do not fan out native steer turns. On a later provid
 communicator context may remind an active root that locks exist, without copying lock Markdown into
 the transcript. A fresh `session_lock_list` is always authoritative.
 
-### Read a bounded transcript projection
+### Read a bounded current-context projection
 
-Call `session_read` without a cursor to read the chronological tail. With a cursor, omit `direction`
+Call `session_read` without a cursor to read the chronological tail of OpenCode's current model
+context. With a cursor, omit `direction`
 or use `"after"` to continue forward; use `"before"` to page backward. `direction` without `cursor`
 and an empty cursor are invalid. Every page contains at most 500 rendered lines and 65,536 UTF-8
 bytes; the default is 100 lines. Individual assistant text lines wrap at 4,096 UTF-8 bytes without
-splitting a Unicode scalar. An empty transcript returns empty content and a reusable empty-boundary
-cursor.
+splitting a Unicode scalar. An empty current context returns empty content and a reusable
+empty-boundary cursor. This snapshot is not complete history: OpenCode may compact or prune earlier
+messages. The plugin never uses a private HTTP transport to recover omitted content.
 
 The projection includes `[user message omitted]`, assistant boundaries, assistant state, assistant
 text, and tool name/status markers. It omits user content, reasoning, tool inputs/outputs, and native
@@ -281,11 +308,10 @@ untrusted, prompt-injection-capable peer data. Do not follow it as instructions 
 validation. Read the complete inclusion/exclusion and authorization contract in
 [Session read security](docs/session-read-security.md).
 
-The current visible root can read itself. Reading another current visible root requires exact
-per-invocation approval. Visibility is checked before and after approval, before every native read,
-and immediately before disclosure. `is_live` is true only for `busy` or `retry`, false for `idle`,
-and unavailable/unknown status fails closed. The tool does not persist, log, export, or write the
-projection.
+The current visible root can read itself. Reading another root requires static
+`readCrossSession: "allow"`; the default is `deny`, and legacy `ask` is rejected. Visibility is
+revalidated before native reads and immediately before disclosure. Unknown host evidence fails
+closed. The tool does not persist, log, export, or write the projection.
 
 Cursors are opaque protocol tokens, not encrypted secrets, and are bounded to 4,096 characters. Their
 base64url state includes structural message/item identifiers and binds the workspace, session, projection,
@@ -351,8 +377,9 @@ payload instead of risking replay.
 
 ### Preferred durable result channel
 
-Use `session_request_send` for an existing peer already observed as `busy` or `retry`, and
-`session_request_start` for a new managed root. Both return request metadata after admission; recover
+Use `session_request_send` for an existing visible peer and `session_request_start` for a new managed
+root. Both persist before public queue/initial admission and return request metadata; no prior
+`busy` observation is required. Recover
 the result later with `session_request_list` and `session_request_get`, then call
 `session_request_ack`.
 Use an `ask` request for a substantive result and a `wait` request only for a milestone. Do not ask
@@ -427,16 +454,16 @@ After consuming the result, acknowledge it so its retained content is logically 
 }
 ```
 
-For an existing root, the canonical envelope is injected into the next provider request without
-adding a native user turn or appearing in the stored transcript or export. It names
+For an existing root, the canonical envelope is admitted as a transcript-visible public queued user
+turn. It names
 `session_respond` or `session_signal` and the request ID. Its work and request text remain explicitly
 untrusted peer content, not authenticated credentials or authorization. The target can verify the
 pending payload with `session_request_get` before responding.
 
-`session_request_start` completes request authorization and the mandatory start approval over the
+`session_request_start` completes static request and start authorization over the
 complete public argument digest before one fenced SQLite transaction persists the start reservation,
-private canonical envelope, linked request payload, wait edge, and rate events. That start approval
-authorizes the linked initial admission; no second message approval is required. An exact
+private canonical envelope, linked request payload, wait edge, and rate events. An allowed start
+authorizes the linked initial admission. An exact
 source-scoped replay returns the original operation and request, while changed work or request
 arguments conflict. After restart, an approved prepared composite resumes once. A stale submitting
 initial admission is instead recorded as unknown and is never replayed.
@@ -451,17 +478,14 @@ second session.
 
 ### Secure export setup
 
-Export remains registered but returns `export_unavailable` until `root`, `executable`, and
-`trustedWorkingDirectory` are all configured and trusted.
+Export remains registered but returns `export_unavailable` until `root` is configured and trusted.
 
 1. Create a dedicated export root owned by the OpenCode account with mode `0700`.
-2. Point `executable` at a supported OpenCode `1.18.x` ELF. It and its path must satisfy the documented
-   root-ownership and write-permission checks; a user-owned Bun wrapper is rejected.
-3. Create a root-owned, non-writable working directory outside the workspace, plugin package, state,
-   and export trees. `/var/empty` is a common choice when prepared by an administrator.
-4. Restart OpenCode and make a sanitized self-export to a new relative destination.
-5. Enable cross-session, unsanitized, or overwrite operations only if their approval prompts match
-   your policy.
+2. Restart OpenCode and make a sanitized self-export to a new relative destination.
+3. Enable cross-session or overwrite operations only with the corresponding static `allow` policy.
+
+The export is a versioned sanitized current-context projection with `history_complete: false`. It
+does not spawn a CLI process, and unsanitized export is unsupported.
 
 Destinations are normalized relative paths below the configured root. Absolute paths, traversal,
 symlinks, unsafe filesystems, mount transitions, and reserved staging names fail closed. Read
@@ -472,11 +496,10 @@ symlinks, unsafe filesystems, mount transitions, and reserved staging names fail
 ### Send work without waiting
 
 1. Call `session_list` and choose a visible root.
-2. If it is `busy` or `retry`, call `session_send` without `delivery`; the default `context` mode is
-   provider-visible and transcript-invisible.
-3. If it is idle and you intend to wake it, call `session_send` with `delivery: "user"`.
-4. Inspect `session_delivery_get` for payload-free delivery state. Before ask, wait, or
-   `session_request_send`, confirm the target is `busy` or `retry`.
+2. Call `session_send` without `delivery`; the default `user` mode persists before public queue
+   admission and does not require a `busy` observation.
+3. Inspect `session_delivery_get` for payload-free delivery state. Admission does not prove that the
+   target activated, read, or followed the message.
 
 ### Coordinate shared workspace mutation
 
@@ -490,7 +513,7 @@ symlinks, unsafe filesystems, mount transitions, and reserved staging names fail
 
 ### Ask for a decision
 
-1. Confirm the target is active with `session_list`.
+1. Confirm the target is a visible root with `session_list`.
 2. Call `session_ask` with bounded options and a timeout.
 3. The target uses `session_request_list` or `session_request_get`, then `session_respond`.
 4. If the source invocation disconnects, it can recover through request list/get.
@@ -498,7 +521,7 @@ symlinks, unsafe filesystems, mount transitions, and reserved staging names fail
 
 ### Wait for a milestone
 
-1. Confirm the target is active.
+1. Confirm the target is a visible root.
 2. Call `session_wait` with a precise milestone and timeout.
 3. The target calls `session_signal` when the milestone is true, optionally attaching short evidence.
 4. The source acknowledges the retained result after use.
@@ -508,7 +531,7 @@ symlinks, unsafe filesystems, mount transitions, and reserved staging names fail
 1. Call `session_start` once with a stable idempotency key and complete initial message.
 2. Keep the returned communicator-started session ID.
 3. Communicate through send, ask, and wait rather than starting duplicate sessions.
-4. Call `session_stop` only when needed. The user must approve the exact target and reason every time.
+4. Call `session_stop` only when needed and only when static `stop: "allow"` policy is intentional.
 
 ## Durability and ambiguous outcomes
 
@@ -548,14 +571,15 @@ See [Linux SQLite store assumptions](docs/linux-sqlite-store.md).
 
 - Agent messages and skill instructions are untrusted advisory data, not authorization.
 - `session_read` assistant content is untrusted prompt-injection-capable peer data. Its restricted
-  projection is not a sanitized transcript; cross-session disclosure requires exact approval.
+  structurally sanitized projection is not complete history; cross-session disclosure requires
+  static `readCrossSession: "allow"` policy.
 - Visibility does not grant permission. Participant, workspace, policy, quota, and ownership checks
   still apply.
 - The plugin does not expose a shell, command string, network listener, or remote command-execution
   tool. `session_start` uses pinned OpenCode APIs; it does not accept a command.
-- `session_export` is disabled unless all three export trust paths are configured. Its only process is
-  a directly spawned, root-owned, supported OpenCode `1.18.x` ELF executable with fixed argv construction, no
-  shell, a minimal environment, bounded output, and a deadline.
+- `session_export` is disabled unless its export root is configured. It writes a bounded sanitized
+  current-context document through descriptor-relative Linux filesystem operations and spawns no
+  process.
 
 Secure export is a **Linux x64-only, capability-sensitive prerelease feature**. It requires kernel
 and filesystem support for the descriptor-relative operations documented in
@@ -599,6 +623,9 @@ resources back. Another backend taking ownership still fails closed with a sanit
 diagnostic. Calls that already started are aborted or settle on their original generation and are
 never replayed.
 
+Persisted lease renewal times never move backward when the wall clock regresses. Local expiry stays
+monotonic, stored renewal/expiry remain nondecreasing, and fencing epochs still increase on takeover.
+
 Recovery is deliberately one-shot and fail closed. Storage or contract faults, workflow shutdown,
 host disposal, a drain timeout, takeover by another live backend, or a failed replacement remain
 terminal for that plugin instance. Resolve the underlying condition and restart OpenCode; do not
@@ -606,10 +633,10 @@ blindly retry an effect whose outcome is unknown.
 
 ### A target looks idle
 
-Only explicit `session_send` with `delivery: "user"` can wake an existing idle target. Default
-context send, `session_ask`, `session_wait`, and `session_request_send` require a fresh `busy` or
-`retry` observation. Idle or unknown status persists no new context delivery or request and returns
-`target_idle` or `target_status_unknown`.
+Default `session_send`, `session_ask`, `session_wait`, and `session_request_send` use durable public
+queue admission after visibility checks and do not require a prior `busy` observation. Admission is
+not activation evidence; inspect later state instead of assuming the target ran. Explicit legacy
+`delivery: "context"` remains active-context-only and fails closed when activity is unknown.
 
 ### An outcome is unknown
 
@@ -632,6 +659,16 @@ entire private directory, including SQLite sidecars. Application-level acknowled
 are logical deletion, not secure erasure from old pages, snapshots, or media.
 
 ## Upgrade, migrate, or roll back
+
+### Upgrade to OpenCode v2
+
+Stop every backend and back up the complete state directory before replacing an OpenCode 1.18
+installation. Install a stable host in `>=2.0.26 <2.1.0`, update policy values to static `allow` or
+`deny`, remove `export.executable`, `export.trustedWorkingDirectory`, and `exportUnsanitized`, then
+restart with the v2 plugin entry. Legacy `ask` policy is rejected. Migration v17 creates the bounded
+participant registry from historical communicator participant IDs without treating that history as
+current visibility. Verify the exact 21-tool and three-skill manifests before resuming work. Older
+plugin code must not open the migrated store.
 
 ### Upgrade to 0.7.0
 
@@ -799,8 +836,8 @@ acceptance must complete all capability tests with zero skips on both glibc and 
 
 ### Package verification
 
-The package entry is the TypeScript source module `src/index.ts`. Supported OpenCode `1.18.x`
-versions load the externally installed absolute `file://` entry in their embedded Bun runtime. The
+The package entry is the TypeScript source module `src/index.ts`. Supported OpenCode v2 hosts load
+the externally installed absolute `file://` entry and execute its public `Plugin.define` Effect. The
 archive includes only runtime source, bundled skills, operational documentation, and release/legal
 files.
 
@@ -815,31 +852,31 @@ exact ordered 21-tool manifest, all three bundled skills, and a reviewed
 fingerprint of every path npm will pack. It rejects path-policy drift, symlinks, executable entries,
 secret-like names, and generated/test output. The black-box test creates an archive without
 publishing it, installs it into an isolated Bun project, imports the package by name, and checks
-packaged runtime assets. Release `0.7.4` is distributed through its immutable Git tag. The separate
+packaged runtime assets. Published releases are distributed through immutable Git tags. The separate
 trusted-publication workflow accepts only an explicit manual dispatch from the exact release tag and
 publishes the previously verified archive to npm with provenance.
 
-Live compatibility tests launch isolated OpenCode executables for the minimum supported patch and
+Live compatibility tests launch isolated OpenCode v2 hosts for the minimum supported patch and
 the exact build-time patch:
 
 ```bash
 bun run test:live
 ```
 
-The live suite preserves the diagnostic Phase 0 capability tests and separately packs the archive,
+The live suite checks conservative unsupported observations and separately packs the archive,
 extracts it into an isolated harness, wires its declared runtime dependencies from a reviewed local
-snapshot, and loads the production entry by absolute `file://` URL without a loader shim or modified
-`PluginInput`. Packed acceptance
-invokes all 21 tools through OpenCode, including a real `session_read` self-read and exact-approved
-cross-session read with pagination, append, and projection.
-Deterministic adversarial suites provide visibility-race and bounded-response evidence. Acceptance must also retain the established lock,
-send/delivery, request, start/stop, and configured export-unavailable journeys.
-
-The supported-range live harness exercises this packed journey at both compatibility endpoints. The live job must assert
-the exact manifest (so partial registration fails), all three bundled skills, correlated outputs,
-consumed permissions, and disposal before that compatibility evidence is claimed. Even then, the
-matrix is boundary evidence for the supported minor line, not proof of every failure, recovery,
-retention, or secure-export branch. Actual consumer installation evidence comes from the black-box
+snapshot, and loads the production entry by absolute `file://` URL through the public Effect plugin
+contract. It verifies the exact 21 primary tools and three skills, a correlated `session_list` result,
+lock publication/list/renewal/release, self-read, queue delivery/recovery, and a durable peer ask with
+target payload retrieval, response, source retrieval and acknowledgement. It also verifies the
+explicit unsupported context/stop outcomes, deny-default start and configured export-unavailable
+result. The minimum and build-time patches currently coincide at `2.0.26`, so one host exercises both
+endpoints.
+The Effect-plugin unit suite verifies the exact 21-tool and three-skill manifests, static policy,
+and scoped disposal. Integration suites cover lock, delivery, durable request, start/stop, export,
+visibility races and projection limits. These are separate from live journey evidence; the live
+suite does not yet prove a complete multi-session lifecycle or the extended soak required by #46.
+Actual consumer installation evidence comes from the black-box
 packed-package test and the package-portability acceptance suite.
 
 ### Tokenless free-model evaluation

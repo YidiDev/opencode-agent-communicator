@@ -1,4 +1,3 @@
-import type { Hooks } from "@opencode-ai/plugin";
 import type { LinuxBunSqliteStore } from "../adapters/store/sqlite-store";
 import type { CommunicatorStartupRecoveryLifecycle } from "../application/communicator-startup-lifecycle";
 import type { ContextAdmissionRuntime } from "../application/context-admission-runtime";
@@ -10,8 +9,8 @@ import type { ActiveInvocationRegistry } from "./active-invocations";
 import type { constructToolContracts } from "./tools";
 
 export type CommunicatorToolContracts = ReturnType<typeof constructToolContracts>;
-type EventHook = NonNullable<Hooks["event"]>;
-type ChatHook = NonNullable<Hooks["experimental.chat.messages.transform"]>;
+type EventHook = (input: { readonly event: unknown }) => Promise<void>;
+type ChatHook = ReturnType<typeof import("./chat-messages-transform").createChatMessagesTransform>;
 
 export class CommunicatorGeneration {
   readonly fencingToken: CommunicatorStartupRecoveryLifecycle["fencingToken"];

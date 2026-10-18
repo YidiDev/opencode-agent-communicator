@@ -139,7 +139,11 @@ function productionContextResponse(serialized: string): Response | undefined {
   if (target) {
     return toolResponse(
       "session_send",
-      JSON.stringify({ session_id: target, content: "packed private provider context" }),
+      JSON.stringify({
+        session_id: target,
+        content: "packed private provider context",
+        delivery: "context",
+      }),
     );
   }
   return undefined;

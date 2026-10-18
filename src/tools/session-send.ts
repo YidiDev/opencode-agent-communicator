@@ -24,7 +24,7 @@ export function createSessionSendTool(
 ): InternalToolContract<SessionSendToolArguments> {
   return {
     description:
-      "Submit an asynchronous message to a visible root. Default context delivery requires busy or retry and is transcript-invisible. Explicit user delivery may wake idle and is transcript-visible, but admission does not prove activation; confirm with session_list before asking or waiting.",
+      "Durably admit an asynchronous transcript-visible message to a visible root through the public queue. Delivery defaults to user. Admission does not prove activation or execution; session_list activity remains unknown. Explicit context delivery is unsupported on public v2 and returns target_status_unknown before an effect.",
     args: sessionSendArgumentsSchema,
     async execute(arguments_, context) {
       const source = validateSessionId(context.sessionID);
@@ -34,7 +34,7 @@ export function createSessionSendTool(
       }
       const result = source.ok
         ? await sendSessionMessage(
-            { ...ports, authorization: invocationMessageAuthorization(policy, context) },
+            { ...ports, authorization: invocationMessageAuthorization(policy) },
             {
               workspaceKey,
               sourceSessionId: source.value,

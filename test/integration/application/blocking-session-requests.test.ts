@@ -14,18 +14,31 @@ import { cleanupRequestStoreRoots, requestTestWorkspace } from "../../support/re
 
 afterEach(cleanupRequestStoreRoots);
 
-test("context-admitted SQLite ask blocks until a target response commits", async () => {
-  const injected = deferred<string>();
+test("queue-delivered SQLite ask does not require a busy target", async () => {
+  const queued = deferred<string>();
   const setup = await fixture(async ({ envelope }) => {
-    injected.resolve(envelope);
-    return { kind: "admitted", admittedSeq: 1, observedAtMs: 25_000 };
+    queued.resolve(envelope);
+    return { kind: "public_message", observedAtMs: 25_000 };
   });
-  const blocked = askSession(setup.ports, setup.context, {
-    session_id: setup.target,
-    questions: [{ prompt: "Ship?", options: ["yes", "no"] }],
-    timeout_seconds: 30,
-  });
-  const requestId = requestIdFromEnvelope(await injected.promise);
+  const blocked = askSession(
+    {
+      ...setup.ports,
+      activity: {
+        observeRequestParticipants: async () => ({
+          sourceVisible: true,
+          targetVisible: true,
+          targetStatus: "idle",
+        }),
+      },
+    },
+    setup.context,
+    {
+      session_id: setup.target,
+      questions: [{ prompt: "Ship?", options: ["yes", "no"] }],
+      timeout_seconds: 30,
+    },
+  );
+  const requestId = requestIdFromEnvelope(await queued.promise);
   expect(
     await respondToSessionRequest(
       setup.mutationPorts,
@@ -46,18 +59,31 @@ test("context-admitted SQLite ask blocks until a target response commits", async
   setup.store.close();
 });
 
-test("context-admitted SQLite wait preserves omitted evidence", async () => {
-  const injected = deferred<string>();
+test("queue-delivered SQLite wait does not require a known target status", async () => {
+  const queued = deferred<string>();
   const setup = await fixture(async ({ envelope }) => {
-    injected.resolve(envelope);
-    return { kind: "admitted", admittedSeq: 2, observedAtMs: 25_000 };
+    queued.resolve(envelope);
+    return { kind: "public_message", observedAtMs: 25_000 };
   });
-  const blocked = waitSession(setup.ports, setup.context, {
-    session_id: setup.target,
-    milestone: "compiled",
-    timeout_seconds: 30,
-  });
-  const requestId = requestIdFromEnvelope(await injected.promise);
+  const blocked = waitSession(
+    {
+      ...setup.ports,
+      activity: {
+        observeRequestParticipants: async () => ({
+          sourceVisible: true,
+          targetVisible: true,
+          targetStatus: "unknown",
+        }),
+      },
+    },
+    setup.context,
+    {
+      session_id: setup.target,
+      milestone: "compiled",
+      timeout_seconds: 30,
+    },
+  );
+  const requestId = requestIdFromEnvelope(await queued.promise);
   expect(
     await signalSessionRequest(
       setup.mutationPorts,
@@ -78,11 +104,11 @@ test("context-admitted SQLite wait preserves omitted evidence", async () => {
   setup.store.close();
 });
 
-test("caller abort cancels a durable context request", async () => {
-  const injected = deferred<string>();
+test("caller abort cancels a durable queue request", async () => {
+  const queued = deferred<string>();
   const setup = await fixture(async ({ envelope }) => {
-    injected.resolve(envelope);
-    return { kind: "admitted", admittedSeq: 3, observedAtMs: 25_000 };
+    queued.resolve(envelope);
+    return { kind: "public_message", observedAtMs: 25_000 };
   });
   const abort = new AbortController();
   const blocked = askSession(
@@ -94,24 +120,22 @@ test("caller abort cancels a durable context request", async () => {
       timeout_seconds: 30,
     },
   );
-  await injected.promise;
+  await queued.promise;
   abort.abort("caller_cancelled");
   expect(await blocked).toMatchObject({ ok: false, error: { code: "request_cancelled" } });
   setup.store.close();
 });
 
 test.each([
-  [{ sourceVisible: false, targetVisible: true, targetStatus: "busy" }, "caller_not_visible"],
-  [{ sourceVisible: true, targetVisible: false, targetStatus: "busy" }, "target_not_visible"],
-  [{ sourceVisible: true, targetVisible: true, targetStatus: "idle" }, "target_idle"],
-  [{ sourceVisible: true, targetVisible: true, targetStatus: "unknown" }, "target_status_unknown"],
+  [{ sourceTitle: undefined, sourceVisible: false, targetVisible: true }, "caller_not_visible"],
+  [{ sourceTitle: undefined, sourceVisible: true, targetVisible: false }, "target_not_visible"],
 ] as const)(
-  "fails before persistence for inactive context participant %#",
-  async (activity, code) => {
+  "fails before persistence for invisible queue participant %#",
+  async (membership, code) => {
     const setup = await fixture(async () => ({ kind: "unknown" }));
     const ports: SessionBlockingRequestPorts = {
       ...setup.ports,
-      activity: { observeRequestParticipants: async () => activity },
+      membership: { readCurrentRoots: async () => membership },
     };
     expect(
       await askSession(ports, setup.context, {
@@ -136,7 +160,7 @@ test.each([
 test.each([
   ["deny", "permission_denied"],
   ["approval_rejected", "approval_rejected"],
-] as const)("authorization %s persists no context request", async (kind, code) => {
+] as const)("authorization %s persists no queue request", async (kind, code) => {
   const setup = await fixture(async () => ({ kind: "unknown" }));
   expect(
     await waitSession(

@@ -99,7 +99,7 @@ describe("immediate request tool coverage", () => {
     );
     expect(created).toMatchObject({
       ok: true,
-      value: { kind: "ask", delivery_mode: "context", delivery_state: "context_admitted" },
+      value: { kind: "ask", delivery_mode: "queue", delivery_state: "delivery_unknown" },
     });
 
     const invalidTarget = JSON.parse(

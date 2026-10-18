@@ -1,19 +1,13 @@
 export interface SessionExportLimits {
   readonly maximumOutputBytes: number;
-  readonly maximumStderrBytes: number;
-  readonly maximumDurationMs: number;
   readonly maximumConcurrent: number;
-  readonly terminationGraceMs: number;
   readonly maximumSourceExportsPerMinute: number;
   readonly maximumWorkspaceExportsPerMinute: number;
 }
 
 export const sessionExportHardLimits = Object.freeze({
   maximumOutputBytes: 64 * 1024 * 1024,
-  maximumStderrBytes: 64 * 1024,
-  maximumDurationMs: 60_000,
   maximumConcurrent: 4,
-  terminationGraceMs: 1_000,
   maximumSourceExportsPerMinute: 12,
   maximumWorkspaceExportsPerMinute: 48,
 });
@@ -34,22 +28,11 @@ export function createSessionExportLimits(
       sessionExportHardLimits.maximumOutputBytes,
       "maximumOutputBytes",
     ),
-    maximumStderrBytes: bounded(
-      input.maximumStderrBytes ?? 16 * 1024,
-      sessionExportHardLimits.maximumStderrBytes,
-      "maximumStderrBytes",
-    ),
-    maximumDurationMs: bounded(
-      input.maximumDurationMs ?? 30_000,
-      sessionExportHardLimits.maximumDurationMs,
-      "maximumDurationMs",
-    ),
     maximumConcurrent: bounded(
       input.maximumConcurrent ?? 2,
       sessionExportHardLimits.maximumConcurrent,
       "maximumConcurrent",
     ),
-    terminationGraceMs: bounded(input.terminationGraceMs ?? 500, 5_000, "terminationGraceMs"),
     maximumSourceExportsPerMinute: bounded(
       input.maximumSourceExportsPerMinute ?? 4,
       sessionExportHardLimits.maximumSourceExportsPerMinute,

@@ -1,6 +1,6 @@
 import { ContextAdmissionRuntime } from "../../src/application/context-admission-runtime";
+import type { NativeQueueAdmissionPort } from "../../src/application/delivery-ports";
 import { ParticipantOperationGate } from "../../src/application/participant-operation-gate";
-import type { NativeSteerAdmissionPort } from "../../src/application/request-ports";
 import { RequestRuntime } from "../../src/application/request-runtime";
 import { createGeneratedIdFactory } from "../../src/domain/generated-ids";
 import {
@@ -18,7 +18,7 @@ export function deferred<Value>() {
   return { promise, resolve };
 }
 
-export async function blockingRequestFixture(native: NativeSteerAdmissionPort["steerRequest"]) {
+export async function blockingRequestFixture(native: NativeQueueAdmissionPort["queueMessage"]) {
   const store = openRequestStore();
   const token = await store.acquire();
   const runtime = new RequestRuntime();
@@ -43,45 +43,6 @@ export async function blockingRequestFixture(native: NativeSteerAdmissionPort["s
       targetVisible: true,
     }),
   };
-  const requests = new Proxy(store, {
-    get(targetStore, property, receiver) {
-      if (property === "createPrepared") {
-        return async (input: Parameters<typeof store.createPrepared>[0]) => {
-          const created = await store.createPrepared(input);
-          if (created.ok && input.contextAdmission) {
-            void native({
-              targetSessionId: input.request.targetSessionId,
-              nativeMessageId: input.request.nativeMessageId,
-              envelope: input.envelopeJson,
-              abort: new AbortController().signal,
-            }).catch(() => undefined);
-            const admitted = await store.claimPendingContext({
-              fencingToken: input.fencingToken,
-              workspaceKey: input.request.workspaceKey,
-              targetSessionId: input.request.targetSessionId,
-              items: [
-                {
-                  id: input.request.id,
-                  kind: "request",
-                  contentSha256: input.contextAdmission.contentSha256,
-                },
-              ],
-            });
-            for (const admission of admitted) {
-              contextRuntime.notifyContextSettled({
-                id: admission.id,
-                kind: admission.kind,
-                state: "context_admitted",
-              });
-            }
-          }
-          return created;
-        };
-      }
-      const value = Reflect.get(targetStore, property, receiver) as unknown;
-      return typeof value === "function" ? value.bind(targetStore) : value;
-    },
-  });
   return {
     store,
     token,
@@ -107,8 +68,13 @@ export async function blockingRequestFixture(native: NativeSteerAdmissionPort["s
         }),
       },
       authorization: { authorizeRequest: async () => ({ kind: "allow" as const }) },
-      requests,
-      nativeSteer: { steerRequest: native },
+      requests: store,
+      nativeSteer: {
+        steerRequest: async () => {
+          throw new Error("blocking requests must use native queue admission");
+        },
+      },
+      nativeQueue: { queueMessage: native },
       ownership: store,
       notifications: runtime,
       runtime,

@@ -21,7 +21,7 @@ export function createSessionWaitTool(
 ): InternalToolContract<SessionWaitToolArguments> {
   return {
     description:
-      "Wait for an observed-active session to signal a durable milestone. This never wakes an idle session.",
+      "Durably admit a milestone request to a visible session and block for its recoverable signal. Queue admission is distinct from target activation.",
     args: sessionWaitArgumentsSchema,
     async execute(arguments_, context) {
       const adapted = requestToolContext(scope, context, () =>
@@ -31,7 +31,7 @@ export function createSessionWaitTool(
         ? await waitSession(
             {
               ...ports,
-              authorization: invocationRequestAuthorization({ ask: "deny", wait: policy }, context),
+              authorization: invocationRequestAuthorization({ ask: "deny", wait: policy }),
             },
             adapted.value,
             arguments_,

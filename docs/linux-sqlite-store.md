@@ -97,6 +97,13 @@ fencing token is strictly greater.
 Concurrent callers share the replacement; callbacks that already began, including argument parsing,
 never transfer or replay.
 
+Lease renewal is hardened against wall-clock regression. Persisted `renewed_wall_ms` and
+`expires_wall_ms` never move backward: renewal uses the maximum of the current wall reading and the
+stored renewal instant, then extends from that non-regressing point. Local liveness still uses the
+monotonic clock. A backward wall-clock jump cannot shorten a valid stored lease, revive an expired
+local lease, reduce a fencing epoch, or authorize premature takeover. Malformed or overflowing clock
+values fail closed.
+
 A stale close naturally performs no ownership release mutation. A drain timeout leaves unresolved
 work quarantined rather than pretending it drained; eventual settlement triggers exactly one stale
 resource disposal while the timeout remains terminal. Storage, contract, or workflow faults, host
@@ -183,6 +190,21 @@ Migration v16 does not reinterpret legacy native delivery as context. Pending ex
 data. At every startup, any context admission left `awaiting_context` is failed and erased in bounded
 batches, because a crash cannot prove whether the provider already received the transformed
 messages. Neither path replays content.
+
+OpenCode v2 delivery no longer depends on private steer/queue HTTP endpoints or a prior `busy`
+observation. Ordinary transcript-visible sends and existing-root ask/wait request envelopes are
+persisted before one public `session.prompt` queue admission. Prepared state proves the effect has not
+begun; submitting state remains ambiguous after interruption and is never blindly replayed. Legacy
+v16 context rows retain their existing fail-closed recovery rules, but public queue admission is the
+durable default.
+
+Schema v17 adds the bounded `communicator_participants` registry. It migrates historical source,
+target, and managed-session IDs as root candidates while deliberately leaving visibility, archive,
+activity, and title evidence unknown. Current host observations may update sanitized metadata. The
+registry is discovery state only: `session_list` selects bounded root candidates and then performs an
+authoritative public v2 ID-addressed revalidation before returning each item. Registry presence,
+historical protocol participation, or list absence never proves current visibility, authorization,
+deletion, or activity. A per-workspace trigger enforces the compiled row ceiling.
 
 An administrator owner label is diagnostic only. Every store construction creates
 a fresh random process-generation identity. Repeated acquisition by one live

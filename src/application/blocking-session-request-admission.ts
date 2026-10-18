@@ -274,18 +274,26 @@ export async function claimAndAdmitBlockingRequest(
     return storageFailure();
   const envelope = claim.envelopeJson;
   const supervised = runUntilAborted(context.abort, () =>
-    admitClaimedSessionRequest(ports, {
-      workspaceKey: context.workspaceKey,
-      fencingToken: context.fencingToken,
-      request,
-      envelope,
-      control: {
-        abort: admissionController.signal,
-        deadlineMs: Math.min(context.deadlineMs, request.deadlineAtMs),
+    admitClaimedSessionRequest(
+      {
+        ...ports,
+        nativeQueue: ports.nativeQueue ?? {
+          queueMessage: (input) => ports.nativeSteer.steerRequest(input),
+        },
       },
-      effectSignal: ports.runtime.effectSignal,
-      callerAbortPersistsUnknown: true,
-    }),
+      {
+        workspaceKey: context.workspaceKey,
+        fencingToken: context.fencingToken,
+        request,
+        envelope,
+        control: {
+          abort: admissionController.signal,
+          deadlineMs: Math.min(context.deadlineMs, request.deadlineAtMs),
+        },
+        effectSignal: ports.runtime.effectSignal,
+        callerAbortPersistsUnknown: true,
+      },
+    ),
   );
   void supervised.then(async (settlement) => {
     if (settlement.kind !== "settled" || !settlement.value.ok) {

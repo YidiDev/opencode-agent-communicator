@@ -22,7 +22,7 @@ export function createSessionDeliveryGetTool(
 ): InternalToolContract<SessionDeliveryGetToolArguments> {
   return {
     description:
-      "Inspect payload-free metadata for default context or explicit user delivery. After explicit user admission, inspect session_list for busy or retry before asking or waiting.",
+      "Inspect payload-free delivery metadata. Admission never proves activation or execution; recover durable ask/wait results through request tools. Public v2 activity remains unknown.",
     args: sessionDeliveryGetArgumentsSchema,
     async execute(arguments_, context) {
       const source = validateSessionId(context.sessionID);

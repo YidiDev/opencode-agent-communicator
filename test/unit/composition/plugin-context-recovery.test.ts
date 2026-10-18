@@ -13,6 +13,13 @@ import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 const workspace = validateWorkspaceKey("context-recovery-coverage");
 if (!workspace.ok) throw new Error("Invalid workspace fixture.");
 
+function pluginContext() {
+  return {
+    options: {},
+    location: { project: { canonical: "/" }, directory: "/" },
+  } as never;
+}
+
 describe("production context startup recovery wiring", () => {
   test("drains repeated bounded context batches before exposing hooks", async () => {
     const batchSizes = [100, 100, 0];
@@ -45,8 +52,8 @@ describe("production context startup recovery wiring", () => {
         directory: "/",
         worktree: "/",
       }),
-      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "1.18.23" }) }),
-      checkCompatibility: async () => ({ ok: true, value: { version: "1.18.23" } }),
+      createHealth: () => ({ readHealth: async () => ({ healthy: true, version: "2.0.26" }) }),
+      checkCompatibility: async () => ({ ok: true, value: { version: "2.0.26" } }),
       createNative: () =>
         ({
           readParticipantPresence: async () => "present",
@@ -59,7 +66,7 @@ describe("production context startup recovery wiring", () => {
       }),
     });
 
-    const hooks = await Reflect.apply(plugin, undefined, [{}, {}]);
+    const hooks = await plugin(pluginContext());
     expect(calls).toBe(3);
     await hooks.dispose?.();
   });

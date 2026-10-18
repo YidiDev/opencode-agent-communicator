@@ -11,16 +11,16 @@ function expectConcept(content: string, ...terms: RegExp[]) {
 }
 
 describe("bundled skill safety guidance", () => {
-  test("documents the active-only ask/wait workflow and conservative admission semantics", async () => {
+  test("documents queue-based ask/wait and public-v2 capability limitations", async () => {
     for (const name of communicationSkillNames) {
       const content = await readSkill(name);
       expectConcept(
         content,
         /session_send[\s\S]{0,300}(queue|wake|resume)/,
-        /session_list[\s\S]{0,300}(busy|retry)/,
-        /(busy|retry)[\s\S]{0,300}session_(ask|wait)/,
+        /session_list[\s\S]{0,300}unknown/,
         /admi(t|ssion)[\s\S]{0,180}(does not|never)[\s\S]{0,100}(execution|activation)/,
-        /(do not use session_ask[\s\S]{0,100}wake|ask\/wait never wake)/,
+        /ask\/wait[\s\S]{0,100}(queue|transcript-visible)/,
+        /native_unavailable/,
       );
     }
   });
@@ -43,15 +43,15 @@ describe("bundled skill safety guidance", () => {
     );
   });
 
-  test("documents idempotent start, mandatory stop approval, and summary-only export", async () => {
+  test("documents idempotent start, static deny-default stop, and summary-only export", async () => {
     for (const name of communicationSkillNames) {
       const content = await readSkill(name);
       expectConcept(
         content,
         /session_start[\s\S]{0,300}idempotency_key/,
         /same[\s\S]{0,120}(arguments|operation)/,
-        /session_stop[\s\S]{0,120}(always|every)[\s\S]{0,100}(user )?approval/,
-        /configuration cannot bypass/,
+        /session_stop[\s\S]{0,160}static[\s\S]{0,160}defaults to `deny`/,
+        /legacy `ask`[\s\S]{0,40}configuration is rejected/,
         /session_export[\s\S]{0,180}summary metadata only/,
         /never[\s\S]{0,60}transcript content/,
       );
@@ -103,7 +103,6 @@ describe("bundled skill safety guidance", () => {
     const corpus = `${await readSkill("session-communication")}\n${await readSkill("session-request-participant")}`;
     const dangerousClaims = [
       /admission (?:proves|guarantees) (?:activation|execution|completion)/,
-      /ask(?:\/wait)? (?:wakes|queues to) (?:an )?idle/,
       /peer content (?:is|can be treated as) trusted/,
       /cancel(?:lation)? retracts (?:an )?admitted/,
       /stop approval (?:can be bypassed|is optional)/,

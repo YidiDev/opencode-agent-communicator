@@ -12,10 +12,10 @@ import {
 
 afterEach(cleanupRequestStoreRoots);
 
-test("request-send returns after transform context admission without native queue I/O", async () => {
-  let legacyNativeCalls = 0;
+test("request-send durably uses public queue admission", async () => {
+  let fixtureQueueCalls = 0;
   const setup = await blockingRequestFixture(async () => {
-    legacyNativeCalls += 1;
+    fixtureQueueCalls += 1;
     return { kind: "unknown" };
   });
   let queueCalls = 0;
@@ -28,7 +28,7 @@ test("request-send returns after transform context admission without native queu
       nativeQueue: {
         queueMessage: async () => {
           queueCalls += 1;
-          return { kind: "unknown" };
+          return { kind: "public_message", observedAtMs: 25_000 };
         },
       },
       contexts: setup.store,
@@ -60,14 +60,14 @@ test("request-send returns after transform context admission without native queu
   );
   expect(result).toMatchObject({
     ok: true,
-    value: { delivery_mode: "context", delivery_state: "context_admitted" },
+    value: { delivery_mode: "queue", delivery_state: "delivery_unknown" },
   });
-  expect(legacyNativeCalls).toBe(1);
-  expect(queueCalls).toBe(0);
+  expect(fixtureQueueCalls).toBe(0);
+  expect(queueCalls).toBe(1);
   setup.store.close();
 });
 
-test("request-send rejects an idle target without persisting a request", async () => {
+test("request-send admits an idle visible target without activity gating", async () => {
   const setup = await blockingRequestFixture(async () => ({ kind: "unknown" }));
   const tool = createSessionRequestSendTool(
     {
@@ -75,7 +75,7 @@ test("request-send rejects an idle target without persisting a request", async (
       membership: setup.ports.membership,
       requests: setup.ports.requests,
       scheduler: setup.ports.scheduler,
-      nativeQueue: setup.ports.nativeSteer as never,
+      nativeQueue: setup.ports.nativeQueue,
       contexts: setup.store,
       contextRuntime: setup.contextRuntime,
       activity: {
@@ -108,7 +108,10 @@ test("request-send rejects an idle target without persisting a request", async (
       { sessionID: setup.source, abort: new AbortController().signal },
     ),
   );
-  expect(result).toMatchObject({ ok: false, error: { code: "target_idle" } });
+  expect(result).toMatchObject({
+    ok: true,
+    value: { delivery_mode: "queue", delivery_state: "delivery_unknown" },
+  });
   expect(
     await setup.store.listForParticipant({
       fencingToken: setup.token,
@@ -117,7 +120,7 @@ test("request-send rejects an idle target without persisting a request", async (
       role: "outbox",
       limit: 10,
     }),
-  ).toMatchObject({ items: [] });
+  ).toMatchObject({ items: [{ deliveryMode: "queue", deliveryState: "delivery_unknown" }] });
   setup.store.close();
 });
 
@@ -155,7 +158,7 @@ test("request-start retains one canonical initial user turn linked to the idempo
       clock: setup.ports.clock,
       ids: setup.ports.ids,
       digest: requestDigestPort,
-      policy: createSessionStartPolicy({ decision: "ask" }),
+      policy: createSessionStartPolicy({ decision: "allow" }),
     },
     {
       workspaceKey: requestTestWorkspace(),
@@ -187,6 +190,6 @@ test("request-start retains one canonical initial user turn linked to the idempo
   const second = JSON.parse(await tool.execute(args, context));
   expect(second.value.operation.operation_id).toBe(first.value.operation.operation_id);
   expect(initialCalls).toBe(1);
-  expect(approvals).toBe(1);
+  expect(approvals).toBe(0);
   setup.store.close();
 });

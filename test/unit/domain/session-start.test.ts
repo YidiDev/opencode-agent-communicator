@@ -32,6 +32,9 @@ describe("session start arguments", () => {
     expect(validateStartTitle("x".repeat(513)).ok).toBe(false);
     expect(validateStartAgent("build-agent").ok).toBe(true);
     expect(validateStartModel("provider/model").ok).toBe(true);
+    expect(validateStartModel("provider/model#fast").ok).toBe(true);
+    expect(validateStartModel("provider/model#").ok).toBe(false);
+    expect(validateStartModel("provider/#fast").ok).toBe(false);
     expect(validateStartModel("provider model").ok).toBe(false);
   });
 

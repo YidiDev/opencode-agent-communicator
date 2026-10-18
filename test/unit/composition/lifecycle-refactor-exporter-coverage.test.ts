@@ -21,8 +21,6 @@ test("lifecycle refactor exporter applies defaults for every omitted optional li
       stateDirectory: join(root, "state"),
       export: {
         root: join(root, "exports"),
-        executable: "/usr/bin/true",
-        trustedWorkingDirectory: "/usr/bin",
         limits: {},
       },
     },

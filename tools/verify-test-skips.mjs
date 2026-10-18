@@ -3,9 +3,7 @@ import { resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
 const reviewedSkips = new Map([
-  ["test/integration/adapters/export/bun-process-tree.test.ts", 1],
   ["test/integration/adapters/export/linux-export-destination.test.ts", 4],
-  ["test/integration/adapters/export/opencode-cli-export-adapter.test.ts", 4],
 ]);
 
 async function testFiles(directory) {

@@ -9,7 +9,7 @@ interface NativeSessionReadRequest {
   readonly workspaceKey: WorkspaceKey;
   readonly sessionId: SessionId;
   readonly abort: AbortSignal;
-  /** Remaining invocation allowance; adapters must apply it before deserialization. */
+  /** Remaining serialized projection allowance, applied after the public host materializes context. */
   readonly maximumResponseBytes?: number;
 }
 
@@ -37,7 +37,7 @@ export interface NativeMessagePage {
   readonly examinedMessageCount: number;
   /** Exact UTF-8 bytes in projection-safe assistant text retained by this DTO. */
   readonly projectedTextByteCount: number;
-  /** Exact raw response bytes measured before native JSON deserialization. */
+  /** UTF-8 bytes of the entire restricted snapshot processed by this call, not transport bytes. */
   readonly rawResponseByteCount: number;
   /** Counts every assistant content part examined, including omitted parts. */
   readonly examinedPartCount: number;

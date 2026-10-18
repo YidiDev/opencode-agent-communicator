@@ -20,7 +20,7 @@ export function createSessionListTool(
 ): InternalToolContract<SessionListToolArguments> {
   return {
     description:
-      "List current visible root sessions. Busy or retry accepts default context delivery; idle requires explicit session_send user delivery to wake. Confirm busy or retry, then ask or wait.",
+      "List communicator-observed root candidates after current visibility revalidation. Public v2 activity is unknown. Use explicit session_send user delivery or queue-based ask or wait with current visibility; admission never proves execution.",
     args: sessionListArgumentsSchema,
     async execute(arguments_, context) {
       const deadlineMs = invocationDeadlineMs?.();

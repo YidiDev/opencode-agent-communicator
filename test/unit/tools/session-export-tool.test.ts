@@ -5,12 +5,9 @@ import { validateFencingToken } from "../../../src/domain/ownership";
 import { createSessionExportPolicy } from "../../../src/domain/session-export";
 import { validateWorkspaceKey } from "../../../src/domain/workspaces";
 import {
-  type StructuralApprovalInput,
   sessionExportArgumentsSchema,
   sessionExportFailureCodes,
-  ToolContractFault,
 } from "../../../src/tools/contracts";
-import { invocationExportApproval } from "../../../src/tools/invocation-export-approval";
 import { createSessionExportTool } from "../../../src/tools/session-export";
 
 function valid<Value>(result: { ok: true; value: Value } | { ok: false }): Value {
@@ -55,6 +52,7 @@ describe("session_export tool contract", () => {
       { destination: "x", sessionId: "ses_target" },
       { destination: "x", session_id: "bad" },
       { destination: "x", sanitize: "true" },
+      { destination: "x", sanitize: false },
       { destination: "x", extra: true },
     ]) {
       expect(sessionExportArgumentsSchema.safeParse(value).success).toBe(false);
@@ -63,7 +61,6 @@ describe("session_export tool contract", () => {
       "invalid_arguments",
       "caller_not_visible",
       "target_not_visible",
-      "approval_rejected",
       "permission_denied",
       "ownership_lost",
       "export_unavailable",
@@ -98,63 +95,27 @@ describe("session_export tool contract", () => {
     expect(output).not.toContain("/tmp");
   });
 
-  test("binds separate mode and overwrite asks to every exact resource", async () => {
-    const asks: StructuralApprovalInput[] = [];
-    const abort = new AbortController().signal;
-    const binding = {
-      workspaceKey,
-      sourceSessionId: "ses_source" as never,
-      targetSessionId: "ses_target" as never,
-      destination: "a;$(no)/x.json" as never,
-      isSanitized: false,
-      shouldOverwrite: true,
-    };
-    const approval = invocationExportApproval(
+  test("rejects an unsanitized request before any export effect", async () => {
+    let exports = 0;
+    const configured = ports();
+    const tool = createSessionExportTool(
       {
-        sessionID: "ses_source",
-        messageID: "msg_call",
-        abort,
-        async ask(input) {
-          asks.push(input);
+        ...configured,
+        exporter: {
+          async writeExport() {
+            exports += 1;
+            return { ok: true, byteCount: 1, contentSha256: "c".repeat(64) as never };
+          },
         },
       },
-      { ...binding, abort, deadlineMs: 10_000 },
+      { workspaceKey, invocationDeadlineMs: () => Date.now() + 10_000 },
     );
-    expect(
-      await approval.requestExportApproval("mode", binding, {
-        abort,
-        deadlineMs: 10_000,
-      }),
-    ).toBe("approved");
-    expect(
-      await approval.requestExportApproval("overwrite", binding, {
-        abort,
-        deadlineMs: 10_000,
-      }),
-    ).toBe("approved");
-    expect(asks.map((item) => item.permission)).toEqual([
-      "session_export",
-      "session_export_overwrite",
-    ]);
-    for (const ask of asks) {
-      const serialized = JSON.stringify(ask);
-      for (const evidence of [
-        "workspace%3Aexport-tool",
-        "source=ses_source",
-        "target=ses_target",
-        "destination=a%3B%24(no)%2Fx.json",
-        "sanitize=false",
-        "overwrite=true",
-        '"invocation_message_id":"msg_call"',
-      ]) {
-        expect(serialized).toContain(evidence);
-      }
-    }
-    await expect(
-      approval.requestExportApproval("overwrite", binding, {
-        abort,
-        deadlineMs: 10_000,
-      }),
-    ).rejects.toBeInstanceOf(ToolContractFault);
+    const output = await tool.execute(
+      { destination: "x.json", sanitize: false as true, overwrite: false },
+      { sessionID: "ses_source", abort: new AbortController().signal },
+    );
+
+    expect(JSON.parse(output)).toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
+    expect(exports).toBe(0);
   });
 });

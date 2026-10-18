@@ -162,7 +162,7 @@ describe("request query and repository rejection boundaries", () => {
     const token = await store.acquire();
     const fixture = await requestFixture(token);
     clock.set(-1);
-    expect(await store.createPrepared(fixture)).toEqual({ ok: false, code: "state_conflict" });
+    await expect(store.createPrepared(fixture)).rejects.toBeInstanceOf(StoreIntegrityError);
     clock.set(25_000);
     store.close();
 

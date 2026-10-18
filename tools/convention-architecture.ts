@@ -68,7 +68,7 @@ function resolveLocalImport(
 }
 
 function isForbiddenExternal(layer: Layer, specifier: string): boolean {
-  const isOpenCode = specifier.startsWith("@opencode-ai/");
+  const isOpenCode = specifier.startsWith("@opencode/") || specifier.startsWith("@opencode-ai/");
   const isFileSystem = /^(?:node:)?(?:fs|path)(?:\/|$)/.test(specifier);
   const isSqlite = /sqlite/i.test(specifier);
   const isBun = specifier === "bun" || specifier.startsWith("bun:");
@@ -122,6 +122,39 @@ function checkCycles(
   for (const path of graph.keys()) visit(path);
 }
 
+function inspectImport(
+  projectPath: string,
+  absolutePath: string,
+  layer: Layer,
+  imported: { readonly specifier: string; readonly line: number },
+  absoluteToProjectPath: ReadonlyMap<string, string>,
+  report: (finding: ArchitectureFinding) => void,
+): string | undefined {
+  if (imported.specifier.startsWith("@opencode-ai/")) {
+    report({
+      rule: "architecture",
+      path: projectPath,
+      line: imported.line,
+      message: `Legacy OpenCode package import "${imported.specifier}" is forbidden; use the public @opencode/* v2 API.`,
+    });
+    return undefined;
+  }
+  const target = resolveLocalImport(absolutePath, imported.specifier, absoluteToProjectPath);
+  const targetLayer = target ? getLayer(target) : undefined;
+  if (
+    isForbiddenExternal(layer, imported.specifier) ||
+    (targetLayer !== undefined && !isAllowedLayerImport(layer, targetLayer))
+  ) {
+    report({
+      rule: "architecture",
+      path: projectPath,
+      line: imported.line,
+      message: `Layer "${layer}" must not import "${imported.specifier}".`,
+    });
+  }
+  return target;
+}
+
 export function checkArchitecture(
   sourceFiles: ReadonlyMap<string, ts.SourceFile>,
   projectToAbsolutePath: ReadonlyMap<string, string>,
@@ -144,20 +177,15 @@ export function checkArchitecture(
     const absolutePath = projectToAbsolutePath.get(projectPath);
     if (!absolutePath) continue;
     for (const imported of moduleSpecifiers(sourceFile)) {
-      const target = resolveLocalImport(absolutePath, imported.specifier, absoluteToProjectPath);
+      const target = inspectImport(
+        projectPath,
+        absolutePath,
+        layer,
+        imported,
+        absoluteToProjectPath,
+        report,
+      );
       if (target) dependencies.push(target);
-      const targetLayer = target ? getLayer(target) : undefined;
-      if (
-        isForbiddenExternal(layer, imported.specifier) ||
-        (targetLayer !== undefined && !isAllowedLayerImport(layer, targetLayer))
-      ) {
-        report({
-          rule: "architecture",
-          path: projectPath,
-          line: imported.line,
-          message: `Layer "${layer}" must not import "${imported.specifier}".`,
-        });
-      }
     }
     graph.set(
       projectPath,

@@ -75,7 +75,8 @@ describe("packed npm archive", () => {
         [
           'import plugin from "opencode-agent-communicator";',
           'import { communicatorToolIds } from "./node_modules/opencode-agent-communicator/src/composition/tools.ts";',
-          'if (typeof plugin !== "function") throw new Error("default export is not a plugin function");',
+          'if (plugin.id !== "opencode-agent-communicator" || typeof plugin.effect !== "function")',
+          '  throw new Error("default export is not an Effect plugin");',
           `if (JSON.stringify(communicatorToolIds) !== ${JSON.stringify(JSON.stringify(expectedToolIds))})`,
           `  throw new Error(\`unexpected tool IDs: \${JSON.stringify(communicatorToolIds)}\`);`,
         ].join("\n"),
@@ -92,12 +93,14 @@ describe("packed npm archive", () => {
       exports: Record<string, string>;
       os: string[];
       cpu: string[];
+      engines: { opencode: string };
     };
     expect(metadata).toMatchObject({
       version: "0.7.4",
       exports: { ".": "./src/index.ts" },
       os: ["linux"],
       cpu: ["x64"],
+      engines: { opencode: ">=2.0.26 <2.1.0" },
     });
     expect(
       await readFile(join(installedRoot, "skills/session-communication/SKILL.md"), "utf8"),
@@ -113,9 +116,6 @@ describe("packed npm archive", () => {
       "session-locks",
       "session-request-participant",
     ]);
-    expect(await readFile(join(installedRoot, "docs/plugin-configuration.md"), "utf8")).toContain(
-      ">=1.18.21 <1.19.0",
-    );
     expect(await readFile(join(installedRoot, "docs/session-read-security.md"), "utf8")).toContain(
       "untrusted",
     );

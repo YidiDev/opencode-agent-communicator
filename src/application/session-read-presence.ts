@@ -31,8 +31,6 @@ export async function observeSessionReadPresence(
   }
   const visibility = sessionReadVisibilityFailure(value);
   if (visibility) return visibility;
-  if (value.targetStatus === "unknown") {
-    return domainFailure("native_unavailable", "Target status is unavailable.", true);
-  }
+  // Visibility gates observation; static policy separately controls disclosure. Activity is informational.
   return { ok: true, value };
 }

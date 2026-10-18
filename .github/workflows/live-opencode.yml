@@ -1,4 +1,4 @@
-name: OpenCode 1.18 compatibility
+name: OpenCode 2 compatibility
 
 on:
   workflow_dispatch:
@@ -8,48 +8,12 @@ permissions:
   contents: read
 
 jobs:
-  versions:
-    name: Read OpenCode compatibility bounds
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Build minimum and build-time patch matrix
-        id: matrix
-        run: |
-          matrix="$(node --input-type=module <<'NODE'
-          import { readFileSync } from "node:fs";
-
-          const minimum = "1.18.21";
-          const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-          const build = packageJson.devDependencies?.["opencode-ai"];
-          if (
-            !/^1\.18\.(0|[1-9]\d*)$/.test(build) ||
-            Number(build.split(".")[2]) < Number(minimum.split(".")[2])
-          ) {
-            throw new Error("build OpenCode version must be within the supported patch line");
-          }
-          process.stdout.write(JSON.stringify([...new Set([minimum, build])]));
-          NODE
-          )"
-          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
-
-  opencode-1-18:
-    name: OpenCode ${{ matrix.opencode }} live compatibility
-    needs: versions
-    strategy:
-      fail-fast: false
-      matrix:
-        opencode: ${{ fromJSON(needs.versions.outputs.matrix) }}
+  opencode-2:
+    name: OpenCode 2.0.26 live compatibility
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
-      OPENCODE_COMPAT_VERSION: ${{ matrix.opencode }}
+      OPENCODE_COMPAT_VERSION: 2.0.26
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -65,12 +29,6 @@ jobs:
         env:
           OPENCODE_COMMUNICATOR_PACKED_RUNTIME_DEPENDENCIES_ROOT: ${{ runner.temp }}/opencode-communicator-packed-runtime
         run: node tools/snapshot-runtime-dependencies.mjs
-      - name: Select matrix OpenCode packages
-        run: |
-          bun add --no-save --exact \
-            "@opencode-ai/plugin@$OPENCODE_COMPAT_VERSION" \
-            "@opencode-ai/sdk@$OPENCODE_COMPAT_VERSION" \
-            "opencode-ai@$OPENCODE_COMPAT_VERSION"
       - name: Verify live-gate prerequisites
         run: |
           test "$(uname -s)" = Linux
@@ -79,24 +37,19 @@ jobs:
           node --input-type=module <<'NODE'
           import { readFile } from "node:fs/promises";
           const packageJson = JSON.parse(await readFile("package.json", "utf8"));
-          const build = packageJson.devDependencies?.["opencode-ai"];
-          for (const name of ["@opencode-ai/plugin", "@opencode-ai/sdk"]) {
-            if (packageJson.dependencies?.[name] !== build) {
-              throw new Error(`dependencies.${name} must equal ${build}`);
-            }
+          const build = packageJson.devDependencies?.["@opencode/cli"];
+          if (build !== "2.0.26" || packageJson.dependencies?.["@opencode/plugin"] !== build) {
+            throw new Error("OpenCode CLI and plugin packages must equal 2.0.26");
           }
-          if (packageJson.devDependencies?.["opencode-ai"] !== build) {
-            throw new Error(`devDependencies.opencode-ai must equal ${build}`);
-          }
-          const range = ">=1.18.21 <1.19.0";
+          const range = ">=2.0.26 <2.1.0";
           if (
-            packageJson.peerDependencies?.["opencode-ai"] !== range ||
+            packageJson.peerDependencies?.["@opencode/cli"] !== range ||
             packageJson.engines?.opencode !== range
           ) {
             throw new Error(`OpenCode compatibility metadata must equal ${range}`);
           }
           NODE
-          test "$(./node_modules/.bin/opencode --version)" = "$OPENCODE_COMPAT_VERSION"
+          test "$(./node_modules/.bin/opencode --version)" = "opencode v$OPENCODE_COMPAT_VERSION"
       - name: Run isolated compatibility harness
         env:
           OPENCODE_COMMUNICATOR_PACKED_RUNTIME_DEPENDENCIES_ROOT: ${{ runner.temp }}/opencode-communicator-packed-runtime

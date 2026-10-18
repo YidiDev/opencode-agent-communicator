@@ -83,7 +83,7 @@ describe("OpenCode tool bridge", () => {
     ).toThrow("Zod object");
   });
 
-  test("forwards the invocation identity, approval capability, and registry abort signal", async () => {
+  test("forwards identity and cancellation without the retired v1 approval callback", async () => {
     const caller = new AbortController();
     let asked = false;
     const bridged = bridgeTool(
@@ -94,7 +94,7 @@ describe("OpenCode tool bridge", () => {
           expect(received.sessionID).toBe("ses_0123456789abcdef0123456789abcdef");
           expect(received.messageID).toBe("msg");
           expect(received.abort).not.toBe(caller.signal);
-          await received.ask?.({ permission: "fixture", patterns: [], always: [], metadata: {} });
+          expect(received.ask).toBeUndefined();
           return "adapted";
         },
       },
@@ -113,6 +113,6 @@ describe("OpenCode tool bridge", () => {
       },
     );
     expect(result).toBe("adapted");
-    expect(asked).toBe(true);
+    expect(asked).toBe(false);
   });
 });

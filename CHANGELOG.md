@@ -6,6 +6,47 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- Migrated the production plugin to the public OpenCode v2 `Plugin.define` Effect API, with the
+  existing 21 tools and three bundled skills registered through `tool.transform` and
+  `skill.transform`. The supported host range is now `>=2.0.26 <2.1.0` on Linux x64 with Bun
+  `1.4.0`; runtime packages build against `@opencode/plugin@2.0.26` and `@opencode/cli@2.0.26`.
+- Replaced private/legacy host access with ID-addressed public v2 session operations. `session_list`
+  now starts from the communicator-observed participant registry and authoritatively revalidates
+  each candidate. Delivery and durable requests use public queue admission and do not require a
+  prior `busy` observation.
+- Redefined `session_read` and `session_export` as bounded, sanitized projections of the current
+  model context. They do not expose or claim complete session history, and export no longer spawns
+  an OpenCode CLI subprocess.
+- Replaced imperative `ask` approval with deny-by-default static `allow`/`deny` policy for sensitive
+  actions. Legacy `ask` and unsanitized-export configuration are rejected.
+
+### Security
+
+- Added SQLite migration v17 for the bounded communicator participant registry and hardened
+  ownership lease acquisition/renewal against wall-clock regression while preserving monotonic
+  local expiry and fencing.
+- Removed the private HTTP transport surface; OpenCode interaction is confined to the public v2
+  Effect plugin context.
+
+### Fixed
+
+- Kept all communicator tools on the primary tool surface with public v2 `codemode: false`, and
+  corrected Effect timestamp decoding. The packed live harness now verifies actual correlated
+  tool results and the complete tool/skill manifests.
+- Made scoped startup acquisition/disposal atomic and linked host cancellation before compatibility
+  checks. Caller cancellation settles lifecycle-owned queue claims without replay; admission and
+  participant stop share a gate and revalidate the durable claim before a native effect.
+- Charged the full restricted current-context snapshot on every read, including fixed-message
+  misses. Limits describe projection bytes after host materialization, not raw transport bytes.
+- Allowed visible current-context reads when activity is unknown. Context delivery and stop remain
+  explicitly unsupported without authoritative public-v2 activity evidence.
+- Added bounded keyset scanning past stale/filtered discovery candidates and oldest-candidate
+  eviction at registry capacity without deleting protocol state.
+- Corrected the live CI version assertion, prerelease installation instructions, static-policy skill
+  guidance, and secure-export acceptance evidence description.
+
 ## [0.7.4] - 2026-09-07
 
 ### Fixed

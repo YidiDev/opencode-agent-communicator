@@ -1,4 +1,3 @@
-import type { Hooks } from "@opencode-ai/plugin";
 import type { InternalToolContract, StructuralToolContext } from "../tools/contracts";
 import type { CommunicatorGeneration, CommunicatorToolContracts } from "./communicator-generation";
 import {
@@ -90,7 +89,11 @@ export class CommunicatorGenerationManager {
       contract: InternalToolContract<unknown>,
       context: StructuralToolContext,
     ) => Promise<string>,
-    context: Omit<StructuralToolContext, "abort">,
+    context: {
+      readonly sessionID: string;
+      readonly messageID?: string;
+      readonly [legacyHostField: string]: unknown;
+    },
   ): Promise<string> {
     let handoffs = 0;
     while (true) {
@@ -108,14 +111,14 @@ export class CommunicatorGenerationManager {
     }
   }
 
-  async routeEvent(...arguments_: Parameters<NonNullable<Hooks["event"]>>): Promise<void> {
+  async routeEvent(
+    ...arguments_: Parameters<CommunicatorGenerationHandle["event"]>
+  ): Promise<void> {
     if (this.stateValue !== "active" || this.currentValue.lifecycle.status !== "ready") return;
     await this.currentValue.event(...arguments_);
   }
 
-  async routeChat(
-    ...arguments_: Parameters<NonNullable<Hooks["experimental.chat.messages.transform"]>>
-  ): Promise<void> {
+  async routeChat(...arguments_: Parameters<CommunicatorGenerationHandle["chat"]>): Promise<void> {
     if (this.stateValue !== "active" || this.currentValue.lifecycle.status !== "ready") return;
     await this.currentValue.chat(...arguments_);
   }

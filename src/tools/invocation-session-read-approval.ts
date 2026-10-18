@@ -1,13 +1,12 @@
-import { runUntilAborted } from "../application/abortable-operation";
 import type {
   SessionReadApprovalBinding,
   SessionReadApprovalPort,
 } from "../application/session-read-ports";
 import { snapshotDataRecord } from "../application/strict-port-boundaries";
+import type { PolicyDecision } from "../domain/authorization-policy";
 import { sessionReadLimits, sessionReadProjectionVersion } from "../domain/session-read";
 import { validateSessionId } from "../domain/sessions";
 import { validateWorkspaceKey } from "../domain/workspaces";
-import type { StructuralToolContext } from "./contracts";
 import { ToolContractFault } from "./contracts";
 
 const BINDING_KEYS = new Set([
@@ -56,23 +55,8 @@ function validControl(value: unknown): value is Parameters<
   );
 }
 
-function approvalResource(binding: SessionReadApprovalBinding, deadlineMs: number): string {
-  return [
-    "op=session_read",
-    `projection_version=${binding.projectionVersion}`,
-    `workspace=${encodeURIComponent(binding.workspaceKey)}`,
-    `source=${binding.sourceSessionId}`,
-    `target=${binding.targetSessionId}`,
-    `mode=${binding.mode}`,
-    `line_limit=${binding.lineLimit}`,
-    `aggregate_byte_cap=${binding.aggregateByteCap}`,
-    `cursor_sha256=${binding.cursorSha256 ?? "none"}`,
-    `deadline_ms=${deadlineMs}`,
-  ].join(";");
-}
-
 export function invocationSessionReadApproval(
-  context: StructuralToolContext,
+  policy: PolicyDecision | unknown,
 ): SessionReadApprovalPort {
   let requested = false;
   const approval: SessionReadApprovalPort = {
@@ -82,36 +66,11 @@ export function invocationSessionReadApproval(
     ) {
       if (requested) throw new ToolContractFault();
       requested = true;
-      if (!validBinding(binding) || !validControl(control) || typeof context.ask !== "function") {
+      if (!validBinding(binding) || !validControl(control)) {
         throw new ToolContractFault();
       }
       if (control.abort.aborted) return "rejected";
-      try {
-        const result = await runUntilAborted(
-          control.abort,
-          () =>
-            context.ask?.({
-              permission: "session_read",
-              patterns: [approvalResource(binding, control.deadlineMs)],
-              always: [],
-              metadata: {
-                operation: "session_read",
-                projection_version: binding.projectionVersion,
-                workspace_key: binding.workspaceKey,
-                source_session_id: binding.sourceSessionId,
-                target_session_id: binding.targetSessionId,
-                mode: binding.mode,
-                line_limit: binding.lineLimit,
-                aggregate_byte_cap: binding.aggregateByteCap,
-                cursor_sha256: binding.cursorSha256 ?? null,
-                deadline_ms: control.deadlineMs,
-              },
-            }) ?? Promise.reject(new ToolContractFault()),
-        );
-        return result.kind === "settled" && !control.abort.aborted ? "approved" : "rejected";
-      } catch {
-        return "rejected";
-      }
+      return policy === "allow" ? "approved" : "rejected";
     },
   };
   return Object.freeze(approval);

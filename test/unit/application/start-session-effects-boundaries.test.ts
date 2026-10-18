@@ -142,7 +142,7 @@ function fixture(step: StartStep) {
     clock: { nowMs: () => 3 },
     ids: {} as never,
     digest: { sha256: async () => new Uint8Array(32) },
-    policy: createSessionStartPolicy(),
+    policy: createSessionStartPolicy({ decision: "allow" }),
   };
   return { ports, initial, claimed, calls };
 }

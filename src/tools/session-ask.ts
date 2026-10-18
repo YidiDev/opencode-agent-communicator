@@ -21,7 +21,7 @@ export function createSessionAskTool(
 ): InternalToolContract<SessionAskToolArguments> {
   return {
     description:
-      "Ask an observed-active session structured questions and block for its durable answer. This never wakes an idle session.",
+      "Durably admit structured questions to a visible session and block for its recoverable answer. Queue admission is distinct from target activation.",
     args: sessionAskArgumentsSchema,
     async execute(arguments_, context) {
       const adapted = requestToolContext(scope, context, () =>
@@ -31,7 +31,7 @@ export function createSessionAskTool(
         ? await askSession(
             {
               ...ports,
-              authorization: invocationRequestAuthorization({ ask: policy, wait: "deny" }, context),
+              authorization: invocationRequestAuthorization({ ask: policy, wait: "deny" }),
             },
             adapted.value,
             arguments_,

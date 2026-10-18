@@ -11,6 +11,7 @@ import {
   submittingRequestsPerWorkspaceHardCeiling,
   unresolvedStartProvenancePerWorkspaceHardCeiling,
 } from "../../domain/safety-ceilings";
+import { participantRegistryPolicy } from "../../domain/sessions";
 import { OwnershipUnavailableError, StoreIntegrityError } from "./store-types";
 
 interface Migration {
@@ -1409,6 +1410,101 @@ DROP TABLE context_admissions;
 DROP TRIGGER requests_delivery_transport_update_v16;
 DROP TRIGGER requests_delivery_transport_insert_v16;
 ALTER TABLE requests DROP COLUMN delivery_transport;
+`,
+  },
+  {
+    version: 17,
+    checksum: "sha256:bbef588cfafbb7eeabf84682830c80c1e73f1313446d698b877326c2594f72d5",
+    sql: `
+CREATE TABLE communicator_participants (
+  workspace_key TEXT NOT NULL REFERENCES workspaces(workspace_key) ON DELETE CASCADE CHECK (
+    length(workspace_key) BETWEEN 1 AND 128 AND
+    substr(workspace_key, 1, 1) GLOB '[A-Za-z0-9]' AND
+    workspace_key NOT GLOB '*[^A-Za-z0-9._:-]*'
+  ),
+  session_id TEXT NOT NULL CHECK (
+    length(session_id) BETWEEN 5 AND 132 AND substr(session_id, 1, 4) = 'ses_' AND
+    substr(session_id, 5) NOT GLOB '*[^A-Za-z0-9]*'
+  ),
+  root_kind TEXT NOT NULL CHECK (root_kind IN ('root','child')),
+  parent_session_id TEXT CHECK (
+    parent_session_id IS NULL OR (
+      length(parent_session_id) BETWEEN 5 AND 132 AND
+      substr(parent_session_id, 1, 4) = 'ses_' AND
+      substr(parent_session_id, 5) NOT GLOB '*[^A-Za-z0-9]*'
+    )
+  ),
+  display_title TEXT CHECK (
+    display_title IS NULL OR length(CAST(display_title AS BLOB)) <= ${participantRegistryPolicy.maximumTitleUtf8Bytes}
+  ),
+  archived_state TEXT NOT NULL CHECK (archived_state IN ('active','archived','unknown')),
+  activity_status TEXT NOT NULL CHECK (activity_status IN ('busy','retry','idle','unknown')),
+  activity_observed_at_ms INTEGER CHECK (
+    activity_observed_at_ms IS NULL OR activity_observed_at_ms BETWEEN 0 AND 9007199254740991
+  ),
+  visibility_state TEXT NOT NULL CHECK (visibility_state IN ('visible','not_visible','unknown')),
+  visibility_observed_at_ms INTEGER CHECK (
+    visibility_observed_at_ms IS NULL OR visibility_observed_at_ms BETWEEN 0 AND 9007199254740991
+  ),
+  first_observed_at_ms INTEGER NOT NULL CHECK (
+    first_observed_at_ms BETWEEN 0 AND 9007199254740991
+  ),
+  last_observed_at_ms INTEGER NOT NULL CHECK (
+    last_observed_at_ms BETWEEN first_observed_at_ms AND 9007199254740991
+  ),
+  observation_source TEXT NOT NULL CHECK (observation_source IN ('historical','host')),
+  PRIMARY KEY (workspace_key, session_id),
+  CHECK ((root_kind = 'root') = (parent_session_id IS NULL)),
+  CHECK (parent_session_id IS NULL OR parent_session_id <> session_id),
+  CHECK ((activity_status = 'unknown') = (activity_observed_at_ms IS NULL)),
+  CHECK ((visibility_state = 'unknown') = (visibility_observed_at_ms IS NULL)),
+  CHECK (activity_observed_at_ms IS NULL OR activity_observed_at_ms <= last_observed_at_ms),
+  CHECK (visibility_observed_at_ms IS NULL OR visibility_observed_at_ms <= last_observed_at_ms)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX communicator_participants_root_recency_v17
+  ON communicator_participants(workspace_key, root_kind, last_observed_at_ms DESC, session_id);
+CREATE TRIGGER communicator_participants_ceiling_insert_v17
+BEFORE INSERT ON communicator_participants
+WHEN NOT EXISTS (
+  SELECT 1 FROM communicator_participants
+  WHERE workspace_key = NEW.workspace_key AND session_id = NEW.session_id
+) AND (SELECT count(*) FROM communicator_participants WHERE workspace_key = NEW.workspace_key)
+  >= ${participantRegistryPolicy.maximumRowsPerWorkspace}
+BEGIN
+  SELECT RAISE(ABORT, 'communicator participant registry ceiling exceeded');
+END;
+
+-- Historical protocol participant columns are root-only by contract. Their IDs and recency are
+-- retained as candidates, while existence, visibility, archive, and activity stay explicitly
+-- unknown until a current host observation revalidates them.
+WITH historical(workspace_key, session_id, first_ms, last_ms) AS (
+  SELECT workspace_key, source_session_id, created_at_ms, updated_at_ms FROM deliveries
+  UNION ALL
+  SELECT workspace_key, target_session_id, created_at_ms, updated_at_ms FROM deliveries
+  UNION ALL
+  SELECT workspace_key, source_session_id, created_at_ms, updated_at_ms FROM requests
+  UNION ALL
+  SELECT workspace_key, target_session_id, created_at_ms, updated_at_ms FROM requests
+  UNION ALL
+  SELECT workspace_key, session_id, created_at_ms, created_at_ms FROM managed_sessions
+  UNION ALL
+  SELECT workspace_key, source_session_id, created_at_ms, created_at_ms FROM managed_sessions
+), bounded AS (
+  SELECT workspace_key, session_id, min(first_ms) AS first_ms, max(last_ms) AS last_ms
+  FROM historical GROUP BY workspace_key, session_id
+)
+INSERT INTO communicator_participants(
+  workspace_key, session_id, root_kind, parent_session_id, display_title, archived_state,
+  activity_status, activity_observed_at_ms, visibility_state, visibility_observed_at_ms,
+  first_observed_at_ms, last_observed_at_ms, observation_source
+)
+SELECT workspace_key, session_id, 'root', NULL, NULL, 'unknown', 'unknown', NULL,
+  'unknown', NULL, first_ms, last_ms, 'historical'
+FROM bounded;
+`,
+    downSql: `
+DROP TRIGGER communicator_participants_ceiling_insert_v17;
+DROP TABLE communicator_participants;
 `,
   },
 ] as const;

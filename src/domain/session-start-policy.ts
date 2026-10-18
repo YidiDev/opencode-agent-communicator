@@ -9,7 +9,7 @@ import {
 } from "./safety-ceilings";
 
 export interface SessionStartPolicy {
-  readonly decision: "allow" | "ask" | "deny";
+  readonly decision: "allow" | "deny";
   readonly allowedAgents: ReadonlySet<string>;
   readonly allowedModels: ReadonlySet<string>;
   readonly allowManagedSessionRecursion: boolean;
@@ -26,7 +26,7 @@ export interface SessionStartPolicy {
 }
 
 export interface SessionStartPolicyInput {
-  readonly decision?: "allow" | "ask" | "deny";
+  readonly decision?: "allow" | "deny";
   readonly allowedAgents?: readonly string[];
   readonly allowedModels?: readonly string[];
   readonly allowManagedSessionRecursion?: boolean;
@@ -54,7 +54,7 @@ function exactSet(values: readonly string[] | undefined, label: string): Readonl
 export function createSessionStartPolicy(input: SessionStartPolicyInput = {}): SessionStartPolicy {
   const limits = input.limits ?? {};
   return Object.freeze({
-    decision: input.decision ?? "ask",
+    decision: input.decision ?? "deny",
     allowedAgents: exactSet(input.allowedAgents, "allowedAgents"),
     allowedModels: exactSet(input.allowedModels, "allowedModels"),
     allowManagedSessionRecursion: input.allowManagedSessionRecursion ?? false,

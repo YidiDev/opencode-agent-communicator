@@ -12,7 +12,6 @@ import {
   sessionExportFailureCodes,
   ToolContractFault,
 } from "./contracts";
-import { invocationExportApproval } from "./invocation-export-approval";
 import { publicSessionExport } from "./public-values";
 import { toolCallerSession } from "./tool-caller-session";
 
@@ -27,7 +26,7 @@ export function createSessionExportTool(
 ): InternalToolContract<SessionExportToolArguments> {
   return {
     description:
-      "Export a visible root session through the exact native sanitizer into a contained private destination. Returns summary metadata only.",
+      "Export a versioned sanitized projection of a visible root session's current model context plus bounded communicator metadata into a contained private destination. Returns summary metadata only.",
     args: sessionExportArgumentsSchema,
     async execute(arguments_, context) {
       const caller = toolCallerSession(context.sessionID);
@@ -40,23 +39,13 @@ export function createSessionExportTool(
       if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1) throw new ToolContractFault();
       const target = caller.ok ? validateSessionId(arguments_.session_id ?? caller.value) : caller;
       const destination = validateExportDestination(arguments_.destination);
-      const validModes =
-        typeof arguments_.sanitize === "boolean" && typeof arguments_.overwrite === "boolean";
+      const validModes = arguments_.sanitize === true && typeof arguments_.overwrite === "boolean";
       const result =
         caller.ok && target.ok && destination.ok && validModes
           ? await exportSession(
               {
                 ...ports,
-                approval: invocationExportApproval(context, {
-                  workspaceKey: scope.workspaceKey,
-                  sourceSessionId: caller.value,
-                  targetSessionId: target.value,
-                  destination: destination.value,
-                  isSanitized: arguments_.sanitize,
-                  shouldOverwrite: arguments_.overwrite,
-                  abort: context.abort,
-                  deadlineMs,
-                }),
+                approval: { requestExportApproval: async () => "rejected" },
               },
               {
                 workspaceKey: scope.workspaceKey,

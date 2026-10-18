@@ -3,6 +3,7 @@ import {
   type SessionStopResult,
   stopSession,
 } from "../application/stop-session";
+import type { PolicyDecision } from "../domain/authorization-policy";
 import type { DomainFailureCode, DomainResult } from "../domain/results";
 import { domainFailure } from "../domain/results";
 import { pendingRequestsPerWorkspaceHardCeiling } from "../domain/safety-ceilings";
@@ -156,10 +157,11 @@ export function createSessionStopTool(
   ports: Omit<SessionStopPorts, "approval">,
   workspaceKey: WorkspaceKey,
   invocationDeadlineMs?: () => number,
+  policy: PolicyDecision = "deny",
 ): InternalToolContract<SessionStopToolArguments> {
   return {
     description:
-      "Stop a visible root session after mandatory invocation-specific approval. Pending communicator requests are terminalized before any active native interruption.",
+      "Stop a visible root session only when explicitly allowed by static plugin policy. Pending communicator requests are terminalized before the public native interruption.",
     args: sessionStopArgumentsSchema,
     async execute(arguments_, context) {
       const caller = toolCallerSession(context.sessionID);
@@ -178,13 +180,7 @@ export function createSessionStopTool(
           ? await stopSession(
               {
                 ...ports,
-                approval: invocationStopApproval(context, {
-                  workspaceKey,
-                  sourceSessionId: caller.value,
-                  targetSessionId: target.value,
-                  abort: context.abort,
-                  deadlineMs,
-                }),
+                approval: invocationStopApproval(policy),
               },
               {
                 workspaceKey,

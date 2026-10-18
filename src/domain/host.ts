@@ -1,17 +1,25 @@
-export const minimumSupportedOpenCodeVersion = "1.18.21" as const;
-export const supportedOpenCodeVersionRange = ">=1.18.21 <1.19.0" as const;
+export const minimumSupportedOpenCodeVersion = "2.0.26" as const;
+export const supportedOpenCodeVersionRange = ">=2.0.26 <2.1.0" as const;
 export const supportedRuntimePlatform = "linux" as const;
 export const supportedRuntimeArchitecture = "x64" as const;
 export const supportedBunVersion = "1.4.0" as const;
 
-export type SupportedOpenCodeVersion = `1.18.${number}`;
+export type SupportedOpenCodeVersion = `2.0.${number}`;
+
+export function parseSupportedOpenCodeVersion(
+  value: unknown,
+): SupportedOpenCodeVersion | undefined {
+  if (typeof value !== "string") return undefined;
+  const match = /^2\.0\.(0|[1-9]\d*)$/.exec(value);
+  if (!match) return undefined;
+  const patch = Number(match[1]);
+  return Number.isSafeInteger(patch) && patch >= 26
+    ? (value as SupportedOpenCodeVersion)
+    : undefined;
+}
 
 export function isSupportedOpenCodeVersion(value: unknown): value is SupportedOpenCodeVersion {
-  if (typeof value !== "string") return false;
-  const match = /^1\.18\.(0|[1-9]\d*)$/.exec(value);
-  if (!match) return false;
-  const patch = Number(match[1]);
-  return Number.isSafeInteger(patch) && patch >= 21;
+  return parseSupportedOpenCodeVersion(value) !== undefined;
 }
 
 export interface HostHealthPort {

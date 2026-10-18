@@ -15,7 +15,6 @@ import {
   ToolContractFault,
 } from "./contracts";
 import { invocationRequestAuthorization } from "./invocation-authorization";
-import { invocationStartApproval } from "./invocation-start-approval";
 import { publicCreatedRequest, publicStartOperation } from "./public-values";
 import { sessionBlockingRequestFailureCodes } from "./request-contracts";
 import { requestToolContext } from "./request-tool-context";
@@ -135,7 +134,7 @@ export function createSessionRequestStartTool(
 ): InternalToolContract<SessionRequestStartToolArguments> {
   return {
     description:
-      "Create a managed root and atomically associate its initial work with a durable ask or wait request before native creation. Returns recoverable operation and request metadata.",
+      "Create a managed root under explicit static policy and atomically associate its initial work with a durable ask or wait request before the public native creation operation.",
     args: sessionRequestStartArgumentsSchema,
     async execute(arguments_, context) {
       const adapted = requestToolContext(
@@ -146,14 +145,8 @@ export function createSessionRequestStartTool(
         ? await startSessionRequest(
             {
               ...ports,
-              approval: invocationStartApproval(context, {
-                workspaceKey: scope.workspaceKey,
-                sourceSessionId: adapted.value.sourceSessionId,
-                abort: context.abort,
-                deadlineMs: adapted.value.deadlineMs,
-                clock: ports.clock,
-              }),
-              requestAuthorization: invocationRequestAuthorization(policies, context),
+              approval: { requestStartApproval: async () => "rejected" },
+              requestAuthorization: invocationRequestAuthorization(policies),
             },
             adapted.value,
             {
