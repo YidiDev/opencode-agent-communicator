@@ -182,6 +182,24 @@ export class ParticipantRegistryRepository {
   ): boolean {
     const previous = this.select(workspaceKey, observation.sessionId);
     if (previous && observedAtMs < previous.lastObservedAtMs) return false;
+    if (!previous) {
+      // This table is a discovery cache, never an authorization or protocol-state owner.
+      // Evict only a candidate row; durable requests, deliveries and managed provenance survive.
+      this.context.database.run(
+        `DELETE FROM communicator_participants WHERE workspace_key = ? AND session_id IN (
+          SELECT session_id FROM communicator_participants WHERE workspace_key = ?
+          ORDER BY last_observed_at_ms, session_id LIMIT (
+            SELECT max(0, count(*) - ? + 1) FROM communicator_participants WHERE workspace_key = ?
+          )
+        )`,
+        [
+          workspaceKey,
+          workspaceKey,
+          participantRegistryPolicy.maximumRowsPerWorkspace,
+          workspaceKey,
+        ],
+      );
+    }
     const activity = observation.activityStatus ?? previous?.activityStatus ?? "unknown";
     const visibility = observation.visibility ?? previous?.visibility ?? "unknown";
     this.context.database.run(
@@ -223,17 +241,35 @@ export class ParticipantRegistryRepository {
     readonly fencingToken: FencingToken;
     readonly workspaceKey: WorkspaceKey;
     readonly limit: number;
+    readonly cursor?: import("../../application/participant-registry-ports").ParticipantRegistryCursor;
   }): readonly ParticipantRegistryRecord[] {
     this.validateRead(input.workspaceKey, input.limit);
+    if (
+      input.cursor &&
+      (!validTimestamp(input.cursor.lastObservedAtMs) || !validateSessionId(input.cursor.id).ok)
+    ) {
+      throw new StoreIntegrityError("Participant registry cursor is malformed.");
+    }
     const transaction = this.context.database.transaction(() => {
       this.ownership.assertOrdinaryWorkAllowed(input.fencingToken);
       return this.context.database
-        .query<ParticipantRow, [string, number]>(
+        .query<
+          ParticipantRow,
+          [string, number | null, number | null, number | null, string | null, number]
+        >(
           `SELECT ${columns} FROM communicator_participants
-           WHERE workspace_key = ? AND root_kind = 'root'
+            WHERE workspace_key = ? AND root_kind = 'root'
+            AND (? IS NULL OR last_observed_at_ms < ? OR (last_observed_at_ms = ? AND session_id > ?))
            ORDER BY last_observed_at_ms DESC, session_id LIMIT ?`,
         )
-        .all(input.workspaceKey, input.limit)
+        .all(
+          input.workspaceKey,
+          input.cursor?.lastObservedAtMs ?? null,
+          input.cursor?.lastObservedAtMs ?? null,
+          input.cursor?.lastObservedAtMs ?? null,
+          input.cursor?.id ?? null,
+          input.limit,
+        )
         .map(hydrate);
     });
     return transaction.immediate();

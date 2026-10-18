@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { SessionNotFoundError, UnauthorizedError } from "@opencode/protocol/errors";
-import { Effect } from "effect";
+import { DateTime, Effect } from "effect";
 import {
   createOpenCode2NativeAdapter,
   NativeAdapterFault,
@@ -211,7 +211,7 @@ describe("OpenCode v2 Effect native adapter", () => {
   test("revalidates registry candidates authoritatively, including archived roots", async () => {
     const native = adapter([], {
       [archived]: session(archived, {
-        time: { created: 1, updated: { epochMillis: 21 }, archived: 9 },
+        time: { created: 1, updated: DateTime.makeUnsafe(21), archived: 9 },
       }),
     });
     expect(await native.revalidateRoot(workspace, archived)).toEqual({
@@ -425,11 +425,11 @@ describe("OpenCode v2 Effect native adapter reads", () => {
       sourceTitle: undefined,
     });
     if (!native.observeSessionReadPresence) throw new Error("Missing fixture capability.");
-    const presence = await native.observeSessionReadPresence(workspace, source, target, signal());
+    const observe = native.observeSessionReadPresence;
+    const presence = await observe(workspace, source, target, signal());
     expect(presence as unknown).toEqual({
       sourceVisible: true,
       targetVisible: true,
-      sourceTitle: undefined,
       targetStatus: "unknown",
       observedAtMs: 42,
     });
@@ -467,7 +467,7 @@ describe("OpenCode v2 Effect native adapter reads", () => {
       "timestamps",
     );
     const malformedEpoch = adapter([], {
-      [target]: session(target, { time: { created: 1, updated: { epochMillis: -1 } } }),
+      [target]: session(target, { time: { created: 1, updated: DateTime.makeUnsafe(-1) } }),
     });
     await expect(malformedEpoch.revalidateRoot(workspace, target)).rejects.toThrow("timestamps");
     const badNow = withSessionOverrides({}, () => -1);
@@ -595,7 +595,7 @@ describe("OpenCode v2 Effect native adapter context reads", () => {
         maximumResponseBytes: 1,
         abort: signal(),
       }),
-    ).rejects.toThrow("page exceeds");
+    ).rejects.toThrow("snapshot exceeds");
     await expect(
       native.readMessage({
         workspaceKey: workspace,
@@ -604,7 +604,7 @@ describe("OpenCode v2 Effect native adapter context reads", () => {
         maximumResponseBytes: 1,
         abort: signal(),
       }),
-    ).rejects.toThrow("message exceeds");
+    ).rejects.toThrow("snapshot exceeds");
     await expect(
       native.readMessage({
         workspaceKey: otherWorkspace,

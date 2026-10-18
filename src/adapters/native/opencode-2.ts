@@ -20,9 +20,11 @@ import type { HostHealthPort } from "../../domain/host";
 import { type VisibleRootSessionPort, validateSessionId } from "../../domain/sessions";
 import type { WorkspaceKey } from "../../domain/workspaces";
 import {
+  isVisibleRoot,
+  isWorkspaceRoot,
   matchesRequestedIdentity,
-  type OpenCodeHostSession,
   parseRequestedModel,
+  timestamp,
 } from "./opencode-2-session-identity";
 import { readOpenCodeContextProjection } from "./opencode-context-projection";
 
@@ -74,6 +76,7 @@ interface ContextCursor {
   readonly version: 1;
   readonly snapshotSha256: string;
   readonly endExclusive: number;
+  readonly order: "asc" | "desc";
 }
 
 function encodeContextCursor(value: ContextCursor): string {
@@ -89,13 +92,15 @@ function decodeContextCursor(value: string): ContextCursor | undefined {
     );
     if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) return undefined;
     const cursor = decoded as Record<string, unknown>;
-    if (Object.keys(cursor).join(",") !== "version,snapshotSha256,endExclusive") return undefined;
+    if (Object.keys(cursor).join(",") !== "version,snapshotSha256,endExclusive,order")
+      return undefined;
     if (
       cursor.version !== 1 ||
       typeof cursor.snapshotSha256 !== "string" ||
       !/^[0-9a-f]{64}$/.test(cursor.snapshotSha256) ||
       !Number.isSafeInteger(cursor.endExclusive) ||
-      (cursor.endExclusive as number) < 0
+      (cursor.endExclusive as number) < 0 ||
+      (cursor.order !== "asc" && cursor.order !== "desc")
     )
       return undefined;
     const result = cursor as unknown as ContextCursor;
@@ -125,27 +130,6 @@ function runHost<Value>(
   abort?: AbortSignal,
 ): Promise<Value> {
   return Effect.runPromise(effect, abort ? { signal: abort } : undefined);
-}
-
-function isWorkspaceRoot(session: OpenCodeHostSession, input: OpenCodeNativeAdapterInput): boolean {
-  return (
-    session.parentID === undefined &&
-    session.projectID === input.projectId &&
-    session.location.directory === input.directory
-  );
-}
-
-function isVisibleRoot(session: OpenCodeHostSession, input: OpenCodeNativeAdapterInput): boolean {
-  return isWorkspaceRoot(session, input) && session.time.archived === undefined;
-}
-
-function timestamp(value: unknown): number | undefined {
-  if (Number.isSafeInteger(value) && (value as number) >= 0) return value as number;
-  if (typeof value !== "object" || value === null) return undefined;
-  const epochMillis = Reflect.get(value, "epochMillis");
-  return Number.isSafeInteger(epochMillis) && (epochMillis as number) >= 0
-    ? (epochMillis as number)
-    : undefined;
 }
 
 function assertWorkspace(input: OpenCodeNativeAdapterInput, workspaceKey: WorkspaceKey): void {
@@ -206,18 +190,22 @@ async function readCurrentContextPage(
   ) {
     throw new NativeAdapterFault("Current-context cursor is malformed or the snapshot changed.");
   }
-  const endExclusive = cursor?.endExclusive ?? projection.messages.length;
+  if (
+    request.maximumResponseBytes !== undefined &&
+    projection.serializedByteCount > request.maximumResponseBytes
+  ) {
+    throw new NativeAdapterFault("Current-context snapshot exceeds the caller projection bound.");
+  }
+  const order = cursor?.order ?? request.order ?? "desc";
+  const ordered = order === "desc" ? projection.messages : [...projection.messages].reverse();
+  const endExclusive = cursor?.endExclusive ?? ordered.length;
   if (endExclusive > projection.messages.length) {
     throw new NativeAdapterFault("Current-context cursor is malformed or the snapshot changed.");
   }
   const start = Math.max(0, endExclusive - 8);
-  const chronological = projection.messages.slice(start, endExclusive);
+  const chronological = ordered.slice(start, endExclusive);
   const messages = [...chronological].reverse();
   const examinedMessageIds = messages.map((message) => message.messageId);
-  const serialized = new TextEncoder().encode(JSON.stringify(messages)).byteLength;
-  if (request.maximumResponseBytes !== undefined && serialized > request.maximumResponseBytes) {
-    throw new NativeAdapterFault("Current-context page exceeds the caller response bound.");
-  }
   const examinedPartCount = messages.reduce(
     (count, message) => count + (message.type === "assistant" ? message.parts.length : 0),
     0,
@@ -240,7 +228,7 @@ async function readCurrentContextPage(
     examinedMessageIds,
     examinedMessageCount: examinedMessageIds.length,
     projectedTextByteCount,
-    rawResponseByteCount: serialized,
+    rawResponseByteCount: projection.serializedByteCount,
     examinedPartCount,
     previousCursor: null,
     nextCursor:
@@ -250,6 +238,7 @@ async function readCurrentContextPage(
             version: 1,
             snapshotSha256: projection.snapshotSha256,
             endExclusive: start,
+            order,
           }),
   };
 }
@@ -266,14 +255,16 @@ async function readCurrentContextMessage(
     request.sessionId,
     request.abort,
   );
+  if (
+    request.maximumResponseBytes !== undefined &&
+    projection.serializedByteCount > request.maximumResponseBytes
+  ) {
+    throw new NativeAdapterFault("Current-context snapshot exceeds the caller projection bound.");
+  }
   const message = projection.messages.find(
     (candidate) => candidate.messageId === request.messageId,
   );
   if (!message) return { kind: "not_found", rawResponseByteCount: projection.serializedByteCount };
-  const serialized = new TextEncoder().encode(JSON.stringify(message)).byteLength;
-  if (request.maximumResponseBytes !== undefined && serialized > request.maximumResponseBytes) {
-    throw new NativeAdapterFault("Current-context message exceeds the caller response bound.");
-  }
   return {
     kind: "found",
     message,
@@ -285,7 +276,7 @@ async function readCurrentContextMessage(
             0,
           )
         : 0,
-    rawResponseByteCount: serialized,
+    rawResponseByteCount: projection.serializedByteCount,
     examinedPartCount: message.type === "assistant" ? message.parts.length : 0,
   };
 }
@@ -295,12 +286,30 @@ async function readCurrentContextMessage(
  * ID-addressed operations use public session methods; inventory/status/sequence-dependent ports
  * return conservative outcomes rather than reaching through a private HTTP transport.
  */
+function createRootMembership(
+  input: OpenCodeNativeAdapterInput,
+): CurrentWorkspaceMembershipPort["readCurrentRoots"] {
+  return async (workspaceKey, sourceSessionId, targetSessionId, abort) => {
+    assertWorkspace(input, workspaceKey);
+    const [source, target] = await Promise.all([
+      readVisibleSession(input, sourceSessionId, abort),
+      readVisibleSession(input, targetSessionId, abort),
+    ]);
+    return {
+      sourceVisible: source !== undefined,
+      targetVisible: target !== undefined,
+      sourceTitle: source?.title,
+    };
+  };
+}
+
 export function createOpenCode2NativeAdapter(
   input: OpenCodeNativeAdapterInput,
   dependencies: OpenCodeNativeAdapterDependencies = {},
 ): OpenCodeNativeAdapter {
   const context = input.context;
   const now = dependencies.now ?? Date.now;
+  const readCurrentRoots = createRootMembership(input);
   return {
     async readHealth() {
       return { healthy: true, version: context.app.version };
@@ -308,31 +317,23 @@ export function createOpenCode2NativeAdapter(
     async readVisibleRoots() {
       return [];
     },
-    async readCurrentRoots(workspaceKey, sourceSessionId, targetSessionId, abort) {
-      assertWorkspace(input, workspaceKey);
-      const [source, target] = await Promise.all([
-        readVisibleSession(input, sourceSessionId, abort),
-        readVisibleSession(input, targetSessionId, abort),
-      ]);
-      return {
-        sourceVisible: source !== undefined,
-        targetVisible: target !== undefined,
-        sourceTitle: source?.title,
-      };
-    },
+    readCurrentRoots,
     async observeSessionReadPresence(workspaceKey, sourceSessionId, targetSessionId, abort) {
-      assertWorkspace(input, workspaceKey);
-      const membership = await this.readCurrentRoots(
+      const membership = await readCurrentRoots(
         workspaceKey,
         sourceSessionId,
         targetSessionId,
         abort,
       );
-      return { ...membership, targetStatus: "unknown", observedAtMs: now() };
+      return {
+        sourceVisible: membership.sourceVisible,
+        targetVisible: membership.targetVisible,
+        targetStatus: "unknown",
+        observedAtMs: now(),
+      };
     },
     async observeRequestParticipants(workspaceKey, sourceSessionId, targetSessionId, abort) {
-      assertWorkspace(input, workspaceKey);
-      const membership = await this.readCurrentRoots(
+      const membership = await readCurrentRoots(
         workspaceKey,
         sourceSessionId,
         targetSessionId,

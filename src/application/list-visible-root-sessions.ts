@@ -16,6 +16,7 @@ import {
 } from "./communicator-readiness-port";
 import type { CurrentWorkspaceMembershipPort } from "./delivery-ports";
 import type {
+  ParticipantRegistryCursor,
   ParticipantRegistryListingPort,
   ParticipantRootRevalidationPort,
 } from "./participant-registry-ports";
@@ -86,6 +87,17 @@ function matchesStatus(status: ActivityStatus, filter: SessionStatusFilter): boo
   return status === "idle";
 }
 
+function cursorAdvances(
+  last: ParticipantRegistryCursor,
+  cursor?: ParticipantRegistryCursor,
+): boolean {
+  return (
+    !cursor ||
+    last.lastObservedAtMs < cursor.lastObservedAtMs ||
+    (last.lastObservedAtMs === cursor.lastObservedAtMs && last.id > cursor.id)
+  );
+}
+
 function compareNewest(left: VisibleRootSession, right: VisibleRootSession): number {
   return right.updatedAtMs - left.updatedAtMs || left.id.localeCompare(right.id);
 }
@@ -147,19 +159,23 @@ export async function listVisibleRootSessions(
         if (!ports.sessions) throw new Error("visible-root listing port is unavailable");
         return ports.sessions.readVisibleRoots(includeArchived, signal);
       }
-      const candidates = await ports.registry.listRootCandidates(
-        context.workspaceKey,
-        maximumSessionLimit,
-      );
-      if (candidates.length > maximumSessionLimit) {
-        throw new Error("participant registry returned an unbounded candidate set");
+      const sessions: import("../domain/sessions").RootSessionObservation[] = [];
+      let cursor: ParticipantRegistryCursor | undefined;
+      for (let batch = 0; batch < 10; batch += 1) {
+        const candidates = await ports.registry.listRootCandidates(context.workspaceKey, maximumSessionLimit, cursor);
+        if (candidates.length > maximumSessionLimit) throw new Error("participant registry returned an unbounded candidate set");
+        const observations = await Promise.all(candidates.map((candidate) =>
+          ports.revalidation?.revalidateRoot(context.workspaceKey, candidate.id, signal)));
+        sessions.push(...observations.filter((item): item is import("../domain/sessions").RootSessionObservation => item !== undefined &&
+          (includeArchived || !item.isArchived) && matchesStatus(item.status, status)));
+        if (candidates.length < maximumSessionLimit || sessions.length >= limit) return sessions;
+        const last = candidates.at(-1);
+        if (!last || !cursorAdvances(last, cursor)) {
+          throw new Error("participant registry cursor did not advance");
+        }
+        cursor = { id: last.id, lastObservedAtMs: last.lastObservedAtMs };
       }
-      const observations = await Promise.all(
-        candidates.map((candidate) =>
-          ports.revalidation?.revalidateRoot(context.workspaceKey, candidate.id, signal),
-        ),
-      );
-      return observations.filter((item) => item !== undefined);
+      throw new Error("participant registry revalidation budget exhausted");
     });
     if (sessionCall.kind === "expired") {
       return domainFailure("deadline_expired", "Session list invocation deadline expired.", false);

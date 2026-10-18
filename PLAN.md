@@ -10,7 +10,8 @@ OpenCode backend.
 ### Current OpenCode v2 baseline
 
 This section is normative for issue #46 and supersedes the historical OpenCode 1.18 feasibility and
-transport descriptions retained later in this plan.
+transport, imperative approval, active-only ask/wait, native sanitizer, and raw-response-bound
+descriptions retained later in this plan. Those historical acceptance criteria are not v2 guarantees.
 
 - The certified host is Linux x64 with Bun `1.4.0` and stable OpenCode `>=2.0.26 <2.1.0`.
   `@opencode/plugin` and `@opencode/cli` are pinned to `2.0.26` for the build.
@@ -21,6 +22,9 @@ transport descriptions retained later in this plan.
   therefore queries the bounded communicator-observed participant registry introduced by migration
   v17, then authoritatively revalidates every candidate through the public session API. Registry
   presence is discovery evidence, never visibility, deletion, activity, or authorization proof.
+  Listing scans up to ten keyset pages of 100 candidates and fails explicitly on budget exhaustion
+  before filling the result. At the row ceiling, the oldest discovery candidate is evicted without
+  deleting protocol records or managed-session provenance.
 - Transcript-visible message delivery and existing-root ask/wait workflows persist their prepared
   state before one public queue admission. They require current root visibility but no prior
   `busy`/`retry` observation. Admission never proves activation, reading, compliance, or completion.
@@ -33,6 +37,16 @@ transport descriptions retained later in this plan.
 - Sensitive actions use static `allow`/`deny` policy. Cross-session read, start, stop,
   cross-session export, and overwrite default to `deny`. Legacy `ask` and unsanitized-export policy
   are rejected rather than silently widened.
+- Public v2 activity remains `unknown`. Context delivery and stop are explicitly unsupported and
+  return `target_status_unknown` and `native_unavailable`, respectively, before effects; static allow
+  cannot manufacture activity evidence.
+  Read uses current visibility, not activity, and unknown activity yields `is_live: false`.
+- Current-context limits apply after host materialization. Each read charges its full restricted
+  snapshot (4 MiB per call, 32 MiB per invocation), including fixed-message misses. Ignored fields
+  are never copied or serialized. No transport-byte or pre-deserialization memory bound is claimed.
+- Scoped plugin acquisition and disposal are atomic; host cancellation is linked before compatibility
+  checks. Queue effects serialize with participant stop and revalidate their durable claim inside
+  that gate. Caller cancellation does not abort lifecycle-owned claim settlement.
 - Ownership combines monotonic local expiry with nondecreasing persisted wall-clock lease times.
   Wall-clock regression must not shorten a lease, revive local ownership, reduce fencing, or permit
   early takeover.
@@ -168,7 +182,7 @@ No contract depending on an unproved hypothesis is frozen before the gate.
 9. Provide finite deadlines, caller cancellation, deadlock prevention, and
    role-specific stop/deletion behavior.
 10. Start root sessions with caller idempotency and recover partial operations.
-11. Stop sessions only after operation-specific user approval.
+11. Stop sessions only under static `stop: "allow"` policy and authoritative activity evidence.
 12. Produce native import-compatible exports with secure path handling.
 13. Keep state private, bounded, workspace-scoped, and logically erasable.
 14. Fail closed when host, storage, authorization, or ownership assumptions do
@@ -835,7 +849,7 @@ type SessionStopArgs = {
 }
 ```
 
-Stop always requires operation-specific user approval; configuration cannot
+Historical v1 stop required operation-specific user approval; configuration could not
 bypass it. Approval binds source, target, and the exact reason digest.
 
 If the approved target is already idle, the result is `already_idle`; no native

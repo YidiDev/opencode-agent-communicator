@@ -22,8 +22,9 @@ invalid. `limit` defaults to 100 rendered lines and accepts 1 through 500. Conte
 
 A successful result includes `session_id`, `content`, `start_cursor`, `end_cursor`,
 `has_more_before`, `has_more_after`, `observed_at_ms`, and `is_live`. The host must provide enough
-current public evidence to validate the caller, target, snapshot, and liveness. Unknown or malformed
-evidence fails closed as `native_unavailable`.
+current public evidence to validate the caller, target, and snapshot. Unknown activity does not
+prevent a read: it produces `is_live: false`, which does not establish idleness. Missing visibility
+returns `caller_not_visible` or `target_not_visible`; malformed evidence returns `native_unavailable`.
 
 ## Projection, not history
 
@@ -73,12 +74,21 @@ content you can independently validate. Never infer omitted history.
 
 ## Immutable resource boundaries
 
-One invocation is bounded to 500 returned lines, 65,536 returned bytes, 8 messages per native page,
-96 page/fixed-message calls, 512 examined messages, 8 MiB of eligible assistant text, 16,384
-assistant parts, 32,768 examined rendered lines, 8,192 lines per message, 4 MiB per native response,
-32 MiB cumulatively, and a 512-character native cursor. Structural ceilings additionally limit one
-text part to 1,048,576 UTF-16 code units, one assistant message to 4,096 parts, and one raw tool name
+One invocation is bounded to 500 returned lines, 65,536 returned bytes, 8 messages per projected page,
+96 page/fixed-message calls, 512 paginated messages, 8 MiB of retained eligible assistant text,
+16,384 paginated assistant parts, 32,768 examined rendered lines, 8,192 lines per message,
+4 MiB of serialized restricted snapshot per host call, 32 MiB cumulatively, and a 512-character
+native cursor. Every call charges the entire restricted snapshot, including fixed-message misses;
+returning a small page does not reduce that charge. Each host snapshot is separately limited to
+512 message entries, 16,384 examined assistant parts and 8 MiB of eligible assistant text.
+Structural ceilings additionally limit one text part to 1,048,576 UTF-16 code units, one assistant
+message to 4,096 parts, and one raw tool name
 to 256 UTF-16 code units.
+
+The public API returns an already-materialized object. These are projection and traversal bounds,
+not a raw transport-byte or pre-deserialization memory guarantee. Omitted user content, reasoning,
+tool arguments/results and provider metadata are never copied or serialized by the projection;
+their host-side allocation is outside this plugin's control. The same limitation applies to export.
 
 Exhaustion, malformed v2 data, duplicate identities, pagination ambiguity, and unpaired Unicode
 surrogates fail closed. The tool performs no unbounded scan, export fallback, private transport call,

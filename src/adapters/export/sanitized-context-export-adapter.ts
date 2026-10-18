@@ -65,17 +65,32 @@ export class SanitizedContextExportAdapter implements SessionExportAdapterPort, 
       const descending = [];
       const ids = new Set<string>();
       const cursors = new Set<string>();
+      let projectionBytes = 0;
       let cursor: string | null = null;
       for (let calls = 0; calls < sessionReadLimits.maxNativeCalls; calls += 1) {
         const guarded = guardFailure(await input.guard.check());
         if (guarded) return { ok: false, code: guarded };
+        if (projectionBytes >= sessionReadLimits.maxNativeResponseBytesExamined) {
+          return { ok: false, code: "export_limit_exceeded" };
+        }
         const page = await this.native.readMessagePage({
           workspaceKey: input.workspaceKey,
           sessionId: input.sessionId,
           ...(cursor === null ? { order: "desc" as const } : { cursor }),
-          maximumResponseBytes: sessionReadLimits.maxNativeResponseBytes,
+          maximumResponseBytes: Math.min(
+            sessionReadLimits.maxNativeResponseBytes,
+            sessionReadLimits.maxNativeResponseBytesExamined - projectionBytes,
+          ),
           abort: input.abort,
         });
+        projectionBytes += page.rawResponseByteCount;
+        if (
+          !Number.isSafeInteger(projectionBytes) ||
+          page.rawResponseByteCount < 0 ||
+          projectionBytes > sessionReadLimits.maxNativeResponseBytesExamined
+        ) {
+          return { ok: false, code: "export_limit_exceeded" };
+        }
         if (page.examinedMessageCount !== page.examinedMessageIds.length) {
           return { ok: false, code: "export_unavailable" };
         }

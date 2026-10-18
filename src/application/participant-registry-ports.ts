@@ -8,6 +8,11 @@ import type {
 } from "../domain/sessions";
 import type { WorkspaceKey } from "../domain/workspaces";
 
+export interface ParticipantRegistryCursor {
+  readonly lastObservedAtMs: number;
+  readonly id: SessionId;
+}
+
 export interface ParticipantObservation {
   readonly sessionId: SessionId;
   readonly rootKind: ParticipantRootKind;
@@ -39,6 +44,7 @@ export interface ParticipantRegistryPersistencePort {
     readonly fencingToken: FencingToken;
     readonly workspaceKey: WorkspaceKey;
     readonly limit: number;
+    readonly cursor?: ParticipantRegistryCursor;
   }): Promise<readonly ParticipantRegistryRecord[]>;
 
   getParticipantRootCandidate(input: {
@@ -53,6 +59,7 @@ export interface ParticipantRegistryListingPort {
   listRootCandidates(
     workspaceKey: WorkspaceKey,
     limit: number,
+    cursor?: ParticipantRegistryCursor,
   ): Promise<readonly ParticipantRegistryRecord[]>;
 }
 

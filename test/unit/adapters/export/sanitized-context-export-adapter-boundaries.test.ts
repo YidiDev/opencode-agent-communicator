@@ -86,6 +86,40 @@ function nativeWith(page: unknown = emptyPage): NativeSessionReadPort {
 }
 
 describe("sanitized current-context exporter boundaries", () => {
+  test.each(["cumulative", "negative", "overflow", "noninteger"] as const)(
+    "rejects %s snapshot-byte accounting before creating a file",
+    async (mode) => {
+      let created = false;
+      let calls = 0;
+      const fixture = rootFixture({
+        onCreate: () => {
+          created = true;
+        },
+      });
+      const native = nativeWith();
+      native.readMessagePage = async (request) => {
+        calls += 1;
+        expect(request.maximumResponseBytes).toBeGreaterThan(0);
+        return {
+          ...emptyPage,
+          nextCursor: `cursor${calls}`,
+          rawResponseByteCount:
+            mode === "negative"
+              ? -1
+              : mode === "overflow"
+                ? sessionReadLimits.maxNativeResponseBytesExamined + 1
+                : mode === "noninteger"
+                  ? 0.5
+                  : sessionReadLimits.maxNativeResponseBytes,
+        };
+      };
+      expect(
+        await new SanitizedContextExportAdapter(fixture.root, native).writeExport(input()),
+      ).toEqual({ ok: false, code: "export_limit_exceeded" });
+      expect(calls).toBe(mode === "cumulative" ? 8 : 1);
+      expect(created).toBe(false);
+    },
+  );
   test("rejects invalid limits and makes limiter release idempotent", () => {
     expect(() => createSessionExportLimits({ maximumConcurrent: 0 })).toThrow(TypeError);
 

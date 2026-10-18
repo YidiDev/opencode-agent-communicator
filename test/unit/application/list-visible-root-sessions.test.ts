@@ -242,6 +242,70 @@ describe("visible root session listing", () => {
 });
 
 describe("registry-backed visible root session listing", () => {
+  test.each(["missing", "archived", "inactive", "exhausted", "repeated", "unbounded"] as const)(
+    "scans past %s candidates or reports a bounded explicit failure",
+    async (mode) => {
+      let pages = 0;
+      const result = await listVisibleRootSessions(
+        {
+          readiness: { assertReady: () => undefined },
+          membership: {
+            readCurrentRoots: async () => ({
+              sourceVisible: true,
+              targetVisible: true,
+              sourceTitle: "Source",
+            }),
+          },
+          registry: {
+            listRootCandidates: async (_workspace, _limit, cursor) => {
+              pages += 1;
+              if (pages === 2 && mode !== "exhausted" && mode !== "repeated") {
+                expect(cursor?.lastObservedAtMs).toBe(901);
+                return [{ id: id("ses_match"), lastObservedAtMs: 1 } as never];
+              }
+              return Array.from(
+                { length: mode === "unbounded" ? 101 : 100 },
+                (_, index) =>
+                  ({
+                    id: id(`ses_${mode === "repeated" ? 1 : pages}${index}`),
+                    lastObservedAtMs:
+                      mode === "repeated" ? 1_000 : 1_000 - (pages - 1) * 100 - index,
+                  }) as never,
+              );
+            },
+          },
+          revalidation: {
+            revalidateRoot: async (_workspace, sessionId) => {
+              if (sessionId === "ses_match")
+                return session({ id: sessionId, updatedAtMs: 1, status: "busy" });
+              if (
+                mode === "missing" ||
+                mode === "exhausted" ||
+                mode === "repeated" ||
+                mode === "unbounded"
+              )
+                return undefined;
+              return session({
+                id: sessionId,
+                updatedAtMs: 1,
+                status: "idle",
+                isArchived: mode === "archived",
+              });
+            },
+          },
+        },
+        { workspaceKey, sourceSessionId },
+        { limit: 1, status: mode === "inactive" ? "active" : "all" },
+      );
+      expect(result).toMatchObject(
+        ["exhausted", "repeated", "unbounded"].includes(mode)
+          ? { ok: false, error: { code: "native_unavailable" } }
+          : { ok: true, value: [{ id: "ses_match" }] },
+      );
+      expect(pages).toBe(mode === "exhausted" ? 10 : mode === "unbounded" ? 1 : 2);
+    },
+  );
+
   test("uses registry IDs only as bounded candidates and returns authoritative revalidation", async () => {
     const candidate = session({ id: "ses_candidate", updatedAtMs: 1 });
     const missing = session({ id: "ses_missing", updatedAtMs: 2 });

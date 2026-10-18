@@ -24,7 +24,7 @@ export function createSessionSendTool(
 ): InternalToolContract<SessionSendToolArguments> {
   return {
     description:
-      "Durably admit an asynchronous transcript-visible message to a visible root through the public queue. Admission does not prove activation; use session_list for a later activity observation. Set delivery to context only for transcript-invisible active-context injection; that mode requires current activity but makes no activation claim.",
+      "Durably admit an asynchronous transcript-visible message to a visible root through the public queue. Delivery defaults to user. Admission does not prove activation or execution; session_list activity remains unknown. Explicit context delivery is unsupported on public v2 and returns target_status_unknown before an effect.",
     args: sessionSendArgumentsSchema,
     async execute(arguments_, context) {
       const source = validateSessionId(context.sessionID);

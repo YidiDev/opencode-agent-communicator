@@ -123,7 +123,7 @@ export function projectOpenCodeContext(value: unknown): CurrentContextProjection
   }
   const serialized = JSON.stringify(messages);
   const serializedByteCount = encoder.encode(serialized).byteLength;
-  if (serializedByteCount > sessionReadLimits.maxNativeResponseBytesExamined) {
+  if (serializedByteCount > sessionReadLimits.maxNativeResponseBytes) {
     throw new TypeError("OpenCode current context exceeds its serialized bound.");
   }
   return Object.freeze({

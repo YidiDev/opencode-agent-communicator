@@ -262,7 +262,7 @@ describe("presence and fixed-anchor fail-closed settlements", () => {
     [{ kind: "value", value: poisonGetter("sourceVisible") }, "native_unavailable"],
     [{ kind: "value", value: { ...visible, sourceVisible: false } }, "caller_not_visible"],
     [{ kind: "value", value: { ...visible, targetVisible: false } }, "target_not_visible"],
-    [{ kind: "value", value: { ...visible, targetStatus: "unknown" } }, "native_unavailable"],
+    [{ kind: "value", value: { ...visible, targetStatus: "unknown" } }, undefined],
   ] as const)("maps presence settlement %#", async (settlement, code) => {
     const result = await observeSessionReadPresence(
       scope(settlement),
@@ -275,9 +275,10 @@ describe("presence and fixed-anchor fail-closed settlements", () => {
       source,
       target,
     );
-    expect(result).toMatchObject({ ok: false, error: { code } });
+    expect(result).toMatchObject(
+      code ? { ok: false, error: { code } } : { ok: true, value: { targetStatus: "unknown" } },
+    );
   });
-
   test("returns a valid observed presence", async () => {
     expect(
       await observeSessionReadPresence(
@@ -293,7 +294,6 @@ describe("presence and fixed-anchor fail-closed settlements", () => {
       ),
     ).toEqual({ ok: true, value: visible });
   });
-
   test.each([
     ["guard", "caller_not_visible"],
     ["expired", "deadline_expired"],

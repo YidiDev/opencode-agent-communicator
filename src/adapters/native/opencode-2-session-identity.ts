@@ -20,6 +20,33 @@ export interface OpenCodeHostSession {
   };
 }
 
+export function isWorkspaceRoot(
+  session: OpenCodeHostSession,
+  input: { projectId: string; directory: string },
+): boolean {
+  return (
+    session.parentID === undefined &&
+    session.projectID === input.projectId &&
+    session.location.directory === input.directory
+  );
+}
+
+export function isVisibleRoot(
+  session: OpenCodeHostSession,
+  input: { projectId: string; directory: string },
+): boolean {
+  return isWorkspaceRoot(session, input) && session.time.archived === undefined;
+}
+
+export function timestamp(value: unknown): number | undefined {
+  if (Number.isSafeInteger(value) && (value as number) >= 0) return value as number;
+  if (typeof value !== "object" || value === null) return undefined;
+  const epochMillis = Reflect.get(value, "epochMilliseconds");
+  return Number.isSafeInteger(epochMillis) && (epochMillis as number) >= 0
+    ? (epochMillis as number)
+    : undefined;
+}
+
 export function parseRequestedModel(value: string | undefined): Model.Ref | undefined {
   if (value === undefined) return undefined;
   try {

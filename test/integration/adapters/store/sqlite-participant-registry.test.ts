@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { applyMigrations, sqliteStoreMigrations } from "../../../../src/adapters/store/migrations";
 import { LinuxBunSqliteStore } from "../../../../src/adapters/store/sqlite-store";
-import { validateSessionId } from "../../../../src/domain/sessions";
+import { participantRegistryPolicy, validateSessionId } from "../../../../src/domain/sessions";
 import { validateWorkspaceKey } from "../../../../src/domain/workspaces";
 
 const roots: string[] = [];
@@ -244,6 +244,107 @@ describe("participant registry repository", () => {
       activityObservedAtMs: 1_000,
       lastObservedAtMs: 1_100,
     });
+    const page = await store.listParticipantRootCandidates({
+      fencingToken: token,
+      workspaceKey: workspace,
+      limit: 1,
+    });
+    const last = page.at(-1);
+    if (!last) throw new Error("missing root candidate");
+    expect(
+      await store.listParticipantRootCandidates({
+        fencingToken: token,
+        workspaceKey: workspace,
+        limit: 1,
+        cursor: { id: last.id, lastObservedAtMs: last.lastObservedAtMs },
+      }),
+    ).toEqual([]);
+    await expect(
+      store.listParticipantRootCandidates({
+        fencingToken: token,
+        workspaceKey: workspace,
+        limit: 1,
+        cursor: { id: source, lastObservedAtMs: -1 },
+      }),
+    ).rejects.toThrow("cursor is malformed");
     store.close();
   });
+});
+
+describe("participant registry retention", () => {
+  test("evicts an old discovery row at capacity while preserving protocol records", async () => {
+    const root = mkdtempSync(join(tmpdir(), "communicator-participant-ceiling-"));
+    roots.push(root);
+    const store = new LinuxBunSqliteStore({
+      stateDirectory: join(root, "state"),
+      workspaceKey: workspace,
+      nowWallMs: () => 1_000,
+      nowMonotonicMs: () => 1_000,
+    });
+    try {
+      const token = await store.acquire();
+      const database = new Database(store.databasePath, { strict: true });
+      try {
+        database.run(
+          "INSERT OR IGNORE INTO workspaces(workspace_key, created_at_ms) VALUES (?, 1)",
+          [workspace],
+        );
+        // Seed the policy-sized fixture without quadratic per-row count-trigger cost, then restore
+        // the production trigger before exercising the public fenced repository operation.
+        const trigger = database
+          .query<{ sql: string }, []>(
+            "SELECT sql FROM sqlite_schema WHERE name = 'communicator_participants_ceiling_insert_v17'",
+          )
+          .get();
+        if (!trigger) throw new Error("missing production ceiling trigger");
+        database.exec("DROP TRIGGER communicator_participants_ceiling_insert_v17");
+        database.run(
+          `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < ?)
+          INSERT INTO communicator_participants(workspace_key, session_id, root_kind, archived_state,
+            activity_status, visibility_state, first_observed_at_ms, last_observed_at_ms, observation_source)
+          SELECT ?, 'ses_seed' || i, 'root', 'unknown', 'unknown', 'unknown', 1, i, 'historical' FROM n`,
+          [participantRegistryPolicy.maximumRowsPerWorkspace, workspace],
+        );
+        database.exec(trigger.sql);
+        const requestId = `req_${"a".repeat(32)}`;
+        database.run(
+          `INSERT INTO requests(id, workspace_key, source_session_id, target_session_id,
+          native_message_id, kind, resolution_state, delivery_state, result_state, payload_byte_length,
+          created_at_ms, updated_at_ms, deadline_at_ms, resolved_at_ms)
+          VALUES (?, ?, 'ses_seed1', ?, ?, 'wait', 'cancelled', 'prepared', 'none', 1, 5, 25, 30, 25)`,
+          [requestId, workspace, target, `msg_${"b".repeat(32)}`],
+        );
+        expect(
+          await store.recordParticipantObservations({
+            fencingToken: token,
+            workspaceKey: workspace,
+            observedAtMs: 1_000_000,
+            observations: [{ sessionId: target, rootKind: "root", parentSessionId: null }],
+          }),
+        ).toEqual({ ok: true, recorded: 1 });
+        expect(
+          database
+            .query<{ count: number }, []>("SELECT count(*) AS count FROM communicator_participants")
+            .get()?.count,
+        ).toBe(participantRegistryPolicy.maximumRowsPerWorkspace);
+        expect(
+          await store.getParticipantRootCandidate({
+            fencingToken: token,
+            workspaceKey: workspace,
+            sessionId: target,
+          }),
+        ).toBeDefined();
+        expect(
+          database
+            .query("SELECT 1 FROM communicator_participants WHERE session_id = 'ses_seed1'")
+            .get(),
+        ).toBeNull();
+        expect(database.query("SELECT 1 FROM requests WHERE id = ?").get(requestId)).not.toBeNull();
+      } finally {
+        database.close();
+      }
+    } finally {
+      store.close();
+    }
+  }, 15_000);
 });

@@ -281,11 +281,12 @@ export function constructToolContracts(input: ToolContractConstructionInput) {
       {
         ...common,
         registry: {
-          listRootCandidates: (candidateWorkspaceKey, limit) =>
+          listRootCandidates: (candidateWorkspaceKey, limit, cursor) =>
             store.listParticipantRootCandidates({
               fencingToken: lifecycle.fencingToken,
               workspaceKey: candidateWorkspaceKey,
               limit,
+              ...(cursor ? { cursor } : {}),
             }),
         },
         revalidation: native,

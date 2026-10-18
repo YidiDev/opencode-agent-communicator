@@ -249,7 +249,7 @@ describe("readSession", () => {
     expect(f.events.some((event) => event.startsWith("page:"))).toBe(false);
   });
 
-  test("fails closed for unknown target activity", async () => {
+  test("allows visible context reads with unknown activity and no liveness claim", async () => {
     const f = fixture({ sourceId: target });
     f.ports.membership.observeSessionReadPresence = async () => ({
       sourceVisible: true,
@@ -258,7 +258,7 @@ describe("readSession", () => {
       observedAtMs: 5,
     });
     const result = await readSession(f.ports, f.context, { sessionId: target });
-    expect(result).toMatchObject({ ok: false, error: { code: "native_unavailable" } });
+    expect(result).toMatchObject({ ok: true, value: { isLive: false } });
   });
 });
 
@@ -407,7 +407,7 @@ describe("readSession guarded races", () => {
     expect(pageCalls).toBe(1);
   });
 
-  test("fails unknown status racing between the initial and final fixed reads", async () => {
+  test("revalidates visible context when activity becomes unknown between fixed reads", async () => {
     const message = assistant("one");
     const f = fixture({ sourceId: target, messages: [message] });
     const tail = await readSession(f.ports, f.context, { sessionId: target, limit: 1 });
@@ -419,7 +419,7 @@ describe("readSession guarded races", () => {
       return {
         sourceVisible: true,
         targetVisible: true,
-        targetStatus: observations === 5 ? "unknown" : "busy",
+        targetStatus: observations >= 5 ? "unknown" : "busy",
         observedAtMs: observations,
       };
     };
@@ -431,8 +431,8 @@ describe("readSession guarded races", () => {
       sessionId: target,
       cursor: tail.value.endCursor,
     });
-    expect(result).toMatchObject({ ok: false, error: { code: "native_unavailable" } });
-    expect(fixedCalls).toBe(1);
+    expect(result).toMatchObject({ ok: true, value: { isLive: false } });
+    expect(fixedCalls).toBe(2);
   });
 
   test("links deadline cancellation into a pending presence observation", async () => {
