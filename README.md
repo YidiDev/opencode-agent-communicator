@@ -6,10 +6,12 @@
 [![OpenCode v2 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** The OpenCode v2 migration is unreleased. This checkout supports Linux x64 and
+**Release status:** `v0.8.0` supports Linux x64 and
 stable OpenCode versions `>=2.0.26 <2.1.0`. Bun `1.4.0` is required for development and release verification. Other
 architectures, operating systems, OpenCode versions, and prereleases are unsupported.
 The published `v0.7.4` tag targets OpenCode 1.18 and does not contain this migration.
+The extended multi-repository soak and prolonged-runtime investigation remain outstanding in
+[#46](https://github.com/YidiDev/opencode-agent-communicator/issues/46).
 
 ## Contents
 
@@ -55,20 +57,19 @@ metadata and release gates. Network and clustered filesystems are rejected for t
 
 ### 1. Install the plugin
 
-For this unreleased migration, install an immutable commit from a reviewed v2 checkout. Run these
-commands in that checkout; keep its full commit SHA with the installation:
+Install the immutable GitHub release outside OpenCode:
 
 ```bash
-v2_commit="$(git rev-parse HEAD)"
-install_root="$HOME/.local/share/opencode-agent-communicator/v2-$v2_commit"
+install_root="$HOME/.local/share/opencode-agent-communicator/v0.8.0"
 install -d -m 0700 "$install_root"
 npm install --prefix "$install_root" --save-exact --ignore-scripts \
-  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#$v2_commit"
+  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.8.0"
 test -f "$install_root/node_modules/opencode-agent-communicator/src/index.ts"
 ```
 
 The repository is private, so the account running npm and OpenCode must have working GitHub SSH
-access. Do not install a mutable branch reference. A future v2 release will provide an immutable tag.
+access. Release tags are immutable by project policy; do not replace `v0.8.0` with `main`.
+This release is distributed through GitHub; npm publication is separate.
 
 ### 2. Add the plugin
 
@@ -80,7 +81,7 @@ absolute home directory of the account that performed the installation:
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v2-<full-reviewed-commit>/node_modules/opencode-agent-communicator/src/index.ts",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v0.8.0/node_modules/opencode-agent-communicator/src/index.ts",
       {
         "policies": {
           "message": "allow",
@@ -100,7 +101,6 @@ OpenCode v2 accepts the tuple form for a plugin source and its strict package-sp
 entrypoint uses the public `Plugin.define` Effect API and registers tools and skills through
 `tool.transform` and `skill.transform`; it does not use a private HTTP transport. Keep the private
 installation directory in place while OpenCode uses it.
-Replace `<full-reviewed-commit>` with the SHA used above.
 
 ### Current public-v2 capability limits
 
@@ -153,7 +153,7 @@ This example shows every public option. Omit values you do not need; unknown key
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.7.4/node_modules/opencode-agent-communicator/src/index.ts",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v0.8.0/node_modules/opencode-agent-communicator/src/index.ts",
       {
         "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
         "startupDeadlineMs": 30000,

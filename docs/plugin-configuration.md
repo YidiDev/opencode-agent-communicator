@@ -5,7 +5,7 @@ safety ceilings stop startup before the SQLite store opens.
 
 ```json
 [
-  "file:///home/operator/.local/share/opencode-agent-communicator/v0.7.4/node_modules/opencode-agent-communicator/src/index.ts",
+  "file:///home/operator/.local/share/opencode-agent-communicator/v0.8.0/node_modules/opencode-agent-communicator/src/index.ts",
   {
     "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
     "startupDeadlineMs": 30000,
