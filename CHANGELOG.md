@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-19
+
 ### Changed
 
 - Migrated the production plugin to the public OpenCode v2 `Plugin.define` Effect API, with the
@@ -46,6 +48,13 @@ All notable changes to this project are documented in this file. The format is b
   eviction at registry capacity without deleting protocol state.
 - Corrected the live CI version assertion, prerelease installation instructions, static-policy skill
   guidance, and secure-export acceptance evidence description.
+
+### Known limitations
+
+- Explicit context delivery and `session_stop` remain unavailable without authoritative public-v2
+  activity evidence. Use user-turn delivery or queue-based durable requests for communication.
+- The extended isolated multi-repository soak and reproduction of the reported prolonged-runtime
+  failure remain outstanding in #46; this release does not claim they are complete.
 
 ## [0.7.4] - 2026-09-07
 
@@ -341,7 +350,8 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.4...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.4...v0.8.0
 [0.7.4]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.1...v0.7.2
