@@ -6,10 +6,11 @@
 [![OpenCode v2 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** `v0.8.0` supports Linux x64 and
-stable OpenCode versions `>=2.0.26 <2.1.0`. Bun `1.4.0` is required for development and release verification. Other
+**Release status:** This unreleased compatibility update supports Linux x64 and
+stable OpenCode versions `>=2.1.3 <2.2.0`. Bun `1.4.0` is required for development and release verification. Other
 architectures, operating systems, OpenCode versions, and prereleases are unsupported.
-The published `v0.7.4` tag targets OpenCode 1.18 and does not contain this migration.
+The published `v0.8.0` tag supports OpenCode `>=2.0.26 <2.1.0`, not 2.1.3. The older `v0.7.4`
+tag targets OpenCode 1.18. Do not assume the version in an arbitrary checkout identifies its release.
 The extended multi-repository soak and prolonged-runtime investigation remain outstanding in
 [#46](https://github.com/YidiDev/opencode-agent-communicator/issues/46).
 
@@ -42,7 +43,7 @@ execution.
 ## Requirements
 
 - Linux x64 with a local filesystem suitable for SQLite WAL
-- A stable OpenCode version in `>=2.0.26 <2.1.0`
+- A stable OpenCode version in `>=2.1.3 <2.2.0`
 - npm with Git and SSH support for private package installation
 - Bun `1.4.0` for development and release verification
 - A dedicated private state directory owned by the account running OpenCode
@@ -57,31 +58,34 @@ metadata and release gates. Network and clustered filesystems are rejected for t
 
 ### 1. Install the plugin
 
-Install the immutable GitHub release outside OpenCode:
+Until the compatibility release is published, install an immutable commit from a reviewed checkout
+containing this update. Run these commands in that checkout:
 
 ```bash
-install_root="$HOME/.local/share/opencode-agent-communicator/v0.8.0"
+v2_commit="$(git rev-parse HEAD)"
+install_root="$HOME/.local/share/opencode-agent-communicator/v2-$v2_commit"
 install -d -m 0700 "$install_root"
 npm install --prefix "$install_root" --save-exact --ignore-scripts \
-  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.8.0"
+  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#$v2_commit"
 test -f "$install_root/node_modules/opencode-agent-communicator/src/index.ts"
 ```
 
 The repository is private, so the account running npm and OpenCode must have working GitHub SSH
-access. Release tags are immutable by project policy; do not replace `v0.8.0` with `main`.
-This release is distributed through GitHub; npm publication is separate.
+access. Do not install mutable branch references or reuse the v0.8.0 installation for this update.
+GitHub release and npm publication remain separate operations.
 
 ### 2. Add the plugin
 
-Configure the installed source entry as an absolute `file://` URL. Replace `/home/operator` with the
-absolute home directory of the account that performed the installation:
+Configure the installed `src/` **directory**, not its `index.ts` file, as an absolute `file://` URL.
+Replace `/home/operator` with the installation account's home and `<full-reviewed-commit>` with the
+SHA used above. OpenCode 2.1 rejects configured file sources before plugin setup:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.8.0/node_modules/opencode-agent-communicator/src/index.ts",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v2-<full-reviewed-commit>/node_modules/opencode-agent-communicator/src",
       {
         "policies": {
           "message": "allow",
@@ -141,7 +145,7 @@ partial tool set. Visible-root checks remain authoritative: task children cannot
 communicator even if a host snapshot happens to expose a tool name.
 
 If startup fails, run `opencode --version` and verify the installed entry first. OpenCode must report
-a stable version in `>=2.0.26 <2.1.0`; the configured absolute file must exist and remain readable
+a stable version in `>=2.1.3 <2.2.0`; the configured absolute directory and its `index.ts` must exist and remain readable
 by the OpenCode account.
 
 ## Configure
@@ -153,7 +157,7 @@ This example shows every public option. Omit values you do not need; unknown key
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.8.0/node_modules/opencode-agent-communicator/src/index.ts",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v2-<full-reviewed-commit>/node_modules/opencode-agent-communicator/src",
       {
         "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
         "startupDeadlineMs": 30000,
@@ -595,7 +599,7 @@ trusted account and private state/export roots. Report vulnerabilities according
 ### Startup fails
 
 - Confirm exact host versions with `opencode --version` and `bun --version`.
-- Confirm the configured `file://` entry exists and is readable by the OpenCode account.
+- Confirm the configured `file://` source is a directory containing `index.ts`, readable by the OpenCode account.
 - Check that `stateDirectory` is absolute, normalized, dedicated, local, owned by the OpenCode user,
   and not reachable through a symlink.
 - Stop stale OpenCode backends using the same workspace and state root. Ownership takeover waits for
@@ -611,6 +615,13 @@ has not reloaded configuration. An empty directory under OpenCode's package cach
 spec failed before this plugin was imported; do not configure the private `git+ssh` URL directly.
 Use the externally installed absolute `file://` entry above, restart the backend, and inspect its
 startup log.
+
+On OpenCode 2.1, `configured plugin path must be a directory` means a file source was rejected
+before plugin setup; the communicator will not appear even as a failed registry entry. Point the
+source to the installed `src/` directory. That fixes source resolution only: an old artifact may
+still reject the host version. Verify the immutable commit, its declared host range, and the source
+path separately. Use the same explicit project location for `/api/config` and `/api/plugin` checks.
+Do not share unfiltered configuration or logs, and coordinate shared-service restarts with active users.
 
 ### Ownership expires while OpenCode is running
 
@@ -663,7 +674,7 @@ are logical deletion, not secure erasure from old pages, snapshots, or media.
 ### Upgrade to OpenCode v2
 
 Stop every backend and back up the complete state directory before replacing an OpenCode 1.18
-installation. Install a stable host in `>=2.0.26 <2.1.0`, update policy values to static `allow` or
+installation. Install a stable host in `>=2.1.3 <2.2.0`, update policy values to static `allow` or
 `deny`, remove `export.executable`, `export.trustedWorkingDirectory`, and `exportUnsanitized`, then
 restart with the v2 plugin entry. Legacy `ask` policy is rejected. Migration v17 creates the bounded
 participant registry from historical communicator participant IDs without treating that history as
@@ -837,7 +848,7 @@ acceptance must complete all capability tests with zero skips on both glibc and 
 ### Package verification
 
 The package entry is the TypeScript source module `src/index.ts`. Supported OpenCode v2 hosts load
-the externally installed absolute `file://` entry and execute its public `Plugin.define` Effect. The
+the externally installed absolute `file://` source directory and execute its public `Plugin.define` Effect. The
 archive includes only runtime source, bundled skills, operational documentation, and release/legal
 files.
 
@@ -865,12 +876,16 @@ bun run test:live
 
 The live suite checks conservative unsupported observations and separately packs the archive,
 extracts it into an isolated harness, wires its declared runtime dependencies from a reviewed local
-snapshot, and loads the production entry by absolute `file://` URL through the public Effect plugin
+snapshot, and loads the actual installed `src/` directory by absolute `file://` URL through the public Effect plugin
 contract. It verifies the exact 21 primary tools and three skills, a correlated `session_list` result,
 lock publication/list/renewal/release, self-read, queue delivery/recovery, and a durable peer ask with
 target payload retrieval, response, source retrieval and acknowledgement. It also verifies the
 explicit unsupported context/stop outcomes, deny-default start and configured export-unavailable
-result. The minimum and build-time patches currently coincide at `2.0.26`, so one host exercises both
+result. Additional live checks cover rejected file sources, authorized idempotent start, allowed and
+denied cross-session reads, and durable wait/signal/ack. Positive packed-host export evidence runs in
+the capability-required secure-export Docker cell; a host without that capability must instead
+return `unsafe_path` without installing a file. The minimum and build-time patches currently coincide
+at `2.1.3`, so one host exercises both
 endpoints.
 The Effect-plugin unit suite verifies the exact 21-tool and three-skill manifests, static policy,
 and scoped disposal. Integration suites cover lock, delivery, durable request, start/stop, export,

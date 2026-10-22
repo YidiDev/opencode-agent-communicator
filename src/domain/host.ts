@@ -1,19 +1,19 @@
-export const minimumSupportedOpenCodeVersion = "2.0.26" as const;
-export const supportedOpenCodeVersionRange = ">=2.0.26 <2.1.0" as const;
+export const minimumSupportedOpenCodeVersion = "2.1.3" as const;
+export const supportedOpenCodeVersionRange = ">=2.1.3 <2.2.0" as const;
 export const supportedRuntimePlatform = "linux" as const;
 export const supportedRuntimeArchitecture = "x64" as const;
 export const supportedBunVersion = "1.4.0" as const;
 
-export type SupportedOpenCodeVersion = `2.0.${number}`;
+export type SupportedOpenCodeVersion = `2.1.${number}`;
 
 export function parseSupportedOpenCodeVersion(
   value: unknown,
 ): SupportedOpenCodeVersion | undefined {
   if (typeof value !== "string") return undefined;
-  const match = /^2\.0\.(0|[1-9]\d*)$/.exec(value);
+  const match = /^2\.1\.(0|[1-9]\d*)$/.exec(value);
   if (!match) return undefined;
   const patch = Number(match[1]);
-  return Number.isSafeInteger(patch) && patch >= 26
+  return Number.isSafeInteger(patch) && patch >= 3
     ? (value as SupportedOpenCodeVersion)
     : undefined;
 }

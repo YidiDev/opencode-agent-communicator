@@ -28,9 +28,9 @@ test("snapshots build runtime dependencies before running the pinned v2 harness"
   expect(versionCheck).toBeDefined();
   if (!versionCheck) throw new Error("Missing CLI version prerequisite");
   for (const [output, expected] of [
-    ["opencode v2.0.26", 0],
-    ["2.0.26", 1],
-    ["opencode v2.0.27", 1],
+    ["opencode v2.1.3", 0],
+    ["2.1.3", 1],
+    ["opencode v2.1.4", 1],
   ] as const) {
     const process = Bun.spawn(
       [
@@ -39,7 +39,7 @@ test("snapshots build runtime dependencies before running the pinned v2 harness"
         versionCheck.replace("$(./node_modules/.bin/opencode --version)", "$VERSION_OUTPUT"),
       ],
       {
-        env: { VERSION_OUTPUT: output, OPENCODE_COMPAT_VERSION: "2.0.26" },
+        env: { VERSION_OUTPUT: output, OPENCODE_COMPAT_VERSION: "2.1.3" },
       },
     );
     expect(await process.exited).toBe(expected);

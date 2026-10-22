@@ -6,6 +6,22 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- Target stable OpenCode `>=2.1.3 <2.2.0` with aligned `@opencode/plugin` and `@opencode/cli`
+  packages at `2.1.3` and Effect `4.0.1`. OpenCode 2.0 remains available through the v0.8.0 tag,
+  but is not supported by this compatibility update.
+- Configure the installed `src/` directory as the local plugin source. OpenCode 2.1 rejects
+  `src/index.ts` file sources before setup, leaving no communicator registry entry. Packed live
+  acceptance now loads the real installed directory instead of a synthetic wrapper.
+
+### Tests
+
+- Add the rejected-file loading regression, authorized idempotent start, cross-session read policy,
+  durable wait/signal/ack, and capability-required packed-host export journeys on OpenCode 2.1.3.
+- Keep context delivery and stop explicitly unsupported: the audited public plugin context still
+  does not provide authoritative current activity. The extended soak in #46 remains separate.
+
 ## [0.8.0] - 2026-10-19
 
 ### Changed

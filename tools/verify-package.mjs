@@ -119,22 +119,22 @@ export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
   assert(packageJson.cpu?.length === 1 && packageJson.cpu[0] === "x64", "package must be x64-only");
   assert(packageJson.engines?.bun === "1.4.0", "Bun compatibility must be exact");
   assert(
-    packageJson.peerDependencies?.["@opencode/cli"] === ">=2.0.26 <2.1.0",
+    packageJson.peerDependencies?.["@opencode/cli"] === ">=2.1.3 <2.2.0",
     "OpenCode peer must match the certified minor line",
   );
   assert(
-    packageJson.engines?.opencode === ">=2.0.26 <2.1.0",
+    packageJson.engines?.opencode === ">=2.1.3 <2.2.0",
     "OpenCode engine range must match the certified minor line",
   );
-  assert(packageJson.dependencies?.["@opencode/plugin"] === "2.0.26", "plugin API must be exact");
-  assert(packageJson.devDependencies?.["@opencode/cli"] === "2.0.26", "CLI must be exact");
+  assert(packageJson.dependencies?.["@opencode/plugin"] === "2.1.3", "plugin API must be exact");
+  assert(packageJson.devDependencies?.["@opencode/cli"] === "2.1.3", "CLI must be exact");
   assert(
     packageJson.trustedDependencies?.length === 1 &&
       packageJson.trustedDependencies[0] === "@opencode/cli",
     "only the pinned CLI platform-binary installer may run a lifecycle script",
   );
   assert(
-    packageJson.dependencies?.effect === "4.0.0-rc.112",
+    packageJson.dependencies?.effect === "4.0.1",
     "Effect must match the certified plugin API version",
   );
   assert(packageJson.dependencies?.zod === "4.4.3", "Zod must match the certified version");

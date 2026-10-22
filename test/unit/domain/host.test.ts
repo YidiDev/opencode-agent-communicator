@@ -9,11 +9,11 @@ import {
 
 describe("OpenCode host version range", () => {
   test("models the declared stable OpenCode v2 range", () => {
-    expect(minimumSupportedOpenCodeVersion).toBe("2.0.26");
-    expect(supportedOpenCodeVersionRange).toBe(">=2.0.26 <2.1.0");
+    expect(minimumSupportedOpenCodeVersion).toBe("2.1.3");
+    expect(supportedOpenCodeVersionRange).toBe(">=2.1.3 <2.2.0");
   });
 
-  test.each(["2.0.26", "2.0.27", "2.0.999", `2.0.${Number.MAX_SAFE_INTEGER}`])(
+  test.each(["2.1.3", "2.1.4", "2.1.999", `2.1.${Number.MAX_SAFE_INTEGER}`])(
     "accepts canonical supported patch %s",
     (version) => {
       expect(parseSupportedOpenCodeVersion(version)).toBe(version);
@@ -27,14 +27,17 @@ describe("OpenCode host version range", () => {
     2_000_026,
     "1.18.99",
     "2.0.25",
+    "2.0.26",
     "2.1.0",
+    "2.1.2",
+    "2.2.0",
     "3.0.26",
-    "2.0.026",
-    "2.0.+26",
-    "2.0.26.0",
-    "2.0.26-beta.1",
-    "2.0.26+build.1",
-    `2.0.${Number.MAX_SAFE_INTEGER + 1}`,
+    "2.1.03",
+    "2.1.+3",
+    "2.1.3.0",
+    "2.1.3-beta.1",
+    "2.1.3+build.1",
+    `2.1.${Number.MAX_SAFE_INTEGER + 1}`,
   ])("rejects unsupported or noncanonical version %p", (version) => {
     expect(parseSupportedOpenCodeVersion(version)).toBeUndefined();
     expect(isSupportedOpenCodeVersion(version)).toBe(false);
