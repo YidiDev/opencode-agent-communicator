@@ -236,6 +236,18 @@ function productionToolResponse(serialized: string): Response | undefined {
       }),
     );
   }
+  const requestSendWait = serialized.match(
+    /production-session-request-send-wait:(ses_[A-Za-z0-9]+)/,
+  )?.[1];
+  if (requestSendWait)
+    return toolResponse(
+      "session_request_send",
+      JSON.stringify({
+        session_id: requestSendWait,
+        content: "Packed peer milestone request",
+        request: { kind: "wait", milestone: "packed-ready", timeout_seconds: 30 },
+      }),
+    );
   const requestSendCancel = serialized.match(
     /production-session-request-send-cancel:(ses_[A-Za-z0-9]+)/,
   )?.[1];
@@ -276,7 +288,7 @@ function productionToolResponse(serialized: string): Response | undefined {
       "session_stop",
       JSON.stringify({ session_id: stop, reason: "packed acceptance" }),
     );
-  if (serialized.includes("production-export-unavailable")) {
+  if (/production-export-(?:unavailable|sanitized)/.test(serialized)) {
     return toolResponse("session_export", JSON.stringify({ destination: "live.json" }));
   }
   return productionContextResponse(serialized);

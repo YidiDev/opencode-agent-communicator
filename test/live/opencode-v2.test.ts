@@ -22,6 +22,7 @@ import {
   runBoundedProcess,
   waitForOutputLine,
 } from "./harness/process";
+import { invokePackedTool } from "./harness/production-host";
 import { launchDeterministicProvider, type ProviderHarness } from "./harness/provider";
 
 setDefaultTimeout(liveDeadlineMs * 4);
@@ -32,25 +33,7 @@ async function invokeTool(
   marker: string,
   name: string,
 ) {
-  await client.session.prompt({ sessionID, text: marker, delivery: "queue", resume: true });
-  await client.session.wait({ sessionID });
-  const messages = await client.session.context({ sessionID });
-  const call = messages
-    .flatMap((message) => (message.type === "assistant" ? message.content : []))
-    .filter((part) => part.type === "tool" && part.name === name)
-    .at(-1);
-  if (call?.type !== "tool" || call.state.status !== "completed")
-    throw new Error(`${name} did not complete`);
-  return JSON.parse(
-    call.state.content
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join(""),
-  ) as {
-    ok: boolean;
-    value?: Record<string, unknown>;
-    error?: { code: string };
-  };
+  return invokePackedTool(client, sessionID, marker, name);
 }
 
 async function verifyPackedJourneys(client: ReturnType<typeof OpenCode.make>, sessionID: string) {
@@ -114,6 +97,14 @@ async function verifyQueuedPeerJourney(client: ReturnType<typeof OpenCode.make>,
     model: { providerID: "live-test", id: "deterministic-model" },
     location: source.location,
   });
+  expect(
+    await invokePackedTool(
+      client,
+      sourceID,
+      `production-session-read-cross:${target.id}`,
+      "session_read",
+    ),
+  ).toMatchObject({ ok: false, error: { code: "permission_denied" } });
   const sent = await invokeTool(
     client,
     sourceID,
@@ -191,6 +182,45 @@ async function verifyQueuedPeerJourney(client: ReturnType<typeof OpenCode.make>,
       `production-request-ack:${requestID}`,
       "session_request_ack",
     ),
+  ).toMatchObject({ ok: true });
+  await verifyWaitJourney(client, sourceID, target.id);
+}
+
+async function verifyWaitJourney(
+  client: ReturnType<typeof OpenCode.make>,
+  sourceID: string,
+  targetID: string,
+) {
+  const requested = await invokePackedTool(
+    client,
+    sourceID,
+    `production-session-request-send-wait:${targetID}`,
+    "session_request_send",
+  );
+  expect(requested).toMatchObject({ ok: true, value: { kind: "wait", delivery_mode: "queue" } });
+  const id = requested.value?.request_id;
+  if (typeof id !== "string") throw new Error("missing milestone request identity");
+  await client.session.wait({ sessionID: targetID });
+  expect(
+    await invokePackedTool(client, targetID, `production-request-get:${id}`, "session_request_get"),
+  ).toMatchObject({
+    ok: true,
+    value: { outcome: "pending_payload", metadata: { request_id: id, role: "target" } },
+  });
+  expect(
+    await invokePackedTool(client, targetID, `production-session-signal:${id}`, "session_signal"),
+  ).toMatchObject({ ok: true });
+  expect(
+    await invokePackedTool(client, sourceID, `production-request-get:${id}`, "session_request_get"),
+  ).toMatchObject({
+    ok: true,
+    value: {
+      metadata: { request_id: id, resolution_state: "reached", result_state: "available" },
+      result: { kind: "wait", evidence: "artifact://packed-live" },
+    },
+  });
+  expect(
+    await invokePackedTool(client, sourceID, `production-request-ack:${id}`, "session_request_ack"),
   ).toMatchObject({ ok: true });
 }
 
@@ -314,6 +344,7 @@ test(`loads the packed Effect plugin through public OpenCode ${exactOpenCodeVers
         `packed plugin failed to load: ${communicator.state.error}\n${serve.stderr()}`,
       );
     }
+    if (!communicator) throw new Error(`packed plugin was not registered\n${serve.stderr()}`);
     expect(plugins.data).toContainEqual(
       expect.objectContaining({
         id: "opencode-agent-communicator",

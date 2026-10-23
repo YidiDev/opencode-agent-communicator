@@ -126,7 +126,7 @@ describe("composition factory ordering", () => {
       },
     });
 
-    await expect(plugin(pluginContext())).rejects.toThrow("requires Linux x64 and OpenCode 2.0.26");
+    await expect(plugin(pluginContext())).rejects.toThrow("requires Linux x64 and OpenCode 2.1.3");
     expect(order).toEqual([]);
   });
 

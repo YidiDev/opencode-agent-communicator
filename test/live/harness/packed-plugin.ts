@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 
@@ -198,15 +198,9 @@ export async function installPackedPlugin(repository: string): Promise<PackedPlu
       dependencies: dependencyRecord(packageManifest.dependencies),
       runtimeDependenciesRoot,
     });
-    const hostPluginDirectory = join(consumer, "plugin");
-    await mkdir(hostPluginDirectory);
-    await writeFile(
-      join(hostPluginDirectory, "index.ts"),
-      'export { default } from "opencode-agent-communicator";\n',
-      { mode: 0o600 },
-    );
     return {
-      packagePath: await realpath(hostPluginDirectory),
+      // Exercise the exact directory users configure, not a synthetic wrapper entrypoint.
+      packagePath: await realpath(join(packageDirectory, "src")),
       async remove(): Promise<void> {
         await rm(staging, { recursive: true, force: true });
       },

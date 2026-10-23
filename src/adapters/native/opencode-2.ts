@@ -282,9 +282,9 @@ async function readCurrentContextMessage(
 }
 
 /**
- * OpenCode v2's Effect plugin context deliberately exposes no session inventory or activity API.
- * ID-addressed operations use public session methods; inventory/status/sequence-dependent ports
- * return conservative outcomes rather than reaching through a private HTTP transport.
+ * OpenCode 2.1 exposes paginated inventory, but no authoritative current activity query here.
+ * Discovery deliberately retains registry-driven ID revalidation; status/sequence-dependent ports
+ * stay conservative. Do not infer idle from inventory or reach through a private HTTP transport.
  */
 function createRootMembership(
   input: OpenCodeNativeAdapterInput,

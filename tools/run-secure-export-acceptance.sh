@@ -13,12 +13,13 @@ for libc in debian alpine; do
     --network none \
     --read-only \
     --env LD_LIBRARY_PATH=/tmp/hostile-loader-search \
-    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777 \
+    --env npm_config_cache=/tmp/npm-cache \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777 \
     --cap-drop ALL \
     --cap-add DAC_READ_SEARCH \
     --security-opt no-new-privileges=true \
-    --pids-limit 128 \
-    --memory 512m \
+    --pids-limit 256 \
+    --memory 1g \
     --cpus 1 \
     "$image"
 done

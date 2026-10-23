@@ -22,7 +22,9 @@ export type IsolationSetupStage = "after-root" | "after-directories" | "after-co
 interface IsolationOptions {
   readonly providerBaseUrl: string;
   readonly pluginPath: string;
-  readonly pluginOptions?: Readonly<Record<string, JsonValue>>;
+  readonly pluginOptions?:
+    | Readonly<Record<string, JsonValue>>
+    | ((root: string) => Readonly<Record<string, JsonValue>>);
   readonly appendPluginPaths?: readonly string[];
   readonly setupOperation?: (input: {
     readonly stage: IsolationSetupStage;
@@ -50,6 +52,7 @@ async function initializeIsolatedOpenCodeState(
     data: join(root, "xdg-data"),
     cache: join(root, "xdg-cache"),
     state: join(root, "xdg-state"),
+    exports: join(root, "exports"),
     temporary: join(root, "tmp"),
     managed: join(root, "managed-config"),
     npmCache: join(root, "npm-cache"),
@@ -93,7 +96,10 @@ async function initializeIsolatedOpenCodeState(
     plugins: [
       {
         package: pathToFileURL(options.pluginPath).href,
-        options: options.pluginOptions ?? {},
+        options:
+          typeof options.pluginOptions === "function"
+            ? options.pluginOptions(root)
+            : (options.pluginOptions ?? {}),
       },
       ...(options.appendPluginPaths ?? []).map((pluginPath) => pathToFileURL(pluginPath).href),
     ],

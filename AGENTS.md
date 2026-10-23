@@ -3,7 +3,7 @@
 ## Sources Of Truth
 
 - `PLAN.md` is normative for product behavior and architecture; `DEVELOPMENT.md` is normative for engineering conventions. Prefer executable scripts and checks when prose drifts.
-- This package supports only Linux x64, Bun `1.4.0`, and stable OpenCode `>=2.0.26 <2.1.0`. `@opencode/plugin` and `@opencode/cli` are pinned to the build-time patch and must remain aligned.
+- This package supports only Linux x64, Bun `1.4.0`, and stable OpenCode `>=2.1.3 <2.2.0`. `@opencode/plugin` and `@opencode/cli` are pinned to the build-time patch and must remain aligned.
 
 ## Commands
 
@@ -17,6 +17,7 @@
 ## Architecture
 
 - `src/index.ts` is the TypeScript package entrypoint; it default-exports the public v2 `Plugin.define` Effect plugin. `src/composition/` owns wiring, startup recovery, scoped lifecycle, and `tool.transform`/`skill.transform` registration, not domain behavior.
+- OpenCode 2.1 local plugin configuration must point to the installed `src/` directory, not `src/index.ts`. Packed live acceptance must use that actual directory without a wrapper entrypoint.
 - Dependency direction is enforced: tools may depend on application/domain; application may depend on domain; native/store/export adapters implement application/domain ports; composition may wire all layers. Domain cannot import OpenCode, Bun, SQLite, or filesystem modules. Tools cannot access OpenCode, SQLite, or the filesystem directly.
 - Put protocol types, IDs, state transitions, and stable errors in `src/domain/`; orchestration and ports in `src/application/`; OpenCode, SQLite, and secure-export implementations in `src/adapters/`; public tool schemas and thin handlers in `src/tools/`.
 - Tests mirror the boundary: `test/unit/` for pure behavior, `test/integration/` for real store/adapter boundaries, `test/black-box/` for packed-package behavior, and `test/live/` for isolated OpenCode harnesses. Shared fakes and fixtures belong in `test/support/`.
