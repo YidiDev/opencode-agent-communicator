@@ -20,6 +20,9 @@ omitted when configured as `src/index.ts` files. The host's diagnostic was
 instead produced failed registry entries with the old `>=2.0.26 <2.1.0` version-guard diagnostic.
 Source resolution and host compatibility are separate boundaries.
 
+Packed-host acquisition applies one abortable deadline to the initial location request and every
+registration poll. Timeout must reach resource cleanup; a test-runner timeout alone is insufficient.
+
 The new packed tests load the actual installed `src/` directory, with no wrapper module. Exact
 `@opencode/plugin@2.1.3` declarations and `@opencode/client` operations were checked for Effect-scoped
 acquisition/finalization, tool/skill transforms, primary tool options, context hooks, event envelopes,

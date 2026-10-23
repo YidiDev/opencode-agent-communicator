@@ -9,6 +9,39 @@ import { installPackedPlugin, type PackedPluginInstallation } from "./packed-plu
 import { launchManagedProcess, type ManagedProcess, waitForOutputLine } from "./process";
 import { launchDeterministicProvider, type ProviderHarness } from "./provider";
 
+export async function waitForPackedRegistration(
+  client: ReturnType<typeof OpenCode.make>,
+  directory: string,
+  rejectedFileSource?: () => boolean,
+  timeoutMs = liveDeadlineMs,
+): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new Error("Packed plugin registration deadline exceeded.")),
+    timeoutMs,
+  );
+  const requestOptions = { signal: controller.signal };
+  try {
+    await client.location.get({ location: { directory } }, requestOptions);
+    for (;;) {
+      controller.signal.throwIfAborted();
+      const registry = await client.plugin.list({ location: { directory } }, requestOptions);
+      if (
+        rejectedFileSource
+          ? rejectedFileSource()
+          : registry.data.some((plugin) => plugin.id === "opencode-agent-communicator")
+      )
+        return;
+      await Bun.sleep(25);
+    }
+  } catch (failure) {
+    if (controller.signal.aborted) throw controller.signal.reason;
+    throw failure;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function launchPackedHost(
   options: {
     readonly fileEntrypoint?: boolean;
@@ -63,25 +96,14 @@ export async function launchPackedHost(
         authorization: `Basic ${Buffer.from(`opencode:${liveServerPassword}`).toString("base64")}`,
       },
     });
-    await client.location.get({ location: { directory: isolation.project } });
-    const deadline = performance.now() + liveDeadlineMs;
-    while (performance.now() < deadline) {
-      const registry = await client.plugin.list({ location: { directory: isolation.project } });
-      if (
-        options.fileEntrypoint
-          ? serve.stderr().includes("configured plugin path must be a directory")
-          : registry.data.some((plugin) => plugin.id === "opencode-agent-communicator")
-      )
-        break;
-      await Bun.sleep(25);
-    }
-    const registry = await client.plugin.list({ location: { directory: isolation.project } });
-    if (
-      !options.fileEntrypoint &&
-      !registry.data.some((plugin) => plugin.id === "opencode-agent-communicator")
-    ) {
-      throw new Error(`Packed plugin did not register: ${serve.stderr()}`);
-    }
+    const stderr = serve.stderr;
+    await waitForPackedRegistration(
+      client,
+      isolation.project,
+      options.fileEntrypoint
+        ? () => stderr().includes("configured plugin path must be a directory")
+        : undefined,
+    );
     return { client, isolation, serve, dispose, packagePath: installation.packagePath };
   } catch (failure) {
     await dispose(failure);

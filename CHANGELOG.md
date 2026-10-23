@@ -17,6 +17,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Tests
 
+- Bound packed-host location and registration requests with a shared abortable deadline; verify
+  stalled requests reach cleanup and successful acquisition clears its timer.
 - Add the rejected-file loading regression, authorized idempotent start, cross-session read policy,
   durable wait/signal/ack, and capability-required packed-host export journeys on OpenCode 2.1.3.
 - Keep context delivery and stop explicitly unsupported: the audited public plugin context still
