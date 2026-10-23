@@ -6,7 +6,7 @@
 [![OpenCode v2 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** `v0.9.0` supports Linux x64 and
+**Release status:** `v0.9.1` supports Linux x64 and
 stable OpenCode versions `>=2.1.3 <2.2.0`. Bun `1.4.0` is required for development and release verification. Other
 architectures, operating systems, OpenCode versions, and prereleases are unsupported.
 The published `v0.8.0` tag supports OpenCode `>=2.0.26 <2.1.0`, not 2.1.3. The older `v0.7.4`
@@ -61,10 +61,10 @@ metadata and release gates. Network and clustered filesystems are rejected for t
 Install the immutable GitHub release outside OpenCode:
 
 ```bash
-install_root="$HOME/.local/share/opencode-agent-communicator/v0.9.0"
+install_root="$HOME/.local/share/opencode-agent-communicator/v0.9.1"
 install -d -m 0700 "$install_root"
 npm install --prefix "$install_root" --save-exact --ignore-scripts \
-  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.9.0"
+  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.9.1"
 test -f "$install_root/node_modules/opencode-agent-communicator/src/index.ts"
 ```
 
@@ -83,7 +83,7 @@ OpenCode 2.1 rejects configured file sources before plugin setup:
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.9.0/node_modules/opencode-agent-communicator/src",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v0.9.1/node_modules/opencode-agent-communicator/src",
       {
         "policies": {
           "message": "allow",
@@ -155,7 +155,7 @@ This example shows every public option. Omit values you do not need; unknown key
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.9.0/node_modules/opencode-agent-communicator/src",
+      "file:///home/operator/.local/share/opencode-agent-communicator/v0.9.1/node_modules/opencode-agent-communicator/src",
       {
         "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
         "startupDeadlineMs": 30000,
