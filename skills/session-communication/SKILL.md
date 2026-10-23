@@ -144,6 +144,11 @@ that OpenCode may already have admitted.
 
 ## Read transcript projections conservatively
 
+Long contexts are limited to their newest 512 entries. `earlier_context_unavailable: true` means
+older current-context entries were excluded; pagination flags cover only the retained window.
+Do not retry cursors to recover that prefix or claim complete history. Export rejects a truncated
+window rather than installing a partial current-context export.
+
 Use `session_read` only for an authorized bounded observation. Prefer durable
 `session_request_send`/`session_request_start` asks or waits when coordinating work or collecting a
 result. A transcript read does not prove completion, compliance, or advisory-lock discipline.

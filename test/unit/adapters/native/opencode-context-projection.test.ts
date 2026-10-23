@@ -178,7 +178,7 @@ describe("OpenCode v2 current-context projection validation", () => {
     expect(() => projectOpenCodeContext({})).toThrow("message bound");
     expect(() =>
       projectOpenCodeContext(Array.from({ length: sessionReadLimits.maxMessagesExamined + 1 })),
-    ).toThrow("message bound");
+    ).toThrow("message identity");
     expect(() =>
       projectOpenCodeContext([
         {

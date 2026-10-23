@@ -16,6 +16,18 @@ function assistant(messageId = "message", text = "x"): ProjectionSafeMessage {
 }
 
 describe("session read strict DTO snapshots", () => {
+  test("accepts only a boolean earlier-context marker and still rejects unknown keys", () => {
+    const exact = nativePageFixture([assistant()]);
+    for (const value of [true, false])
+      expect(
+        snapshotNativeMessagePage({ ...exact, earlierContextUnavailable: value }, 1024),
+      ).toBeDefined();
+    for (const value of [undefined, null, 1, "true"])
+      expect(
+        snapshotNativeMessagePage({ ...exact, earlierContextUnavailable: value }, 1024),
+      ).toBeUndefined();
+    expect(snapshotNativeMessagePage({ ...exact, unknown: true }, 1024)).toBeUndefined();
+  });
   test("validates exact page counts", () => {
     const exact = nativePageFixture([assistant("exact")]);
     expect(snapshotNativeMessagePage(exact, 8_388_608)).toBeDefined();

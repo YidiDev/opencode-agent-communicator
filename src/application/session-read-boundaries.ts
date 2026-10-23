@@ -112,8 +112,17 @@ export function snapshotNativeMessagePage(
   maximumProjectedTextBytes: number,
   maximumRawResponseBytes: number = sessionReadLimits.maxNativeResponseBytes,
 ): NativeMessagePage | undefined {
-  const record = snapshotDataRecord(value, 8);
-  if (!record || Object.keys(record).length !== 8) return undefined;
+  const record = snapshotDataRecord(value, 9);
+  if (
+    !record ||
+    Object.keys(record).length !== (Object.hasOwn(record, "earlierContextUnavailable") ? 9 : 8)
+  )
+    return undefined;
+  if (
+    Object.hasOwn(record, "earlierContextUnavailable") &&
+    typeof record.earlierContextUnavailable !== "boolean"
+  )
+    return undefined;
   const values = snapshotDenseArray(record.messages, sessionReadLimits.nativePageMessages);
   const examinedMessageIds = snapshotExaminedMessageIds(record.examinedMessageIds);
   if (
@@ -157,6 +166,7 @@ export function snapshotNativeMessagePage(
   if (exactBytes !== record.projectedTextByteCount) return undefined;
   return {
     messages,
+    ...(record.earlierContextUnavailable === true ? { earlierContextUnavailable: true } : {}),
     examinedMessageIds,
     examinedMessageCount: record.examinedMessageCount as number,
     projectedTextByteCount: exactBytes,

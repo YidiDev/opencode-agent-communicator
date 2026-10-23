@@ -85,6 +85,22 @@ function nativeWith(page: unknown = emptyPage): NativeSessionReadPort {
   };
 }
 
+test("never installs an export of a truncated context window", async () => {
+  let created = false;
+  const fixture = rootFixture({
+    onCreate: () => {
+      created = true;
+    },
+  });
+  expect(
+    await new SanitizedContextExportAdapter(
+      fixture.root,
+      nativeWith({ ...emptyPage, earlierContextUnavailable: true }),
+    ).writeExport(input()),
+  ).toEqual({ ok: false, code: "export_limit_exceeded" });
+  expect(created).toBe(false);
+});
+
 describe("sanitized current-context exporter boundaries", () => {
   test.each(["cumulative", "negative", "overflow", "noninteger"] as const)(
     "rejects %s snapshot-byte accounting before creating a file",

@@ -225,6 +225,7 @@ async function readCurrentContextPage(
   );
   return {
     messages,
+    ...(projection.earlierContextUnavailable ? { earlierContextUnavailable: true } : {}),
     examinedMessageIds,
     examinedMessageCount: examinedMessageIds.length,
     projectedTextByteCount,

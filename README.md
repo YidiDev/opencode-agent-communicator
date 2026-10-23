@@ -303,6 +303,12 @@ splitting a Unicode scalar. An empty current context returns empty content and a
 empty-boundary cursor. This snapshot is not complete history: OpenCode may compact or prune earlier
 messages. The plugin never uses a private HTTP transport to recover omitted content.
 
+Long sessions remain readable: the adapter selects at most the newest 512 current-context entries.
+If older entries were excluded, the result includes `earlier_context_unavailable: true`. Pagination
+flags and cursors cover only that window; they cannot recover excluded context. A cursor whose
+anchor falls outside the window becomes stale. Export still rejects such a truncated window with
+`export_limit_exceeded` instead of silently writing a partial current-context export.
+
 The projection includes `[user message omitted]`, assistant boundaries, assistant state, assistant
 text, and tool name/status markers. It omits user content, reasoning, tool inputs/outputs, and native
 metadata. The assistant state marker appears before its parts. Assistant text is not sanitized: it is
@@ -321,12 +327,14 @@ UTF-8 boundary, and prior prefix. Unchanged text may append, and an `after` read
 the appended suffix. If `cursor_stale` reports an edited or missing anchor, discard that cursor and
 take a fresh cursorless tail; do not guess the missing continuation.
 
-Transcript traversal is bounded to 8 messages per page, 96 page/fixed-message calls, 512 raw native messages examined
-(including omitted variants), 8 MiB of projection-safe assistant-text UTF-8 bytes examined, 16,384
-native assistant parts examined, 32,768 rendered lines examined per invocation, 8,192 rendered lines
-per message, 4 MiB before deserialization per transcript response, 32 MiB of raw transcript responses
-per invocation, and 512 characters per native cursor. These
-invocation-wide charges include both fixed-anchor reads and the final reread. Exhausting a proof bound returns
+Transcript traversal is bounded to 8 messages per page, 96 page/fixed-message calls, 512 paginated
+messages, 8 MiB of retained projection-safe assistant text, 16,384 paginated assistant parts,
+32,768 rendered lines per invocation, 8,192 rendered lines per message, 4 MiB of serialized
+restricted snapshot per call, 32 MiB cumulatively, and 512 characters per native cursor. The host
+materializes context before the plugin receives it; these are projection bounds, not transport or
+pre-deserialization memory limits. Every call charges the full restricted window, not just its
+returned page. These invocation-wide charges include both fixed-anchor reads and the final reread.
+Exhausting a proof bound returns
 `native_unavailable`; it never starts an unbounded scan or invents a result. `session_read` does not
 prove completion, peer compliance, or advisory-lock compliance. Durable ask/wait requests remain the
 preferred coordination channel.

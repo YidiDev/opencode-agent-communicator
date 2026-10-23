@@ -223,6 +223,7 @@ export interface SessionReadTraversalPlan {
 }
 
 export interface SessionReadTraversal {
+  readonly earlierContextUnavailable: boolean;
   readonly messages: readonly ProjectionSafeMessage[];
   readonly reachedOldest: boolean;
   readonly anchorIndex: number;
@@ -241,6 +242,7 @@ export async function traverseSessionRead(
 ): Promise<DomainResult<SessionReadTraversal>> {
   let cursor: string | null = null;
   let reachedOldest = false;
+  let earlierContextUnavailable = false;
   let anchorSeen = anchor === undefined;
   const descending: ProjectionSafeMessage[] = [];
   const rawIds = new Set<string>();
@@ -297,6 +299,7 @@ export async function traverseSessionRead(
       })
     )
       return unavailable("Transcript pagination is malformed.");
+    earlierContextUnavailable ||= page.earlierContextUnavailable === true;
     for (const messageId of page.examinedMessageIds) {
       if (rawIds.has(messageId)) return unavailable("Transcript pagination is ambiguous.");
       rawIds.add(messageId);
@@ -344,6 +347,12 @@ export async function traverseSessionRead(
   }
   return {
     ok: true,
-    value: { messages, reachedOldest, anchorIndex, linesByMessage: work.linesByMessage },
+    value: {
+      messages,
+      reachedOldest,
+      anchorIndex,
+      linesByMessage: work.linesByMessage,
+      earlierContextUnavailable,
+    },
   };
 }

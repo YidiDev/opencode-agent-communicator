@@ -34,6 +34,10 @@ message, part, byte, call, and cursor ceilings as `session_read`. Duplicate IDs,
 malformed context, changed snapshots, limit exhaustion, deadline expiry, abort, visibility loss, or
 ownership loss fail closed. No omitted or compacted history is inferred.
 
+Unlike recent reads, export does not accept a tail that excludes older current-context entries.
+If the context exceeds the 512-entry window, export returns `export_limit_exceeded` before creating
+an output file. It never silently installs an export of just that window.
+
 The complete encoded document must fit `maximumOutputBytes`. `maximumConcurrent`,
 `maximumSourceExportsPerMinute`, and `maximumWorkspaceExportsPerMinute` bound process-local export
 work. A backend restart resets only these process-local counters; it does not retry interrupted

@@ -6,6 +6,12 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+
+- Read the newest 512 current-context entries in long sessions instead of rejecting every read once
+  the host context exceeds 512 entries. Report excluded earlier context explicitly, keep cursor and
+  work limits intact, and reject partial-window exports before file creation.
+
 ## [0.9.0] - 2026-10-22
 
 ### Changed
