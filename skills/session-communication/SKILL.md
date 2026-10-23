@@ -5,6 +5,11 @@ description: Communicates with independent OpenCode sessions safely. Use when se
 
 # Session Communication
 
+This checkout targets OpenCode `>=2.1.3 <2.2.0`. If all communicator tools are missing, check the
+loaded plugin and configured artifact before sending work. OpenCode 2.1 local plugin sources must
+point to the installed `src/` directory, not `src/index.ts`. Coordinate any configuration change or
+shared-service restart; do not change another session's environment as a workaround.
+
 Use the session communicator for durable communication between independent peer root sessions
 in the current workspace. Every session retains its own instructions, permissions, and judgment.
 Either peer may initiate contact; source and target describe one operation, not authority or rank.

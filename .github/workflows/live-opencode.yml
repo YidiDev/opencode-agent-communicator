@@ -9,11 +9,11 @@ permissions:
 
 jobs:
   opencode-2:
-    name: OpenCode 2.0.26 live compatibility
+    name: OpenCode 2.1.3 live compatibility
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
-      OPENCODE_COMPAT_VERSION: 2.0.26
+      OPENCODE_COMPAT_VERSION: 2.1.3
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,10 +38,10 @@ jobs:
           import { readFile } from "node:fs/promises";
           const packageJson = JSON.parse(await readFile("package.json", "utf8"));
           const build = packageJson.devDependencies?.["@opencode/cli"];
-          if (build !== "2.0.26" || packageJson.dependencies?.["@opencode/plugin"] !== build) {
-            throw new Error("OpenCode CLI and plugin packages must equal 2.0.26");
+          if (build !== "2.1.3" || packageJson.dependencies?.["@opencode/plugin"] !== build) {
+            throw new Error("OpenCode CLI and plugin packages must equal 2.1.3");
           }
-          const range = ">=2.0.26 <2.1.0";
+          const range = ">=2.1.3 <2.2.0";
           if (
             packageJson.peerDependencies?.["@opencode/cli"] !== range ||
             packageJson.engines?.opencode !== range

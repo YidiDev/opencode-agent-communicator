@@ -46,7 +46,7 @@
   ],
   "engines": {
     "bun": "1.4.0",
-    "opencode": ">=2.0.26 <2.1.0"
+    "opencode": ">=2.1.3 <2.2.0"
   },
   "packageManager": "bun@1.4.0",
   "scripts": {
@@ -72,8 +72,8 @@
     "prepack": "node tools/verify-package.mjs"
   },
   "dependencies": {
-    "@opencode/plugin": "2.0.26",
-    "effect": "4.0.0-rc.112",
+    "@opencode/plugin": "2.1.3",
+    "effect": "4.0.1",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -84,12 +84,12 @@
     "@types/istanbul-lib-instrument": "1.7.8",
     "istanbul-lib-coverage": "3.2.2",
     "istanbul-lib-instrument": "6.0.3",
-    "@opencode/cli": "2.0.26",
+    "@opencode/cli": "2.1.3",
     "typescript": "7.0.2",
     "typescript-compiler-api": "npm:typescript@5.9.3"
   },
   "peerDependencies": {
-    "@opencode/cli": ">=2.0.26 <2.1.0"
+    "@opencode/cli": ">=2.1.3 <2.2.0"
   },
   "trustedDependencies": [
     "@opencode/cli"

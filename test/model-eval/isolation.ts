@@ -1,6 +1,6 @@
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export interface EvaluationIsolation {
@@ -46,7 +46,7 @@ export async function createEvaluationIsolation(
     agent: { build: { mode: "primary", model: qualifiedModel } },
     plugin: [
       [
-        pathToFileURL(entry).href,
+        pathToFileURL(dirname(entry)).href,
         {
           stateDirectory: paths.pluginState,
           policies: { message: "allow", ask: "allow", wait: "allow", start: "allow" },

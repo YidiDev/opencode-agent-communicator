@@ -13,18 +13,22 @@ This section is normative for issue #46 and supersedes the historical OpenCode 1
 transport, imperative approval, active-only ask/wait, native sanitizer, and raw-response-bound
 descriptions retained later in this plan. Those historical acceptance criteria are not v2 guarantees.
 
-- The certified host is Linux x64 with Bun `1.4.0` and stable OpenCode `>=2.0.26 <2.1.0`.
-  `@opencode/plugin` and `@opencode/cli` are pinned to `2.0.26` for the build.
+- The current compatibility baseline is Linux x64 with Bun `1.4.0` and stable OpenCode `>=2.1.3 <2.2.0`.
+  `@opencode/plugin` and `@opencode/cli` are pinned to `2.1.3`, with Effect `4.0.1`.
+  This supersedes v0.8.0's 2.0-only support. The installed `src/` directory is the local plugin
+  source; a file URL ending in `src/index.ts` is rejected by the 2.1 loader before plugin setup.
 - The entrypoint is a public v2 Effect plugin created with `Plugin.define`. Recovery completes in the
   scoped plugin effect before `tool.transform` publishes the exact existing 21 tool IDs;
   `skill.transform` publishes the exact three bundled skills. No private HTTP transport is allowed.
-- OpenCode v2 exposes ID-addressed sessions but no authoritative global inventory. `session_list`
-  therefore queries the bounded communicator-observed participant registry introduced by migration
+- `session_list` retains the bounded communicator-observed participant registry introduced by migration
   v17, then authoritatively revalidates every candidate through the public session API. Registry
   presence is discovery evidence, never visibility, deletion, activity, or authorization proof.
   Listing scans up to ten keyset pages of 100 candidates and fails explicitly on budget exhaustion
   before filling the result. At the row ceiling, the oldest discovery candidate is evicted without
   deleting protocol records or managed-session provenance.
+- The 2.1.3 public plugin context exposes paginated session listing, but not an authoritative current
+  activity query. Host-wide inventory integration is not part of this compatibility change. Explicit
+  context delivery and stop therefore retain their fail-closed unsupported outcomes.
 - Transcript-visible message delivery and existing-root ask/wait workflows persist their prepared
   state before one public queue admission. They require current root visibility but no prior
   `busy`/`retry` observation. Admission never proves activation, reading, compliance, or completion.

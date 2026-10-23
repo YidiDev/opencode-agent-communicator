@@ -1,6 +1,6 @@
-const configuredOpenCodeVersion = process.env.OPENCODE_COMPAT_VERSION ?? "2.0.26";
-if (configuredOpenCodeVersion !== "2.0.26") {
-  throw new Error("OPENCODE_COMPAT_VERSION must equal the pinned OpenCode 2.0.26 release");
+const configuredOpenCodeVersion = process.env.OPENCODE_COMPAT_VERSION ?? "2.1.3";
+if (configuredOpenCodeVersion !== "2.1.3") {
+  throw new Error("OPENCODE_COMPAT_VERSION must equal the pinned OpenCode 2.1.3 release");
 }
 export const exactOpenCodeVersion = configuredOpenCodeVersion;
 export const liveServerPassword = "live-test-password";

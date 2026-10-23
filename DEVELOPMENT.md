@@ -10,6 +10,34 @@ practical and otherwise during review.
 
 ## 1. Priorities
 
+### OpenCode 2.1.3 compatibility evidence (#49)
+
+The isolated v0.8.0/2.0.26 control passed (2 tests, 35 assertions). One earlier control run failed
+during ownership startup; that result is not evidence that the prolonged-runtime issue #46 is fixed.
+With OpenCode 2.1.3, both the released source and the configured pre-release migration artifact were
+omitted when configured as `src/index.ts` files. The host's diagnostic was
+`configured plugin path must be a directory`. Pointing those artifacts to their `src/` directories
+instead produced failed registry entries with the old `>=2.0.26 <2.1.0` version-guard diagnostic.
+Source resolution and host compatibility are separate boundaries.
+
+Packed-host acquisition applies one abortable deadline to the initial location request and every
+registration poll. Timeout must reach resource cleanup; a test-runner timeout alone is insufficient.
+
+The new packed tests load the actual installed `src/` directory, with no wrapper module. Exact
+`@opencode/plugin@2.1.3` declarations and `@opencode/client` operations were checked for Effect-scoped
+acquisition/finalization, tool/skill transforms, primary tool options, context hooks, event envelopes,
+root identity and timestamps, fixed-ID creation/update, queue admission, interrupt, typed absence,
+and current-context projection. The existing adapter shapes typecheck with aligned Effect `4.0.1`;
+live completed results and the existing adversarial regressions remain required beyond typechecking.
+Public `session.list` is now available, but the plugin context has no authoritative current-activity
+query. Registry-driven discovery and explicit unsupported context/stop results are retained.
+
+Support is deliberately narrowed to stable `>=2.1.3 <2.2.0`; this change does not certify the old
+2.0/Effect-RC combination. The minimum and build-time host coincide. A later compatibility release,
+side-by-side immutable installation, coordinated service restart, and actual-environment smoke test
+are separate from isolated acceptance. Do not publish to npm or restart the active shared service
+as part of a compatibility test. Keep #46 open for its independent soak and causal investigation.
+
 When rules compete, use this order:
 
 1. Correctness and preservation of documented invariants.
@@ -254,7 +282,8 @@ test/
 - The regular suite has an exact reviewed skip declaration budget enforced by
   `tools/verify-test-skips.mjs`; adding or moving a skip requires explicit review.
 - Linux CI MUST run `test:acceptance:secure-export` with the capability requirement enabled. That
-  cell runs the two capability acceptance tests and `linux-export-destination.test.ts`, including its
+  cell runs the two capability acceptance tests, the actual packed OpenCode 2.1.3 loading/start/read/export
+  journeys, and `linux-export-destination.test.ts`, including its
   four normally capability-skipped tests. The cell fails when descriptor-backed installation or
   atomic replacement is absent and parses Bun's JUnit report to require exactly zero skipped tests.
   It uses a reviewed Debian container with no network, a read-only root, bounded CPU/memory/PIDs,
@@ -339,7 +368,7 @@ test:live
 
 `check` is the local pre-commit quality gate and MUST run formatting checks,
 linting, custom convention checks, type checking, and non-live tests.
-Type checking uses `skipLibCheck` because the pinned OpenCode 2.0.26 package
+Type checking uses `skipLibCheck` because the original OpenCode 2.0.26 package
 publishes declarations that fail its own exact-optional constraints; project
 source and tests remain fully checked.
 
