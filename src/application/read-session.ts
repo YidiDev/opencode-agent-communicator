@@ -308,6 +308,7 @@ async function assembleReadResult(
     ok: true,
     value: {
       sessionId: read.target,
+      ...(traversed.earlierContextUnavailable ? { earlierContextUnavailable: true } : {}),
       content: packed.content,
       startCursor,
       endCursor,

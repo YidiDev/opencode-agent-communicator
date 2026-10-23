@@ -90,6 +90,7 @@ export interface PackedProjectionLines {
 }
 
 export interface SessionReadValue {
+  readonly earlierContextUnavailable?: boolean;
   readonly sessionId: SessionId;
   readonly content: string;
   readonly startCursor: string;

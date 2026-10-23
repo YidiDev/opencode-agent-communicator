@@ -17,6 +17,7 @@ export interface CurrentContextProjection {
   readonly projectedTextByteCount: number;
   readonly snapshotSha256: string;
   readonly serializedByteCount: number;
+  readonly earlierContextUnavailable: boolean;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -47,14 +48,18 @@ function toolStatus(value: unknown): ToolProjectionStatus | undefined {
  */
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: strict untrusted host-shape projection keeps every rejected field and bound adjacent.
 export function projectOpenCodeContext(value: unknown): CurrentContextProjection {
-  if (!Array.isArray(value) || value.length > sessionReadLimits.maxMessagesExamined) {
+  if (!Array.isArray(value)) {
     throw new TypeError("OpenCode current context is malformed or exceeds its message bound.");
   }
   const messages: ProjectionSafeMessage[] = [];
   const examinedMessageIds: string[] = [];
   let examinedPartCount = 0;
   let projectedTextByteCount = 0;
-  for (const candidate of value) {
+  const contextLength = value.length;
+  const tailStart = Math.max(0, contextLength - sessionReadLimits.maxMessagesExamined);
+  // Index only the bounded tail: even getters in the excluded prefix must not be visited.
+  for (let index = tailStart; index < contextLength; index += 1) {
+    const candidate = value[index];
     const message = record(candidate);
     const messageId = boundedToken(message?.id);
     if (!message || !messageId || examinedMessageIds.includes(messageId)) {
@@ -132,8 +137,9 @@ export function projectOpenCodeContext(value: unknown): CurrentContextProjection
     examinedMessageCount: examinedMessageIds.length,
     examinedPartCount,
     projectedTextByteCount,
-    snapshotSha256: createHash("sha256").update(serialized).digest("hex"),
+    snapshotSha256: createHash("sha256").update(`${tailStart}\0${serialized}`).digest("hex"),
     serializedByteCount,
+    earlierContextUnavailable: tailStart > 0,
   });
 }
 

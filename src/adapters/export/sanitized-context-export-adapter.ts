@@ -84,6 +84,7 @@ export class SanitizedContextExportAdapter implements SessionExportAdapterPort, 
           abort: input.abort,
         });
         projectionBytes += page.rawResponseByteCount;
+        if (page.earlierContextUnavailable) return { ok: false, code: "export_limit_exceeded" };
         if (
           !Number.isSafeInteger(projectionBytes) ||
           page.rawResponseByteCount < 0 ||

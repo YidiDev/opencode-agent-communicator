@@ -23,6 +23,36 @@ const native = createOpenCode2NativeAdapter({
 });
 const request = { workspaceKey: workspace, sessionId: target, abort: new AbortController().signal };
 
+test("projects only the newest 512 entries without touching excluded prefix getters", () => {
+  const context = Array.from({ length: 536 }, (_, index) => ({ id: `msg${index}`, type: "user" }));
+  Object.defineProperty(context, 0, {
+    get() {
+      throw new Error("excluded entry accessed");
+    },
+  });
+  const projected = projectOpenCodeContext(context);
+  expect(projected.earlierContextUnavailable).toBe(true);
+  expect(projected.examinedMessageCount).toBe(512);
+  expect(projected.messages[0]?.messageId).toBe("msg24");
+  expect(projected.messages.at(-1)?.messageId).toBe("msg535");
+  expect(projectOpenCodeContext(snapshot).earlierContextUnavailable).toBe(false);
+  // The same retained messages at a different window offset invalidate native cursors.
+  expect(projectOpenCodeContext(context.slice(24)).snapshotSha256).not.toBe(
+    projected.snapshotSha256,
+  );
+});
+
+test("a host getter cannot extend projection work beyond the captured window", () => {
+  const context: unknown[] = [{ id: "first", type: "user" }];
+  Object.defineProperty(context, 0, {
+    get() {
+      context.push({ id: "unexpected", type: "user" });
+      return { id: "first", type: "user" };
+    },
+  });
+  expect(projectOpenCodeContext(context).examinedMessageCount).toBe(1);
+});
+
 test.each(["asc", "desc"] as const)("pages %s while charging each full snapshot", async (order) => {
   const first = await native.readMessagePage({ ...request, order });
   expect(first.rawResponseByteCount).toBe(projectOpenCodeContext(snapshot).serializedByteCount);

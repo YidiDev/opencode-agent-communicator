@@ -5,7 +5,7 @@ safety ceilings stop startup before the SQLite store opens.
 
 ```json
 [
-  "file:///home/operator/.local/share/opencode-agent-communicator/v0.9.0/node_modules/opencode-agent-communicator/src",
+  "file:///home/operator/.local/share/opencode-agent-communicator/v0.9.1/node_modules/opencode-agent-communicator/src",
   {
     "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
     "startupDeadlineMs": 30000,
@@ -52,7 +52,7 @@ safety ceilings stop startup before the SQLite store opens.
 ## Runtime and registration
 
 The supported runtime is Linux x64, Bun `1.4.0`, and stable OpenCode `>=2.1.3 <2.2.0`.
-Install the immutable v0.9.0 release. OpenCode 2.1 local sources must be directories containing `index.ts`; do not
+Install the immutable v0.9.1 release. OpenCode 2.1 local sources must be directories containing `index.ts`; do not
 append `/index.ts` to the configured path. The published v0.8.0 tag remains a 2.0-only release.
 OpenCode loads the plugin through its public v2 Effect API. The entrypoint uses `Plugin.define`,
 publishes all 21 tool IDs atomically through `tool.transform`, registers the three bundled skills

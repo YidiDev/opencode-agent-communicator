@@ -16,5 +16,5 @@ RUN mkdir /package && bun pm pack --ignore-scripts --destination /package
 RUN apk add --no-cache npm
 RUN mkdir /consumer
 WORKDIR /consumer
-RUN npm install --ignore-scripts --no-audit --no-fund /package/opencode-agent-communicator-0.9.0.tgz
+RUN npm install --ignore-scripts --no-audit --no-fund /package/opencode-agent-communicator-0.9.1.tgz
 RUN bun -e 'import plugin from "opencode-agent-communicator"; if (plugin.id !== "opencode-agent-communicator" || typeof plugin.effect !== "function") throw new Error("packed entry is not a v2 Effect plugin")'

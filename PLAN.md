@@ -33,6 +33,10 @@ descriptions retained later in this plan. Those historical acceptance criteria a
   state before one public queue admission. They require current root visibility but no prior
   `busy`/`retry` observation. Admission never proves activation, reading, compliance, or completion.
 - `session_read` and `session_export` consume only the bounded public current-model-context snapshot.
+  Reads select at most the newest 512 entries without inspecting an excluded prefix and report
+  `earlier_context_unavailable: true` when truncated. Pagination flags and cursors cover only that
+  window; moved-out anchors fail closed. All existing invocation work budgets remain enforced.
+  Export rejects a truncated window as `export_limit_exceeded` before creating a file.
   Both expose sanitized projections, not complete history. Snapshot changes fail cursors closed;
   neither operation may infer omitted content or call a private transcript endpoint. Export is always
   sanitized and does not spawn the OpenCode CLI. Its public limits are output bytes, concurrency,

@@ -65,6 +65,7 @@ export function publicSessionExport(value: SessionExportSummary): Record<string,
 
 export function publicSessionRead(value: SessionReadValue): Record<string, unknown> {
   return {
+    ...(value.earlierContextUnavailable ? { earlier_context_unavailable: true } : {}),
     session_id: value.sessionId,
     content: value.content,
     start_cursor: value.startCursor,

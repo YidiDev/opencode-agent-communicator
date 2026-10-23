@@ -30,6 +30,8 @@ export interface NativeFixedMessageRequest extends NativeSessionReadRequest {
 }
 
 export interface NativeMessagePage {
+  /** Older current-context entries were deliberately excluded from the bounded tail. */
+  readonly earlierContextUnavailable?: boolean;
   readonly messages: readonly ProjectionSafeMessage[];
   /** Every raw native message ID in exact native order, including omitted variants. */
   readonly examinedMessageIds: readonly string[];

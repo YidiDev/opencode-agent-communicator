@@ -15,8 +15,8 @@ type SessionReadArgs = {
 }
 ```
 
-Without a cursor, the tool returns the chronological tail of the current-context snapshot. With a
-cursor, omitted `direction` means `after`. `direction` without a cursor and an empty cursor are
+Without a cursor, the tool returns the chronological tail of the newest 512 current-context entries.
+With a cursor, omitted `direction` means `after`. `direction` without a cursor and an empty cursor are
 invalid. `limit` defaults to 100 rendered lines and accepts 1 through 500. Content is limited to
 65,536 UTF-8 bytes, and a rendered line is limited to 4,096 UTF-8 bytes.
 
@@ -26,13 +26,20 @@ current public evidence to validate the caller, target, and snapshot. Unknown ac
 prevent a read: it produces `is_live: false`, which does not establish idleness. Missing visibility
 returns `caller_not_visible` or `target_not_visible`; malformed evidence returns `native_unavailable`.
 
+If the host context has more than 512 entries, successful reads include
+`earlier_context_unavailable: true`. Excluded entries are not inspected, copied, or reachable through
+cursors. The flag is omitted when no entries were excluded by this window. `has_more_before` and
+`has_more_after` describe only the retained window; false does not mean that excluded context is
+available or that the full current context was read. Other message, part, byte, and call budgets
+remain unchanged and can still return `native_unavailable` during cursor traversal.
+
 ## Projection, not history
 
 OpenCode v2 exposes the current model context through the public Effect plugin session context. That
 snapshot may omit compacted, pruned, or otherwise non-current messages. Consequently:
 
-- page boundaries and cursors apply only to the observed current-context snapshot;
-- `has_more_before: false` means no earlier projected item exists in that snapshot, not that the
+- page boundaries and cursors apply only to the retained current-context window;
+- `has_more_before: false` means no earlier projected item exists in that window, not that the
   session has no earlier history;
 - a changed snapshot invalidates its cursor rather than being merged with guessed history; and
 - the communicator never reaches through a private HTTP endpoint to recover omitted content.
@@ -80,7 +87,7 @@ One invocation is bounded to 500 returned lines, 65,536 returned bytes, 8 messag
 4 MiB of serialized restricted snapshot per host call, 32 MiB cumulatively, and a 512-character
 native cursor. Every call charges the entire restricted snapshot, including fixed-message misses;
 returning a small page does not reduce that charge. Each host snapshot is separately limited to
-512 message entries, 16,384 examined assistant parts and 8 MiB of eligible assistant text.
+the newest 512 message entries, 16,384 examined assistant parts and 8 MiB of eligible assistant text.
 Structural ceilings additionally limit one text part to 1,048,576 UTF-16 code units, one assistant
 message to 4,096 parts, and one raw tool name
 to 256 UTF-16 code units.
