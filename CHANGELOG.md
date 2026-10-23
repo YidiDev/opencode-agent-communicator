@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-22
+
 ### Changed
 
 - Target stable OpenCode `>=2.1.3 <2.2.0` with aligned `@opencode/plugin` and `@opencode/cli`
@@ -368,7 +370,8 @@ All notable changes to this project are documented in this file. The format is b
   behavior, ownership loss, and unavailable secure-export capabilities.
 - Communication remains untrusted advisory data and does not provide remote command execution.
 
-[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.4...v0.8.0
 [0.7.4]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/YidiDev/opencode-agent-communicator/compare/v0.7.2...v0.7.3

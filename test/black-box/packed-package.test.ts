@@ -96,7 +96,7 @@ describe("packed npm archive", () => {
       engines: { opencode: string };
     };
     expect(metadata).toMatchObject({
-      version: "0.8.0",
+      version: "0.9.0",
       exports: { ".": "./src/index.ts" },
       os: ["linux"],
       cpu: ["x64"],
