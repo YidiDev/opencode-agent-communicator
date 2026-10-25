@@ -2,12 +2,15 @@ name: Publish npm release
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'v[0-9]*'
 
 permissions:
   contents: read
 
 concurrency:
-  group: npm-release-${{ github.ref }}
+  group: public-package-release
   cancel-in-progress: false
 
 jobs:
@@ -15,6 +18,10 @@ jobs:
     name: Tag and package version
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      version: ${{ steps.policy.outputs.version }}
+      dist_tag: ${{ steps.policy.outputs.dist_tag }}
+      prerelease: ${{ steps.policy.outputs.prerelease }}
     steps:
       - name: Check out tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -30,6 +37,19 @@ jobs:
           [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
           git merge-base --is-ancestor "$RELEASE_COMMIT" refs/remotes/origin/main
+      - name: Require the exact public repository and publishing policy
+        id: policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$GITHUB_REPOSITORY" = YidiDev/opencode-agent-communicator
+          test "$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)" = false
+          node tools/release-policy.mjs > "$RUNNER_TEMP/release-metadata.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const p=JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/release-metadata.json`));
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${p.version}\ndist_tag=${p.distTag}\nprerelease=${p.prerelease}\n`);
+          NODE
       - name: Require an exact v<package-version> tag
         env:
           RELEASE_REF: ${{ github.ref }}
@@ -70,13 +90,16 @@ jobs:
       - name: Set up Node for npm
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: 24.22.1
+          package-manager-cache: false
       - name: Set up Bun 1.4.0
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
+      - name: Verify reviewed production license inventory
+        run: bun run check:licenses
       - name: Recheck tag and package version
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -90,10 +113,14 @@ jobs:
           bun run verify:package
           mkdir release
           npm pack --json --pack-destination release > release/pack-report.json
+          npm sbom --omit=dev --sbom-format=cyclonedx > release/sbom.cdx.json
+          node -e 'const s=require("fs").readFileSync("release/sbom.cdx.json","utf8"); JSON.parse(s); if(/\/home\/|\/tmp\/|_authToken|_password/.test(s)) throw Error("SBOM contains private build-location or credential metadata")'
+          cp THIRD_PARTY_LICENSES.json THIRD_PARTY_NOTICES.md release/
+          node tools/release-policy.mjs > release/release-metadata.json
           archive_count="$(find release -maxdepth 1 -type f -name '*.tgz' | wc -l)"
           test "$archive_count" = 1
           archive="$(find release -maxdepth 1 -type f -name '*.tgz')"
-          (cd release && sha256sum "$(basename "$archive")" > SHA256SUMS)
+          (cd release && sha256sum "$(basename "$archive")" sbom.cdx.json THIRD_PARTY_LICENSES.json THIRD_PARTY_NOTICES.md release-metadata.json > SHA256SUMS)
           archive_sha256="$(sha256sum "$archive" | cut -d ' ' -f 1)"
           [[ "$archive_sha256" =~ ^[0-9a-f]{64}$ ]]
           printf 'archive_sha256=%s\n' "$archive_sha256" >> "$GITHUB_OUTPUT"
@@ -104,12 +131,12 @@ jobs:
           name: npm-release-${{ github.sha }}
           path: release/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 90
           compression-level: 0
 
   publish:
     name: Publish the verified archive
-    needs: archive
+    needs: [metadata, archive]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: release
@@ -125,20 +152,119 @@ jobs:
       - name: Set up Node for npm trusted publishing
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          # Node 24.6.0 ships with npm 11.5.1; do not install packages in this OIDC job.
-          node-version: 24.6.0
+          # Pin a current LTS toolchain; never install dependencies in this OIDC job.
+          node-version: 24.22.1
+          package-manager-cache: false
+      - name: Download the exact release verifier without checking out executable package code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          mkdir tools
+          for file in release-policy.mjs release-registry.mjs; do
+            gh api "repos/$GITHUB_REPOSITORY/contents/tools/$file?ref=$RELEASE_COMMIT" --jq .content | base64 --decode > "tools/$file"
+          done
       - name: Verify digest and publish that exact archive
         working-directory: release
         env:
           EXPECTED_ARCHIVE_SHA256: ${{ needs.archive.outputs.archive_sha256 }}
+          NPM_DIST_TAG: ${{ needs.metadata.outputs.dist_tag }}
         run: |
           test -z "${NODE_AUTH_TOKEN:-}"
-          test "$(node --version)" = "v24.6.0"
-          test "$(npm --version)" = "11.5.1"
+          test "$(node --version)" = "v24.22.1"
+          test "$(npm --version)" = "11.19.1"
           [[ "$EXPECTED_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           sha256sum --check SHA256SUMS
           archive_count="$(find . -maxdepth 1 -type f -name '*.tgz' | wc -l)"
           test "$archive_count" = 1
           archive="$(find . -maxdepth 1 -type f -name '*.tgz')"
           test "$(sha256sum "$archive" | cut -d ' ' -f 1)" = "$EXPECTED_ARCHIVE_SHA256"
-          npm publish "$archive" --access public --provenance
+          state="$(node ../tools/release-registry.mjs .)"
+          if test "$state" = absent; then
+            npm publish "$archive" --access public --provenance --ignore-scripts --tag "$NPM_DIST_TAG"
+          else
+            test "$state" = published
+            echo 'Exact archive already published with provenance; continuing verification.'
+          fi
+          node ../tools/release-registry.mjs . --verify-download
+
+  consumer:
+    name: Verify the public npm installation
+    needs: [metadata, archive, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.22.1
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-release-${{ github.sha }}
+          path: release
+      - name: Download the exact provenance origin checker
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          mkdir tools
+          for file in release-policy.mjs release-provenance.mjs; do
+            gh api "repos/$GITHUB_REPOSITORY/contents/tools/$file?ref=$RELEASE_COMMIT" --jq .content | base64 --decode > "tools/$file"
+          done
+      - name: Install from npm without local runtime links or lifecycle scripts
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+          EXPECTED_SOURCE_COMMIT: ${{ github.sha }}
+          EXPECTED_ARCHIVE_SHA256: ${{ needs.archive.outputs.archive_sha256 }}
+        run: |
+          (cd release && sha256sum --check SHA256SUMS)
+          test "$(sha256sum release/*.tgz | cut -d ' ' -f 1)" = "$EXPECTED_ARCHIVE_SHA256"
+          mkdir consumer
+          cd consumer
+          npm install --ignore-scripts --no-audit --no-fund "opencode-agent-communicator@$VERSION"
+          bun -e 'import plugin from "opencode-agent-communicator"; if(plugin.id !== "opencode-agent-communicator" || typeof plugin.effect !== "function") throw Error("Invalid installed plugin")'
+          npm audit signatures
+          npm audit --audit-level=high
+          node ../tools/release-provenance.mjs ../release
+
+  github-release:
+    name: Publish the same verified assets to GitHub
+    needs: [metadata, archive, consumer]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-release-${{ github.sha }}
+          path: release
+      - name: Verify checksums and publish a new GitHub release without overwriting assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.metadata.outputs.prerelease }}
+        run: |
+          (cd release && sha256sum --check SHA256SUMS)
+          args=()
+          if test "$PRERELEASE" = true; then args+=(--prerelease); else test "$PRERELEASE" = false; fi
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            mkdir existing
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir existing
+            diff -r release existing
+            test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)" = "$PRERELEASE"
+          else
+            gh release create "$RELEASE_TAG" release/* --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "$RELEASE_TAG" --generate-notes "${args[@]}"
+            mkdir uploaded
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir uploaded
+            diff -r release uploaded
+          fi
+          if test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true; then
+            if test "$PRERELEASE" = true; then latest=false; else latest=true; fi
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$latest"
+          fi

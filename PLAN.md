@@ -9,6 +9,12 @@ OpenCode backend.
 
 ### Current OpenCode v2 baseline
 
+Public v1 release candidates follow `docs/v1-compatibility.md` and `docs/releases.md`.
+They preserve the existing runtime and protocol boundaries. Stable publication is blocked until
+reviewed 48-hour soak evidence matches the runtime, skills, and dependency digest; a green ordinary
+suite is not that evidence. Copyright in original project work belongs to Yidi Sprei; third-party
+and independent contributor rights remain intact. Public release tags and artifacts are immutable.
+
 This section is normative for issue #46 and supersedes the historical OpenCode 1.18 feasibility and
 transport, imperative approval, active-only ask/wait, native sanitizer, and raw-response-bound
 descriptions retained later in this plan. Those historical acceptance criteria are not v2 guarantees.

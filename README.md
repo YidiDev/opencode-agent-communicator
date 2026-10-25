@@ -6,13 +6,20 @@
 [![OpenCode v2 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** `v0.9.1` supports Linux x64 and
+**Release status:** preparing `v1.0.0-rc.1`, a release candidate, not stable v1. <!-- x-release-please-version -->
+The v1 line supports Linux x64 and
 stable OpenCode versions `>=2.1.3 <2.2.0`. Bun `1.4.0` is required for development and release verification. Other
 architectures, operating systems, OpenCode versions, and prereleases are unsupported.
 The published `v0.8.0` tag supports OpenCode `>=2.0.26 <2.1.0`, not 2.1.3. The older `v0.7.4`
 tag targets OpenCode 1.18. Do not assume the version in an arbitrary checkout identifies its release.
 The extended multi-repository soak and prolonged-runtime investigation remain outstanding in
 [#46](https://github.com/YidiDev/opencode-agent-communicator/issues/46).
+
+Created and maintained by **Yidi Sprei ([@YidiDev](https://github.com/YidiDev))**.
+Copyright in original project work is held by Yidi Sprei under the [MIT License](LICENSE).
+Third-party software retains its own ownership and licenses; see
+[third-party notices](THIRD_PARTY_NOTICES.md) and the
+[v1 compatibility contract](docs/v1-compatibility.md).
 
 ## Contents
 
@@ -44,7 +51,7 @@ execution.
 
 - Linux x64 with a local filesystem suitable for SQLite WAL
 - A stable OpenCode version in `>=2.1.3 <2.2.0`
-- npm with Git and SSH support for private package installation
+- npm for installing an exact published version
 - Bun `1.4.0` for development and release verification
 - A dedicated private state directory owned by the account running OpenCode
 
@@ -58,33 +65,34 @@ metadata and release gates. Network and clustered filesystems are rejected for t
 
 ### 1. Install the plugin
 
-Install the immutable GitHub release outside OpenCode:
+After the RC is published, install its exact npm version outside OpenCode:
 
 ```bash
-install_root="$HOME/.local/share/opencode-agent-communicator/v0.9.1"
+plugin_version="1.0.0-rc.1" # x-release-please-version
+install_root="$HOME/.local/share/opencode-agent-communicator/v$plugin_version"
 install -d -m 0700 "$install_root"
 npm install --prefix "$install_root" --save-exact --ignore-scripts \
-  "git+ssh://git@github.com/YidiDev/opencode-agent-communicator.git#v0.9.1"
+  "opencode-agent-communicator@$plugin_version"
 test -f "$install_root/node_modules/opencode-agent-communicator/src/index.ts"
 ```
 
-The repository is private, so the account running npm and OpenCode must have working GitHub SSH
-access. Do not install mutable branch references or reuse the v0.8.0 installation for this update.
-GitHub release and npm publication remain separate operations.
+RCs use the npm `next` channel; stable releases use `latest`. Pin the exact version rather than
+letting a running installation float between releases. GitHub releases attach the same archive,
+checksums, SBOM, and license inventory. Do not reuse an older installation directory for an upgrade.
 
 ### 2. Add the plugin
 
 Configure the installed `src/` **directory**, not its `index.ts` file, as an absolute `file://` URL.
-Replace `/home/operator` with the installation account's home.
+Replace `/home/operator` with the installation account's home and `<VERSION>` with the exact installed version.
 OpenCode 2.1 rejects configured file sources before plugin setup:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": [
-    [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.9.1/node_modules/opencode-agent-communicator/src",
-      {
+  "plugins": [
+    {
+      "package": "file:///home/operator/.local/share/opencode-agent-communicator/v<VERSION>/node_modules/opencode-agent-communicator/src",
+      "options": {
         "policies": {
           "message": "allow",
           "ask": "allow",
@@ -94,12 +102,12 @@ OpenCode 2.1 rejects configured file sources before plugin setup:
           "stop": "deny"
         }
       }
-    ]
+    }
   ]
 }
 ```
 
-OpenCode v2 accepts the tuple form for a plugin source and its strict package-specific options. The
+OpenCode v2 accepts the object form for a plugin source and its strict package-specific options. The
 entrypoint uses the public `Plugin.define` Effect API and registers tools and skills through
 `tool.transform` and `skill.transform`; it does not use a private HTTP transport. Keep the private
 installation directory in place while OpenCode uses it.
@@ -153,10 +161,10 @@ This example shows every public option. Omit values you do not need; unknown key
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": [
-    [
-      "file:///home/operator/.local/share/opencode-agent-communicator/v0.9.1/node_modules/opencode-agent-communicator/src",
-      {
+  "plugins": [
+    {
+      "package": "file:///home/operator/.local/share/opencode-agent-communicator/v<VERSION>/node_modules/opencode-agent-communicator/src",
+      "options": {
         "stateDirectory": "/home/operator/.local/state/opencode-agent-communicator",
         "startupDeadlineMs": 30000,
         "invocationDeadlineMs": 3600000,
@@ -196,7 +204,7 @@ This example shows every public option. Omit values you do not need; unknown key
           }
         }
       }
-    ]
+    }
   ]
 }
 ```
@@ -869,9 +877,11 @@ exact ordered 21-tool manifest, all three bundled skills, and a reviewed
 fingerprint of every path npm will pack. It rejects path-policy drift, symlinks, executable entries,
 secret-like names, and generated/test output. The black-box test creates an archive without
 publishing it, installs it into an isolated Bun project, imports the package by name, and checks
-packaged runtime assets. Published releases are distributed through immutable Git tags. The separate
-trusted-publication workflow accepts only an explicit manual dispatch from the exact release tag and
-publishes the previously verified archive to npm with provenance.
+packaged runtime assets. Public v1 tags and release assets are immutable. Tag pushes trigger the
+trusted-publication workflow; manual dispatch on the exact tag is a recovery path with the same
+checks. GitHub and npm receive the same verified archive, with npm provenance. See the
+[release operations guide](docs/releases.md) for trusted-publisher identity, bot permissions,
+partial-failure recovery, and stable-readiness gates.
 
 Live compatibility tests launch isolated OpenCode v2 hosts for the minimum supported patch and
 the exact build-time patch:

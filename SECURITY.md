@@ -6,9 +6,14 @@ This project is prerelease software. Security fixes are provided only for the cu
 
 | Version | Supported | Required host |
 | --- | --- | --- |
-| 0.7.x | Yes | Linux x64, stable OpenCode >=1.18.21 <1.19.0; Bun 1.4.0 for verification |
-| 0.6.x and earlier | No | Not applicable |
+| 1.0.0 release candidates | Preview; not stable | Linux x64, stable OpenCode >=2.1.3 <2.2.0; Bun 1.4.0 for verification |
+| 0.9.1 | Superseded; lacks the RC dependency security fixes | Linux x64, stable OpenCode >=2.1.3 <2.2.0 |
+| 0.9.0 and earlier | No | Not applicable |
 | Earlier development builds | No | Not applicable |
+
+Before v1 becomes stable, the release candidate is the security-fix target, not a stability
+guarantee. It updates the vulnerable Zod and locked Undici versions identified during the public
+launch audit. Existing release archives are not replaced or relabeled.
 
 Host compatibility is part of the security boundary. Do not use this release on another operating
 system or CPU architecture, or with an OpenCode version outside the supported stable range. Bun
@@ -55,15 +60,15 @@ The following documented constraints are not vulnerabilities by themselves:
   security-boundary failure; `session_lock_list` is the authoritative current view.
 - `session_read` returns a restricted projection, not a sanitized transcript. Included assistant text
   remains untrusted, prompt-injection-capable peer data. Self-read is limited to the current visible
-  root; cross-session reads require exact per-invocation approval and repeated abort-aware visibility
+  root; cross-session reads require static allow policy and repeated abort-aware visibility
   checks. The tool has immutable line, byte, cursor, native call, message, assistant-part, rendered-line,
-  and pre-deserialization response bounds. Its invocation-wide budget includes the final anchor reread,
+  and post-materialization projection bounds. Its invocation-wide budget includes the final anchor reread,
   and it does not persist, log, export, or write transcript content.
 - `cursor_stale` intentionally refuses continuation when a projected anchor or its bound prefix
   changed. Taking a fresh cursorless tail is the recovery path; guessing omitted content is not.
 
-The plugin has no remote command-execution feature. Its optional export adapter directly invokes only
-the configured, verified OpenCode executable without a shell. See
+The plugin has no remote command-execution feature. Its optional export adapter consumes only the
+public current-context projection and never spawns an OpenCode executable. See
 [Session export security](docs/session-export-security.md) for the complete export boundary and
 [Session read security](docs/session-read-security.md) for the projection, approval, cursor, and
 resource boundary. The session-read implementation requires isolated supported-OpenCode live

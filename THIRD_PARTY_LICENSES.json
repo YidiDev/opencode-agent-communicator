@@ -1,0 +1,1584 @@
+{
+  "schema_version": 1,
+  "scope": "installed production dependencies; not vendored code",
+  "packages": [
+    {
+      "name": "@ai-sdk/provider",
+      "version": "3.0.8",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@ai-sdk/provider/v/3.0.8"
+    },
+    {
+      "name": "@aws-crypto/crc32",
+      "version": "5.2.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-crypto/crc32/v/5.2.0"
+    },
+    {
+      "name": "@aws-crypto/sha256-browser",
+      "version": "5.2.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-crypto/sha256-browser/v/5.2.0"
+    },
+    {
+      "name": "@aws-crypto/sha256-js",
+      "version": "5.2.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-crypto/sha256-js/v/5.2.0"
+    },
+    {
+      "name": "@aws-crypto/supports-web-crypto",
+      "version": "5.2.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-crypto/supports-web-crypto/v/5.2.0"
+    },
+    {
+      "name": "@aws-crypto/util",
+      "version": "5.2.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-crypto/util/v/5.2.0"
+    },
+    {
+      "name": "@aws-sdk/client-cognito-identity",
+      "version": "3.1057.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/client-cognito-identity/v/3.1057.0"
+    },
+    {
+      "name": "@aws-sdk/core",
+      "version": "3.978.2",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/core/v/3.978.2"
+    },
+    {
+      "name": "@aws-sdk/credential-provider-cognito-identity",
+      "version": "3.972.72",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/credential-provider-cognito-identity/v/3.972.72"
+    },
+    {
+      "name": "@aws-sdk/credential-provider-env",
+      "version": "3.972.73",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/credential-provider-env/v/3.972.73"
+    },
+    {
+      "name": "@aws-sdk/credential-provider-http",
+      "version": "3.972.75",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/credential-provider-http/v/3.972.75"
+    },
+    {
+      "name": "@aws-sdk/credential-provider-ini",
+      "version": "3.973.18",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/credential-provider-ini/v/3.973.18"
+    },
+    {
+      "name": "@aws-sdk/credential-provider-login",
+      "version": "3.972.80",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/credential-provider-login/v/3.972.80"
+    },
+    {
+      "name": "@aws-sdk/credential-provider-node",
+      "version": "3.972.85",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/credential-provider-node/v/3.972.85"
+    },
+    {
+      "name": "@aws-sdk/credential-provider-process",
+      "version": "3.972.73",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/credential-provider-process/v/3.972.73"
+    },
+    {
+      "name": "@aws-sdk/credential-provider-sso",
+      "version": "3.973.17",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/credential-provider-sso/v/3.973.17"
+    },
+    {
+      "name": "@aws-sdk/credential-provider-web-identity",
+      "version": "3.972.79",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/credential-provider-web-identity/v/3.972.79"
+    },
+    {
+      "name": "@aws-sdk/credential-providers",
+      "version": "3.1057.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/credential-providers/v/3.1057.0"
+    },
+    {
+      "name": "@aws-sdk/nested-clients",
+      "version": "3.997.47",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/nested-clients/v/3.997.47"
+    },
+    {
+      "name": "@aws-sdk/signature-v4-multi-region",
+      "version": "3.996.48",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/signature-v4-multi-region/v/3.996.48"
+    },
+    {
+      "name": "@aws-sdk/token-providers",
+      "version": "3.1149.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/token-providers/v/3.1149.0"
+    },
+    {
+      "name": "@aws-sdk/types",
+      "version": "3.974.6",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/types/v/3.974.6"
+    },
+    {
+      "name": "@aws-sdk/util-locate-window",
+      "version": "3.965.10",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/util-locate-window/v/3.965.10"
+    },
+    {
+      "name": "@aws-sdk/xml-builder",
+      "version": "3.972.41",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws-sdk/xml-builder/v/3.972.41"
+    },
+    {
+      "name": "@aws/lambda-invoke-store",
+      "version": "0.3.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@aws/lambda-invoke-store/v/0.3.0"
+    },
+    {
+      "name": "@effect/opentelemetry",
+      "version": "4.0.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@effect/opentelemetry/v/4.0.1"
+    },
+    {
+      "name": "@effect/platform-node",
+      "version": "4.0.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@effect/platform-node/v/4.0.1"
+    },
+    {
+      "name": "@effect/platform-node-shared",
+      "version": "4.0.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@effect/platform-node-shared/v/4.0.1"
+    },
+    {
+      "name": "@gar/promise-retry",
+      "version": "1.0.3",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@gar/promise-retry/v/1.0.3"
+    },
+    {
+      "name": "@isaacs/cliui",
+      "version": "8.0.2",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@isaacs/cliui/v/8.0.2"
+    },
+    {
+      "name": "@isaacs/fs-minipass",
+      "version": "4.0.1",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@isaacs/fs-minipass/v/4.0.1"
+    },
+    {
+      "name": "@isaacs/string-locale-compare",
+      "version": "1.1.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@isaacs/string-locale-compare/v/1.1.0"
+    },
+    {
+      "name": "@npmcli/agent",
+      "version": "4.0.2",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@npmcli/agent/v/4.0.2"
+    },
+    {
+      "name": "@npmcli/arborist",
+      "version": "9.4.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@npmcli/arborist/v/9.4.0"
+    },
+    {
+      "name": "@npmcli/config",
+      "version": "10.8.1",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@npmcli/config/v/10.8.1"
+    },
+    {
+      "name": "@npmcli/fs",
+      "version": "5.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@npmcli/fs/v/5.0.0"
+    },
+    {
+      "name": "@npmcli/git",
+      "version": "7.0.2",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@npmcli/git/v/7.0.2"
+    },
+    {
+      "name": "@npmcli/installed-package-contents",
+      "version": "4.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@npmcli/installed-package-contents/v/4.0.0"
+    },
+    {
+      "name": "@npmcli/map-workspaces",
+      "version": "5.0.3",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@npmcli/map-workspaces/v/5.0.3"
+    },
+    {
+      "name": "@npmcli/metavuln-calculator",
+      "version": "9.0.3",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@npmcli/metavuln-calculator/v/9.0.3"
+    },
+    {
+      "name": "@npmcli/name-from-folder",
+      "version": "4.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@npmcli/name-from-folder/v/4.0.0"
+    },
+    {
+      "name": "@npmcli/node-gyp",
+      "version": "5.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@npmcli/node-gyp/v/5.0.0"
+    },
+    {
+      "name": "@npmcli/package-json",
+      "version": "7.0.5",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@npmcli/package-json/v/7.0.5"
+    },
+    {
+      "name": "@npmcli/promise-spawn",
+      "version": "9.0.1",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@npmcli/promise-spawn/v/9.0.1"
+    },
+    {
+      "name": "@npmcli/query",
+      "version": "5.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@npmcli/query/v/5.0.0"
+    },
+    {
+      "name": "@npmcli/redact",
+      "version": "4.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@npmcli/redact/v/4.0.0"
+    },
+    {
+      "name": "@npmcli/run-script",
+      "version": "10.0.4",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/@npmcli/run-script/v/10.0.4"
+    },
+    {
+      "name": "@opencode/ai",
+      "version": "2.1.3",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@opencode/ai/v/2.1.3"
+    },
+    {
+      "name": "@opencode/client",
+      "version": "2.1.3",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@opencode/client/v/2.1.3"
+    },
+    {
+      "name": "@opencode/plugin",
+      "version": "2.1.3",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@opencode/plugin/v/2.1.3"
+    },
+    {
+      "name": "@opencode/protocol",
+      "version": "2.1.3",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@opencode/protocol/v/2.1.3"
+    },
+    {
+      "name": "@opencode/schema",
+      "version": "2.1.3",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@opencode/schema/v/2.1.3"
+    },
+    {
+      "name": "@opencode/util",
+      "version": "2.1.3",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@opencode/util/v/2.1.3"
+    },
+    {
+      "name": "@opentelemetry/api",
+      "version": "1.9.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@opentelemetry/api/v/1.9.0"
+    },
+    {
+      "name": "@opentelemetry/api-logs",
+      "version": "0.219.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@opentelemetry/api-logs/v/0.219.0"
+    },
+    {
+      "name": "@opentelemetry/context-async-hooks",
+      "version": "2.8.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@opentelemetry/context-async-hooks/v/2.8.0"
+    },
+    {
+      "name": "@opentelemetry/core",
+      "version": "2.8.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@opentelemetry/core/v/2.8.0"
+    },
+    {
+      "name": "@opentelemetry/exporter-trace-otlp-http",
+      "version": "0.219.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@opentelemetry/exporter-trace-otlp-http/v/0.219.0"
+    },
+    {
+      "name": "@opentelemetry/otlp-exporter-base",
+      "version": "0.219.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@opentelemetry/otlp-exporter-base/v/0.219.0"
+    },
+    {
+      "name": "@opentelemetry/otlp-transformer",
+      "version": "0.219.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@opentelemetry/otlp-transformer/v/0.219.0"
+    },
+    {
+      "name": "@opentelemetry/resources",
+      "version": "2.8.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@opentelemetry/resources/v/2.8.0"
+    },
+    {
+      "name": "@opentelemetry/sdk-logs",
+      "version": "0.219.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@opentelemetry/sdk-logs/v/0.219.0"
+    },
+    {
+      "name": "@opentelemetry/sdk-metrics",
+      "version": "2.8.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@opentelemetry/sdk-metrics/v/2.8.0"
+    },
+    {
+      "name": "@opentelemetry/sdk-trace-base",
+      "version": "2.8.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@opentelemetry/sdk-trace-base/v/2.8.0"
+    },
+    {
+      "name": "@opentelemetry/sdk-trace-node",
+      "version": "2.8.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@opentelemetry/sdk-trace-node/v/2.8.0"
+    },
+    {
+      "name": "@opentelemetry/semantic-conventions",
+      "version": "1.43.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@opentelemetry/semantic-conventions/v/1.43.0"
+    },
+    {
+      "name": "@pkgjs/parseargs",
+      "version": "0.11.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@pkgjs/parseargs/v/0.11.0"
+    },
+    {
+      "name": "@redis/bloom",
+      "version": "6.3.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@redis/bloom/v/6.3.0"
+    },
+    {
+      "name": "@redis/client",
+      "version": "6.3.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@redis/client/v/6.3.0"
+    },
+    {
+      "name": "@redis/json",
+      "version": "6.3.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@redis/json/v/6.3.0"
+    },
+    {
+      "name": "@redis/search",
+      "version": "6.3.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@redis/search/v/6.3.0"
+    },
+    {
+      "name": "@redis/time-series",
+      "version": "6.3.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@redis/time-series/v/6.3.0"
+    },
+    {
+      "name": "@sigstore/bundle",
+      "version": "4.0.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@sigstore/bundle/v/4.0.0"
+    },
+    {
+      "name": "@sigstore/core",
+      "version": "3.2.1",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@sigstore/core/v/3.2.1"
+    },
+    {
+      "name": "@sigstore/protobuf-specs",
+      "version": "0.5.2",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@sigstore/protobuf-specs/v/0.5.2"
+    },
+    {
+      "name": "@sigstore/sign",
+      "version": "4.1.1",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@sigstore/sign/v/4.1.1"
+    },
+    {
+      "name": "@sigstore/tuf",
+      "version": "4.0.2",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@sigstore/tuf/v/4.0.2"
+    },
+    {
+      "name": "@sigstore/verify",
+      "version": "3.1.1",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@sigstore/verify/v/3.1.1"
+    },
+    {
+      "name": "@smithy/core",
+      "version": "3.35.2",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@smithy/core/v/3.35.2"
+    },
+    {
+      "name": "@smithy/credential-provider-imds",
+      "version": "4.5.2",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@smithy/credential-provider-imds/v/4.5.2"
+    },
+    {
+      "name": "@smithy/eventstream-codec",
+      "version": "4.2.14",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@smithy/eventstream-codec/v/4.2.14"
+    },
+    {
+      "name": "@smithy/fetch-http-handler",
+      "version": "5.8.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@smithy/fetch-http-handler/v/5.8.0"
+    },
+    {
+      "name": "@smithy/is-array-buffer",
+      "version": "2.2.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@smithy/is-array-buffer/v/2.2.0"
+    },
+    {
+      "name": "@smithy/node-http-handler",
+      "version": "4.12.1",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@smithy/node-http-handler/v/4.12.1"
+    },
+    {
+      "name": "@smithy/signature-v4",
+      "version": "5.7.4",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@smithy/signature-v4/v/5.7.4"
+    },
+    {
+      "name": "@smithy/types",
+      "version": "4.19.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@smithy/types/v/4.19.0"
+    },
+    {
+      "name": "@smithy/util-buffer-from",
+      "version": "2.2.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@smithy/util-buffer-from/v/2.2.0"
+    },
+    {
+      "name": "@smithy/util-buffer-from",
+      "version": "4.5.2",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@smithy/util-buffer-from/v/4.5.2"
+    },
+    {
+      "name": "@smithy/util-hex-encoding",
+      "version": "4.5.2",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@smithy/util-hex-encoding/v/4.5.2"
+    },
+    {
+      "name": "@smithy/util-utf8",
+      "version": "2.3.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@smithy/util-utf8/v/2.3.0"
+    },
+    {
+      "name": "@smithy/util-utf8",
+      "version": "4.2.2",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/@smithy/util-utf8/v/4.2.2"
+    },
+    {
+      "name": "@standard-schema/spec",
+      "version": "1.1.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@standard-schema/spec/v/1.1.0"
+    },
+    {
+      "name": "@tufjs/canonical-json",
+      "version": "2.0.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@tufjs/canonical-json/v/2.0.0"
+    },
+    {
+      "name": "@tufjs/models",
+      "version": "4.1.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@tufjs/models/v/4.1.0"
+    },
+    {
+      "name": "@types/node",
+      "version": "26.2.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@types/node/v/26.2.0"
+    },
+    {
+      "name": "@types/ws",
+      "version": "8.18.2",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/@types/ws/v/8.18.2"
+    },
+    {
+      "name": "abbrev",
+      "version": "4.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/abbrev/v/4.0.0"
+    },
+    {
+      "name": "agent-base",
+      "version": "7.1.4",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/agent-base/v/7.1.4"
+    },
+    {
+      "name": "ansi-regex",
+      "version": "5.0.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/ansi-regex/v/5.0.1"
+    },
+    {
+      "name": "ansi-regex",
+      "version": "6.4.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/ansi-regex/v/6.4.0"
+    },
+    {
+      "name": "ansi-styles",
+      "version": "4.3.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/ansi-styles/v/4.3.0"
+    },
+    {
+      "name": "ansi-styles",
+      "version": "6.2.3",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/ansi-styles/v/6.2.3"
+    },
+    {
+      "name": "aws4fetch",
+      "version": "1.0.20",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/aws4fetch/v/1.0.20"
+    },
+    {
+      "name": "balanced-match",
+      "version": "1.0.2",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/balanced-match/v/1.0.2"
+    },
+    {
+      "name": "balanced-match",
+      "version": "4.0.4",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/balanced-match/v/4.0.4"
+    },
+    {
+      "name": "base64-js",
+      "version": "1.5.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/base64-js/v/1.5.1"
+    },
+    {
+      "name": "bignumber.js",
+      "version": "9.3.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/bignumber.js/v/9.3.1"
+    },
+    {
+      "name": "bin-links",
+      "version": "6.0.2",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/bin-links/v/6.0.2"
+    },
+    {
+      "name": "bowser",
+      "version": "2.14.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/bowser/v/2.14.1"
+    },
+    {
+      "name": "brace-expansion",
+      "version": "2.1.7",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/brace-expansion/v/2.1.7"
+    },
+    {
+      "name": "brace-expansion",
+      "version": "5.0.12",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/brace-expansion/v/5.0.12"
+    },
+    {
+      "name": "buffer-equal-constant-time",
+      "version": "1.0.1",
+      "license": "BSD-3-Clause",
+      "package": "https://www.npmjs.com/package/buffer-equal-constant-time/v/1.0.1"
+    },
+    {
+      "name": "bundle-name",
+      "version": "4.1.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/bundle-name/v/4.1.1"
+    },
+    {
+      "name": "cacache",
+      "version": "20.0.4",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/cacache/v/20.0.4"
+    },
+    {
+      "name": "chownr",
+      "version": "3.0.0",
+      "license": "BlueOak-1.0.0",
+      "package": "https://www.npmjs.com/package/chownr/v/3.0.0"
+    },
+    {
+      "name": "ci-info",
+      "version": "4.4.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/ci-info/v/4.4.0"
+    },
+    {
+      "name": "cmd-shim",
+      "version": "8.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/cmd-shim/v/8.0.0"
+    },
+    {
+      "name": "color-convert",
+      "version": "2.0.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/color-convert/v/2.0.1"
+    },
+    {
+      "name": "color-name",
+      "version": "1.1.4",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/color-name/v/1.1.4"
+    },
+    {
+      "name": "common-ancestor-path",
+      "version": "2.0.0",
+      "license": "BlueOak-1.0.0",
+      "package": "https://www.npmjs.com/package/common-ancestor-path/v/2.0.0"
+    },
+    {
+      "name": "content-type",
+      "version": "2.1.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/content-type/v/2.1.0"
+    },
+    {
+      "name": "cross-spawn",
+      "version": "7.0.6",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/cross-spawn/v/7.0.6"
+    },
+    {
+      "name": "cssesc",
+      "version": "3.0.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/cssesc/v/3.0.0"
+    },
+    {
+      "name": "data-uri-to-buffer",
+      "version": "4.0.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/data-uri-to-buffer/v/4.0.1"
+    },
+    {
+      "name": "debug",
+      "version": "4.4.3",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/debug/v/4.4.3"
+    },
+    {
+      "name": "default-browser",
+      "version": "5.5.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/default-browser/v/5.5.1"
+    },
+    {
+      "name": "default-browser-id",
+      "version": "5.0.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/default-browser-id/v/5.0.1"
+    },
+    {
+      "name": "define-lazy-prop",
+      "version": "3.0.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/define-lazy-prop/v/3.0.0"
+    },
+    {
+      "name": "eastasianwidth",
+      "version": "0.2.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/eastasianwidth/v/0.2.0"
+    },
+    {
+      "name": "ecdsa-sig-formatter",
+      "version": "1.0.11",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/ecdsa-sig-formatter/v/1.0.11"
+    },
+    {
+      "name": "effect",
+      "version": "4.0.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/effect/v/4.0.1"
+    },
+    {
+      "name": "emoji-regex",
+      "version": "8.0.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/emoji-regex/v/8.0.0"
+    },
+    {
+      "name": "emoji-regex",
+      "version": "9.2.2",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/emoji-regex/v/9.2.2"
+    },
+    {
+      "name": "env-paths",
+      "version": "2.2.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/env-paths/v/2.2.1"
+    },
+    {
+      "name": "exponential-backoff",
+      "version": "3.1.3",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/exponential-backoff/v/3.1.3"
+    },
+    {
+      "name": "extend",
+      "version": "3.0.2",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/extend/v/3.0.2"
+    },
+    {
+      "name": "fdir",
+      "version": "6.5.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/fdir/v/6.5.0"
+    },
+    {
+      "name": "fetch-blob",
+      "version": "3.2.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/fetch-blob/v/3.2.0"
+    },
+    {
+      "name": "foreground-child",
+      "version": "3.3.1",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/foreground-child/v/3.3.1"
+    },
+    {
+      "name": "formdata-polyfill",
+      "version": "4.0.10",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/formdata-polyfill/v/4.0.10"
+    },
+    {
+      "name": "fs-minipass",
+      "version": "3.0.3",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/fs-minipass/v/3.0.3"
+    },
+    {
+      "name": "gaxios",
+      "version": "7.1.3",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/gaxios/v/7.1.3"
+    },
+    {
+      "name": "gaxios",
+      "version": "7.3.1",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/gaxios/v/7.3.1"
+    },
+    {
+      "name": "gcp-metadata",
+      "version": "8.1.4",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/gcp-metadata/v/8.1.4"
+    },
+    {
+      "name": "glob",
+      "version": "10.5.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/glob/v/10.5.0"
+    },
+    {
+      "name": "glob",
+      "version": "13.0.5",
+      "license": "BlueOak-1.0.0",
+      "package": "https://www.npmjs.com/package/glob/v/13.0.5"
+    },
+    {
+      "name": "google-auth-library",
+      "version": "10.5.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/google-auth-library/v/10.5.0"
+    },
+    {
+      "name": "google-logging-utils",
+      "version": "1.1.3",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/google-logging-utils/v/1.1.3"
+    },
+    {
+      "name": "google-logging-utils",
+      "version": "1.2.0",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/google-logging-utils/v/1.2.0"
+    },
+    {
+      "name": "graceful-fs",
+      "version": "4.2.11",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/graceful-fs/v/4.2.11"
+    },
+    {
+      "name": "gtoken",
+      "version": "8.0.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/gtoken/v/8.0.0"
+    },
+    {
+      "name": "hosted-git-info",
+      "version": "9.0.3",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/hosted-git-info/v/9.0.3"
+    },
+    {
+      "name": "http-cache-semantics",
+      "version": "4.3.0",
+      "license": "BSD-2-Clause",
+      "package": "https://www.npmjs.com/package/http-cache-semantics/v/4.3.0"
+    },
+    {
+      "name": "http-proxy-agent",
+      "version": "7.0.2",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/http-proxy-agent/v/7.0.2"
+    },
+    {
+      "name": "https-proxy-agent",
+      "version": "7.0.6",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/https-proxy-agent/v/7.0.6"
+    },
+    {
+      "name": "iconv-lite",
+      "version": "0.7.3",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/iconv-lite/v/0.7.3"
+    },
+    {
+      "name": "ignore-walk",
+      "version": "8.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/ignore-walk/v/8.0.0"
+    },
+    {
+      "name": "ini",
+      "version": "6.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/ini/v/6.0.0"
+    },
+    {
+      "name": "ip-address",
+      "version": "10.7.4",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/ip-address/v/10.7.4"
+    },
+    {
+      "name": "is-docker",
+      "version": "3.0.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/is-docker/v/3.0.0"
+    },
+    {
+      "name": "is-fullwidth-code-point",
+      "version": "3.0.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/is-fullwidth-code-point/v/3.0.0"
+    },
+    {
+      "name": "is-in-ssh",
+      "version": "1.0.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/is-in-ssh/v/1.0.0"
+    },
+    {
+      "name": "is-inside-container",
+      "version": "1.0.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/is-inside-container/v/1.0.0"
+    },
+    {
+      "name": "is-wsl",
+      "version": "3.1.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/is-wsl/v/3.1.1"
+    },
+    {
+      "name": "isexe",
+      "version": "2.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/isexe/v/2.0.0"
+    },
+    {
+      "name": "isexe",
+      "version": "4.0.0",
+      "license": "BlueOak-1.0.0",
+      "package": "https://www.npmjs.com/package/isexe/v/4.0.0"
+    },
+    {
+      "name": "jackspeak",
+      "version": "3.4.3",
+      "license": "BlueOak-1.0.0",
+      "package": "https://www.npmjs.com/package/jackspeak/v/3.4.3"
+    },
+    {
+      "name": "json-bigint",
+      "version": "1.0.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/json-bigint/v/1.0.0"
+    },
+    {
+      "name": "json-parse-even-better-errors",
+      "version": "5.0.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/json-parse-even-better-errors/v/5.0.0"
+    },
+    {
+      "name": "json-schema",
+      "version": "0.4.0",
+      "license": "(AFL-2.1 OR BSD-3-Clause)",
+      "package": "https://www.npmjs.com/package/json-schema/v/0.4.0"
+    },
+    {
+      "name": "json-stringify-nice",
+      "version": "1.1.4",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/json-stringify-nice/v/1.1.4"
+    },
+    {
+      "name": "jsonparse",
+      "version": "1.3.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/jsonparse/v/1.3.1"
+    },
+    {
+      "name": "just-diff",
+      "version": "6.0.2",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/just-diff/v/6.0.2"
+    },
+    {
+      "name": "just-diff-apply",
+      "version": "5.5.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/just-diff-apply/v/5.5.0"
+    },
+    {
+      "name": "jwa",
+      "version": "2.0.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/jwa/v/2.0.1"
+    },
+    {
+      "name": "jws",
+      "version": "4.0.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/jws/v/4.0.1"
+    },
+    {
+      "name": "lru-cache",
+      "version": "10.4.3",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/lru-cache/v/10.4.3"
+    },
+    {
+      "name": "lru-cache",
+      "version": "11.5.3",
+      "license": "BlueOak-1.0.0",
+      "package": "https://www.npmjs.com/package/lru-cache/v/11.5.3"
+    },
+    {
+      "name": "make-fetch-happen",
+      "version": "15.0.6",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/make-fetch-happen/v/15.0.6"
+    },
+    {
+      "name": "mime-db",
+      "version": "1.54.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/mime-db/v/1.54.0"
+    },
+    {
+      "name": "mime-types",
+      "version": "3.0.2",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/mime-types/v/3.0.2"
+    },
+    {
+      "name": "minimatch",
+      "version": "10.2.5",
+      "license": "BlueOak-1.0.0",
+      "package": "https://www.npmjs.com/package/minimatch/v/10.2.5"
+    },
+    {
+      "name": "minimatch",
+      "version": "9.0.9",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/minimatch/v/9.0.9"
+    },
+    {
+      "name": "minipass",
+      "version": "3.3.6",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/minipass/v/3.3.6"
+    },
+    {
+      "name": "minipass",
+      "version": "7.1.3",
+      "license": "BlueOak-1.0.0",
+      "package": "https://www.npmjs.com/package/minipass/v/7.1.3"
+    },
+    {
+      "name": "minipass-collect",
+      "version": "2.0.1",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/minipass-collect/v/2.0.1"
+    },
+    {
+      "name": "minipass-fetch",
+      "version": "5.0.2",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/minipass-fetch/v/5.0.2"
+    },
+    {
+      "name": "minipass-flush",
+      "version": "1.0.7",
+      "license": "BlueOak-1.0.0",
+      "package": "https://www.npmjs.com/package/minipass-flush/v/1.0.7"
+    },
+    {
+      "name": "minipass-pipeline",
+      "version": "1.2.4",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/minipass-pipeline/v/1.2.4"
+    },
+    {
+      "name": "minipass-sized",
+      "version": "2.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/minipass-sized/v/2.0.0"
+    },
+    {
+      "name": "minizlib",
+      "version": "3.1.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/minizlib/v/3.1.0"
+    },
+    {
+      "name": "ms",
+      "version": "2.1.3",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/ms/v/2.1.3"
+    },
+    {
+      "name": "negotiator",
+      "version": "1.1.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/negotiator/v/1.1.0"
+    },
+    {
+      "name": "node-domexception",
+      "version": "1.0.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/node-domexception/v/1.0.0"
+    },
+    {
+      "name": "node-fetch",
+      "version": "3.3.2",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/node-fetch/v/3.3.2"
+    },
+    {
+      "name": "node-gyp",
+      "version": "12.4.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/node-gyp/v/12.4.0"
+    },
+    {
+      "name": "nopt",
+      "version": "9.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/nopt/v/9.0.0"
+    },
+    {
+      "name": "npm-bundled",
+      "version": "5.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/npm-bundled/v/5.0.0"
+    },
+    {
+      "name": "npm-install-checks",
+      "version": "8.0.0",
+      "license": "BSD-2-Clause",
+      "package": "https://www.npmjs.com/package/npm-install-checks/v/8.0.0"
+    },
+    {
+      "name": "npm-normalize-package-bin",
+      "version": "5.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/npm-normalize-package-bin/v/5.0.0"
+    },
+    {
+      "name": "npm-package-arg",
+      "version": "13.0.2",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/npm-package-arg/v/13.0.2"
+    },
+    {
+      "name": "npm-packlist",
+      "version": "10.0.4",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/npm-packlist/v/10.0.4"
+    },
+    {
+      "name": "npm-pick-manifest",
+      "version": "11.0.3",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/npm-pick-manifest/v/11.0.3"
+    },
+    {
+      "name": "npm-registry-fetch",
+      "version": "19.1.1",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/npm-registry-fetch/v/19.1.1"
+    },
+    {
+      "name": "open",
+      "version": "11.0.4",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/open/v/11.0.4"
+    },
+    {
+      "name": "p-map",
+      "version": "7.1.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/p-map/v/7.1.1"
+    },
+    {
+      "name": "package-json-from-dist",
+      "version": "1.0.1",
+      "license": "BlueOak-1.0.0",
+      "package": "https://www.npmjs.com/package/package-json-from-dist/v/1.0.1"
+    },
+    {
+      "name": "pacote",
+      "version": "21.5.1",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/pacote/v/21.5.1"
+    },
+    {
+      "name": "parse-conflict-json",
+      "version": "5.0.1",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/parse-conflict-json/v/5.0.1"
+    },
+    {
+      "name": "path-key",
+      "version": "3.1.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/path-key/v/3.1.1"
+    },
+    {
+      "name": "path-scurry",
+      "version": "1.11.1",
+      "license": "BlueOak-1.0.0",
+      "package": "https://www.npmjs.com/package/path-scurry/v/1.11.1"
+    },
+    {
+      "name": "path-scurry",
+      "version": "2.0.2",
+      "license": "BlueOak-1.0.0",
+      "package": "https://www.npmjs.com/package/path-scurry/v/2.0.2"
+    },
+    {
+      "name": "picomatch",
+      "version": "4.0.7",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/picomatch/v/4.0.7"
+    },
+    {
+      "name": "postcss-selector-parser",
+      "version": "7.1.6",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/postcss-selector-parser/v/7.1.6"
+    },
+    {
+      "name": "powershell-utils",
+      "version": "0.2.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/powershell-utils/v/0.2.1"
+    },
+    {
+      "name": "proc-log",
+      "version": "6.1.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/proc-log/v/6.1.0"
+    },
+    {
+      "name": "proggy",
+      "version": "4.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/proggy/v/4.0.0"
+    },
+    {
+      "name": "promise-all-reject-late",
+      "version": "1.0.1",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/promise-all-reject-late/v/1.0.1"
+    },
+    {
+      "name": "promise-call-limit",
+      "version": "3.0.2",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/promise-call-limit/v/3.0.2"
+    },
+    {
+      "name": "read-cmd-shim",
+      "version": "6.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/read-cmd-shim/v/6.0.0"
+    },
+    {
+      "name": "redis",
+      "version": "6.3.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/redis/v/6.3.0"
+    },
+    {
+      "name": "rimraf",
+      "version": "5.0.10",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/rimraf/v/5.0.10"
+    },
+    {
+      "name": "run-applescript",
+      "version": "7.1.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/run-applescript/v/7.1.0"
+    },
+    {
+      "name": "safe-buffer",
+      "version": "5.2.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/safe-buffer/v/5.2.1"
+    },
+    {
+      "name": "safer-buffer",
+      "version": "2.1.2",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/safer-buffer/v/2.1.2"
+    },
+    {
+      "name": "semver",
+      "version": "7.8.5",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/semver/v/7.8.5"
+    },
+    {
+      "name": "shebang-command",
+      "version": "2.0.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/shebang-command/v/2.0.0"
+    },
+    {
+      "name": "shebang-regex",
+      "version": "3.0.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/shebang-regex/v/3.0.0"
+    },
+    {
+      "name": "signal-exit",
+      "version": "4.1.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/signal-exit/v/4.1.0"
+    },
+    {
+      "name": "sigstore",
+      "version": "4.1.1",
+      "license": "Apache-2.0",
+      "package": "https://www.npmjs.com/package/sigstore/v/4.1.1"
+    },
+    {
+      "name": "smart-buffer",
+      "version": "4.2.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/smart-buffer/v/4.2.0"
+    },
+    {
+      "name": "socks",
+      "version": "2.8.10",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/socks/v/2.8.10"
+    },
+    {
+      "name": "socks-proxy-agent",
+      "version": "8.0.5",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/socks-proxy-agent/v/8.0.5"
+    },
+    {
+      "name": "spdx-exceptions",
+      "version": "2.5.0",
+      "license": "CC-BY-3.0",
+      "package": "https://www.npmjs.com/package/spdx-exceptions/v/2.5.0"
+    },
+    {
+      "name": "spdx-expression-parse",
+      "version": "4.0.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/spdx-expression-parse/v/4.0.0"
+    },
+    {
+      "name": "spdx-license-ids",
+      "version": "3.0.24",
+      "license": "CC0-1.0",
+      "package": "https://www.npmjs.com/package/spdx-license-ids/v/3.0.24"
+    },
+    {
+      "name": "ssri",
+      "version": "13.0.1",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/ssri/v/13.0.1"
+    },
+    {
+      "name": "string-width",
+      "version": "4.2.3",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/string-width/v/4.2.3"
+    },
+    {
+      "name": "string-width",
+      "version": "5.1.2",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/string-width/v/5.1.2"
+    },
+    {
+      "name": "strip-ansi",
+      "version": "6.0.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/strip-ansi/v/6.0.1"
+    },
+    {
+      "name": "strip-ansi",
+      "version": "7.2.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/strip-ansi/v/7.2.0"
+    },
+    {
+      "name": "tar",
+      "version": "7.5.22",
+      "license": "BlueOak-1.0.0",
+      "package": "https://www.npmjs.com/package/tar/v/7.5.22"
+    },
+    {
+      "name": "tinyglobby",
+      "version": "0.2.17",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/tinyglobby/v/0.2.17"
+    },
+    {
+      "name": "treeverse",
+      "version": "3.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/treeverse/v/3.0.0"
+    },
+    {
+      "name": "tslib",
+      "version": "2.8.1",
+      "license": "0BSD",
+      "package": "https://www.npmjs.com/package/tslib/v/2.8.1"
+    },
+    {
+      "name": "tuf-js",
+      "version": "4.1.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/tuf-js/v/4.1.0"
+    },
+    {
+      "name": "undici",
+      "version": "6.29.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/undici/v/6.29.1"
+    },
+    {
+      "name": "undici",
+      "version": "8.12.2",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/undici/v/8.12.2"
+    },
+    {
+      "name": "undici-types",
+      "version": "8.3.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/undici-types/v/8.3.0"
+    },
+    {
+      "name": "util-deprecate",
+      "version": "1.0.2",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/util-deprecate/v/1.0.2"
+    },
+    {
+      "name": "validate-npm-package-name",
+      "version": "7.0.2",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/validate-npm-package-name/v/7.0.2"
+    },
+    {
+      "name": "walk-up-path",
+      "version": "4.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/walk-up-path/v/4.0.0"
+    },
+    {
+      "name": "web-streams-polyfill",
+      "version": "3.3.3",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/web-streams-polyfill/v/3.3.3"
+    },
+    {
+      "name": "which",
+      "version": "2.0.2",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/which/v/2.0.2"
+    },
+    {
+      "name": "which",
+      "version": "6.0.1",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/which/v/6.0.1"
+    },
+    {
+      "name": "wrap-ansi",
+      "version": "7.0.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/wrap-ansi/v/7.0.0"
+    },
+    {
+      "name": "wrap-ansi",
+      "version": "8.1.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/wrap-ansi/v/8.1.0"
+    },
+    {
+      "name": "write-file-atomic",
+      "version": "7.0.1",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/write-file-atomic/v/7.0.1"
+    },
+    {
+      "name": "ws",
+      "version": "8.22.0",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/ws/v/8.22.0"
+    },
+    {
+      "name": "wsl-utils",
+      "version": "1.0.1",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/wsl-utils/v/1.0.1"
+    },
+    {
+      "name": "yallist",
+      "version": "4.0.0",
+      "license": "ISC",
+      "package": "https://www.npmjs.com/package/yallist/v/4.0.0"
+    },
+    {
+      "name": "yallist",
+      "version": "5.0.0",
+      "license": "BlueOak-1.0.0",
+      "package": "https://www.npmjs.com/package/yallist/v/5.0.0"
+    },
+    {
+      "name": "zod",
+      "version": "4.6.6",
+      "license": "MIT",
+      "package": "https://www.npmjs.com/package/zod/v/4.6.6"
+    }
+  ]
+}

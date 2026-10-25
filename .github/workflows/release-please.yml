@@ -1,0 +1,75 @@
+name: Prepare release pull request
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-pr-main
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'YidiDev/opencode-agent-communicator'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      pr_number: ${{ steps.pr.outputs.number }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require the current version's release tag before preparing its successor
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$version" --silent; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            echo 'Current version is not tagged yet; no successor PR will be created.'
+          fi
+      - name: Prepare version and changelog as the GitHub Actions bot
+        if: steps.baseline.outputs.ready == 'true'
+        id: release
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
+        with:
+          token: ${{ github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          skip-github-release: true
+      - name: Export the release PR identity
+        id: pr
+        env:
+          PR_DATA: ${{ steps.release.outputs.pr }}
+        run: |
+          node -e 'const p=process.env.PR_DATA; if(p) { const n=JSON.parse(p).number; if(!Number.isSafeInteger(n)||n<1) throw Error("Invalid release PR"); require("fs").appendFileSync(process.env.GITHUB_OUTPUT,`number=${n}\n`); }'
+
+  verify-pr:
+    needs: prepare
+    if: needs.prepare.outputs.pr_number != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
+    steps:
+      - name: Explicitly dispatch CI for a token-created release PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+        run: |
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          branch="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .head.ref)"
+          test "$branch" = 'release-please--branches--main'
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"

@@ -6,6 +6,7 @@ on:
     branches:
       - main
   workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,6 +16,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  supply-chain:
+    name: Dependency and secret security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - run: bun run check:security
+      - name: Scan reachable history with a checksum-pinned scanner
+        run: |
+          curl --fail --location --silent --show-error https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o "$RUNNER_TEMP/gitleaks.tar.gz"
+          test "$(sha256sum "$RUNNER_TEMP/gitleaks.tar.gz" | cut -d ' ' -f1)" = 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git --redact=100 --no-banner --log-opts=--all .
+
   opencode-compatibility:
     name: Supported OpenCode compatibility
     uses: ./.github/workflows/live-opencode.yml

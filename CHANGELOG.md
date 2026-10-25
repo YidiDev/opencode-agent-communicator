@@ -6,6 +6,23 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [1.0.0-rc.1] - Unreleased candidate
+
+### Added
+
+- Prepare the public v1 compatibility contract and release-candidate rollout. Stable publishing
+  remains blocked pending reviewed 48-hour runtime-bound soak evidence.
+- Identify Yidi Sprei as the author and copyright holder of original work; preserve third-party
+  ownership through notices and a checked production dependency license inventory.
+- Prepare tokenless npm trusted publishing, shared GitHub/npm release archives, SBOMs, safe retry
+  checks, and GitHub Actions bot release PRs with explicitly dispatched CI.
+
+### Security
+
+- Update Zod to 4.6.6 and the affected locked Undici versions to 6.29.1 and 8.12.2,
+  addressing the collection-validation, content-encoding, EventSource, and integrity advisories
+  found during the public-release audit. Keep the OpenCode and Effect pins unchanged.
+
 ## [0.9.1] - 2026-10-23
 
 ### Fixed
