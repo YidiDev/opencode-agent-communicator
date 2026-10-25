@@ -1,4 +1,5 @@
 import { communicatorToolIds } from "../../src/composition/tools";
+import { latestSoakUserText, soakCompactionSummary } from "./compaction";
 
 export const soakMarker = "communicator-soak:";
 
@@ -35,7 +36,7 @@ export function decodeBlockingFixture(
     return undefined;
   const last = body.messages.at(-1);
   if (last?.role !== "user") return undefined;
-  const envelope = fixtureEnvelope(last.content);
+  const envelope = fixtureEnvelope(latestSoakUserText(body));
   if (
     !envelope ||
     typeof envelope.request_id !== "string" ||
@@ -75,13 +76,8 @@ export function decodeSoakCall(body: unknown): { name: string; arguments: string
   if (typeof last !== "object" || last === null || !("role" in last) || last.role !== "user")
     return undefined;
   if (!("content" in last)) return undefined;
-  const content =
-    typeof last.content === "string"
-      ? last.content
-      : Array.isArray(last.content)
-        ? last.content.map((part) => part?.text ?? "").join("")
-        : "";
-  if (!content.startsWith(soakMarker)) return undefined;
+  const content = latestSoakUserText(body);
+  if (!content?.startsWith(soakMarker)) return undefined;
   const call: unknown = JSON.parse(content.slice(soakMarker.length));
   if (
     typeof call !== "object" ||
@@ -111,7 +107,8 @@ export function launchSoakProvider() {
       requests++;
       const body: unknown = await request.json();
       // No prompts, answers, tool payloads, or HTTP credentials are retained.
-      const call = decodeSoakCall(body) ?? decodeBlockingFixture(body);
+      const summary = soakCompactionSummary(body);
+      const call = summary ? undefined : (decodeSoakCall(body) ?? decodeBlockingFixture(body));
       const delta = call
         ? {
             tool_calls: [
@@ -123,7 +120,7 @@ export function launchSoakProvider() {
               },
             ],
           }
-        : { content: "Isolated deterministic soak response; peer idle." };
+        : { content: summary ?? "Isolated deterministic soak response; peer idle." };
       const chunk = (value: unknown, reason: string | null) => ({
         id: "chatcmpl-soak",
         object: "chat.completion.chunk",

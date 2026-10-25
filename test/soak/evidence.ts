@@ -1,7 +1,14 @@
 export const soakHours = 48;
 
 export class SoakAssertion extends Error {
-  constructor(readonly step: string) {
+  constructor(
+    readonly step: string,
+    readonly observation?: {
+      readonly monotonic_delta_ms: number;
+      readonly wall_delta_ms: number;
+      readonly maximum_gap_ms: number;
+    },
+  ) {
     super("A controlled soak assertion failed");
     this.name = "SoakAssertion";
   }
@@ -29,7 +36,11 @@ export function assertContinuousObservation(
     monotonicDelta > maximumGapMs ||
     Math.abs(wallDelta - monotonicDelta) > 30_000
   )
-    throw new Error("Soak continuity or clock observation is invalid");
+    throw new SoakAssertion("observation:continuity_or_clock_invalid", {
+      monotonic_delta_ms: monotonicDelta,
+      wall_delta_ms: wallDelta,
+      maximum_gap_ms: maximumGapMs,
+    });
 }
 
 export function soakOutcome(input: {

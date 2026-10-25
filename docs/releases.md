@@ -146,6 +146,12 @@ idle intervals, hourly delivery/request/lock/read and fail-closed journeys, and 
 planned restart of the second host with its existing roots. The first host remains
 running throughout. Loopback servers use fresh private authentication and a local
 deterministic model; no personal model credentials or paid-model traffic are used.
+The fixture provider supplies structured compaction summaries and resumes only the
+unfinished latest user exchange retained in a checkpoint, without replaying completed
+tool calls. Automatic compaction remains enabled with the normal fixture model limits.
+Resource samples include deduplicated completed-compaction counts for each host
+process (reset on the planned restart); a full pass requires observed successful
+compaction in both final host processes. Smoke runs do not claim that coverage.
 
 Controlled clock/store regressions and the Docker Linux ownership/crash matrix run
 before and after the full observation interval. They are companion evidence, not
@@ -153,6 +159,11 @@ claims of changing the user's OS clock or continuously injecting crashes. Report
 contain aggregate timing/resource metrics and safe assertion labels, not prompts,
 answers, session identifiers, server credentials, or workspace paths. Inspect the
 final `summary.json` and `events.jsonl`, including failures and resource trends.
+Tool RPC failures identify the controlled tool/stage and an allowlisted error kind;
+continuity failures include only monotonic/wall deltas and the configured gap bound.
+These diagnostics never include upstream error messages or stack traces. If a run
+fails, preserve its report and diagnose it before beginning a fresh 48-hour interval;
+never combine partial runs or relax the observation bounds to obtain a pass.
 Interrupted runs, missed observation bounds, clock jumps, changed runtimes, failed
 companions, and cleanup failures cannot qualify. A `smoke_passed` result never
 qualifies, even if the smoke was left running longer. The runner never changes

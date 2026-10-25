@@ -2,8 +2,99 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { assertContinuousObservation, soakOutcome } from "../../soak/evidence";
+import {
+  recordSoakCompactions,
+  requireSoakCompactionCoverage,
+  soakCompactionSummary,
+} from "../../soak/compaction";
+import { assertContinuousObservation, SoakAssertion, soakOutcome } from "../../soak/evidence";
+import { observeSoakStep } from "../../soak/host";
 import { decodeBlockingFixture, decodeSoakCall, soakMarker } from "../../soak/provider";
+
+test("soak compaction metrics deduplicate completed compactions and fail on native failure", () => {
+  const seen = new Set<string>();
+  const completed = { type: "compaction", id: "fixture", status: "completed" };
+  recordSoakCompactions(seen, [completed, completed, { type: "user", id: "other" }]);
+  expect(seen.size).toBe(1);
+  expect(() => recordSoakCompactions(seen, [{ ...completed, status: "failed" }])).toThrow(
+    "controlled soak assertion",
+  );
+  const bounded = new Set(Array.from({ length: 1024 }, (_, index) => `fixture${index}`));
+  expect(() => recordSoakCompactions(bounded, [completed])).toThrow("controlled soak assertion");
+  expect(() => requireSoakCompactionCoverage(false, [1, 1])).not.toThrow();
+  expect(() => requireSoakCompactionCoverage(true, [0, 0])).not.toThrow();
+  for (const counts of [[0, 1], [1, 0], [1], [NaN, 1], [1.5, 1], [1025, 1]])
+    expect(() => requireSoakCompactionCoverage(false, counts)).toThrow("controlled soak assertion");
+});
+
+test("soak provider honors compaction templates and resumes only an unfinished retained user turn", () => {
+  const command = soakMarker + JSON.stringify({ name: "session_read", arguments: { limit: 2 } });
+  const body = (content: string) => ({
+    messages: [{ role: "user", content }],
+    tools: [{ function: { name: "session_read" } }],
+  });
+  const checkpoint = (recent: string) =>
+    `<conversation-checkpoint>\n<summary>${command}</summary>\n<recent-context>\n${recent}\n</recent-context>\n</conversation-checkpoint>`;
+  for (const prefix of [
+    "You MUST summarize the conversation above into a structured summary",
+    "Update the existing checkpoint in the conversation above into one consolidated summary.",
+    "The previous response did not fill in the required summary template.",
+  ]) {
+    const summary = soakCompactionSummary(body(prefix));
+    expect(summary).toContain("## Objective");
+    expect(summary).toContain("## Next Move");
+    expect(decodeSoakCall(body(prefix))).toBeUndefined();
+  }
+  expect(soakCompactionSummary(body(command))).toBeUndefined();
+  expect(decodeSoakCall(body(checkpoint(`[User]: ${command}`)))?.name).toBe("session_read");
+  for (const recent of [
+    "",
+    `[Assistant]: ${command}`,
+    `[User]: ${command}\n[Assistant]: done`,
+    `[User]: ${command}\n[Assistant tool call]: session_read({})\n[Tool result]: done`,
+  ])
+    expect(decodeSoakCall(body(checkpoint(recent)))).toBeUndefined();
+  expect(decodeSoakCall({ ...body(checkpoint(`[User]: ${command}`)), tools: [] })).toBeUndefined();
+  const envelope = {
+    protocol: "opencode-session-communicator/v1",
+    request_id: "req_fixture",
+    operation: "wait",
+    payload: { milestone: "synthetic-blocking-ready" },
+  };
+  expect(
+    decodeBlockingFixture({
+      messages: [{ role: "user", content: checkpoint(`[User]: ${JSON.stringify(envelope)}`) }],
+      tools: [{ function: { name: "session_signal" } }],
+    })?.name,
+  ).toBe("session_signal");
+});
+
+test("soak diagnostics retain only controlled stages and allowlisted failure kinds", async () => {
+  expect(await observeSoakStep("session_list:wait", async () => 7)).toBe(7);
+  for (const name of [
+    "Error",
+    "AbortError",
+    "TimeoutError",
+    "TypeError",
+    "SyntaxError",
+    "secret-name",
+  ]) {
+    const failure = new Error("private payload /home/private secret-token");
+    failure.name = name;
+    const result = await observeSoakStep("session_list:wait", async () => {
+      throw failure;
+    }).catch((error) => error);
+    expect(result).toBeInstanceOf(SoakAssertion);
+    expect(result.step).toBe(`session_list:wait:${name === "secret-name" ? "Error" : name}`);
+    expect(result.message).not.toContain("private");
+  }
+  const assertion = new SoakAssertion("observation:continuity_or_clock_invalid");
+  expect(
+    await observeSoakStep("session_list:wait", async () => {
+      throw assertion;
+    }).catch((error) => error),
+  ).toBe(assertion);
+});
 
 test("soak evidence cannot qualify smoke, short, gapped or unverified runs as stable", () => {
   const valid = {
@@ -92,6 +183,18 @@ test("soak provider responds automatically only to marked blocking fixtures, not
 
 test("soak observation detects wall-clock jumps, missing intervals and invalid clocks", () => {
   const previous = { elapsedMs: 1000, wallMs: 100_000 };
+  try {
+    assertContinuousObservation(previous, { elapsedMs: 2000, wallMs: 200_000 }, 10_000);
+    throw new Error("Expected a continuity failure");
+  } catch (failure) {
+    expect(failure).toBeInstanceOf(SoakAssertion);
+    expect((failure as SoakAssertion).step).toBe("observation:continuity_or_clock_invalid");
+    expect((failure as SoakAssertion).observation).toEqual({
+      monotonic_delta_ms: 1000,
+      wall_delta_ms: 100_000,
+      maximum_gap_ms: 10_000,
+    });
+  }
   expect(() =>
     assertContinuousObservation(previous, { elapsedMs: 2000, wallMs: 101_000 }, 10_000),
   ).not.toThrow();
