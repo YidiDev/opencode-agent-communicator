@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { runtimeDigest } from "../../tools/release-policy.mjs";
 import { createIsolatedOpenCodeState, type IsolatedOpenCodeState } from "../live/harness/isolation";
 import { runBoundedProcess } from "../live/harness/process";
+import { requireSoakCompactionCoverage } from "./compaction";
 import {
   assertContinuousObservation,
   SoakAssertion,
@@ -44,6 +45,7 @@ let startedAt: string | undefined;
 let harnessCommit: string | undefined;
 let sourceCommit: string | undefined;
 let failureAssertion: string | undefined;
+let failureObservation: SoakAssertion["observation"];
 let completedOutcome: "passed" | "smoke_passed" | undefined;
 let outputCreated = false;
 const abort = new AbortController();
@@ -70,6 +72,7 @@ async function summary(result: string) {
     opencode: "2.1.3",
     phase,
     failure_assertion: failureAssertion ?? null,
+    failure_observation: failureObservation ?? null,
     topology: {
       isolated_repositories: 2,
       roots_per_repository: 2,
@@ -237,6 +240,10 @@ async function run() {
   )
     throw new Error("Runtime changed during the observation interval");
   phase = "final_companions";
+  requireSoakCompactionCoverage(
+    smoke,
+    hosts.map((host) => host.completedCompactions.size),
+  );
   await runSoakCompanions(repository, smoke);
   await Promise.all(hosts.map(hostMetrics));
   abort.signal.throwIfAborted();
@@ -255,6 +262,7 @@ try {
 } catch (failure) {
   // Never turn a crash, interrupted run, continuity gap, or shortened smoke into a pass.
   failureAssertion = failure instanceof SoakAssertion ? failure.step : undefined;
+  failureObservation = failure instanceof SoakAssertion ? failure.observation : undefined;
   if (outputCreated) {
     try {
       await summary("failed");

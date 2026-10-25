@@ -1,4 +1,5 @@
 import { communicatorToolIds } from "../../src/composition/tools";
+import { latestSoakUserText, soakCompactionSummary } from "./compaction";
 
 export const soakMarker = "communicator-soak:";
 
@@ -35,7 +36,7 @@ export function decodeBlockingFixture(
     return undefined;
   const last = body.messages.at(-1);
   if (last?.role !== "user") return undefined;
-  const envelope = fixtureEnvelope(last.content);
+  const envelope = fixtureEnvelope(latestSoakUserText(body));
   if (
     !envelope ||
     typeof envelope.request_id !== "string" ||
@@ -60,7 +61,9 @@ export function decodeBlockingFixture(
   };
 }
 
-export function decodeSoakCall(body: unknown): { name: string; arguments: string } | undefined {
+export function decodeSoakCall(
+  body: unknown,
+): { name: string; arguments: string; nonce?: string } | undefined {
   if (
     typeof body !== "object" ||
     body === null ||
@@ -75,13 +78,8 @@ export function decodeSoakCall(body: unknown): { name: string; arguments: string
   if (typeof last !== "object" || last === null || !("role" in last) || last.role !== "user")
     return undefined;
   if (!("content" in last)) return undefined;
-  const content =
-    typeof last.content === "string"
-      ? last.content
-      : Array.isArray(last.content)
-        ? last.content.map((part) => part?.text ?? "").join("")
-        : "";
-  if (!content.startsWith(soakMarker)) return undefined;
+  const content = latestSoakUserText(body);
+  if (!content?.startsWith(soakMarker)) return undefined;
   const call: unknown = JSON.parse(content.slice(soakMarker.length));
   if (
     typeof call !== "object" ||
@@ -96,7 +94,13 @@ export function decodeSoakCall(body: unknown): { name: string; arguments: string
   )
     throw new Error("Invalid soak tool command");
   if (!body.tools.some((tool) => tool?.function?.name === call.name)) return undefined;
-  return { name: call.name, arguments: JSON.stringify(call.arguments) };
+  if ("nonce" in call && (typeof call.nonce !== "string" || !/^[a-f0-9-]{36}$/.test(call.nonce)))
+    throw new Error("Invalid soak nonce");
+  return {
+    name: call.name,
+    arguments: JSON.stringify(call.arguments),
+    ...("nonce" in call ? { nonce: call.nonce as string } : {}),
+  };
 }
 
 export function launchSoakProvider() {
@@ -111,19 +115,23 @@ export function launchSoakProvider() {
       requests++;
       const body: unknown = await request.json();
       // No prompts, answers, tool payloads, or HTTP credentials are retained.
-      const call = decodeSoakCall(body) ?? decodeBlockingFixture(body);
+      const summary = soakCompactionSummary(body);
+      const call = summary ? undefined : (decodeSoakCall(body) ?? decodeBlockingFixture(body));
       const delta = call
         ? {
             tool_calls: [
               {
                 index: 0,
-                id: `call_${crypto.randomUUID().replaceAll("-", "")}`,
+                id:
+                  "nonce" in call
+                    ? `soak_${call.nonce}`
+                    : `call_${crypto.randomUUID().replaceAll("-", "")}`,
                 type: "function",
-                function: call,
+                function: { name: call.name, arguments: call.arguments },
               },
             ],
           }
-        : { content: "Isolated deterministic soak response; peer idle." };
+        : { content: summary ?? "Isolated deterministic soak response; peer idle." };
       const chunk = (value: unknown, reason: string | null) => ({
         id: "chatcmpl-soak",
         object: "chat.completion.chunk",
