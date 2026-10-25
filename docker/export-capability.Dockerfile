@@ -13,7 +13,7 @@ COPY test/support/linux-export-capability.ts ./test/support/linux-export-capabil
 COPY test/live ./test/live
 COPY skills ./skills
 COPY docs ./docs
-COPY CHANGELOG.md LICENSE README.md SECURITY.md ./
+COPY CHANGELOG.md LICENSE README.md SECURITY.md THIRD_PARTY_LICENSES.json THIRD_PARTY_NOTICES.md ./
 COPY tools/run-secure-export-capability-tests.mjs ./tools/run-secure-export-capability-tests.mjs
 
 ENV REQUIRE_SECURE_EXPORT_CAPABILITY=1

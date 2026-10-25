@@ -38,6 +38,14 @@ side-by-side immutable installation, coordinated service restart, and actual-env
 are separate from isolated acceptance. Do not publish to npm or restart the active shared service
 as part of a compatibility test. Keep #46 open for its independent soak and causal investigation.
 
+Public release operations additionally follow `docs/releases.md`. `bun run check` verifies the
+frozen production license inventory; `bun run check:security` gates known high/critical registry
+advisories. The reusable CI also scans reachable history with a checksum-pinned secret scanner.
+Keep source/dependency verification separate from the minimal-permission npm OIDC job. Release
+PRs use the GitHub Actions bot identity and explicit CI dispatch, not a human author identity or
+a token-event loophole. Stable release approval must reference measured 48-hour soak evidence
+for the same runtime digest; it is not inferred from a passing release-candidate pipeline.
+
 When rules compete, use this order:
 
 1. Correctness and preservation of documented invariants.

@@ -11,6 +11,7 @@
 - Run one file with `bun test test/<area>/<name>.test.ts`; focus a test with `bun test test/<area>/<name>.test.ts -t "<regex>"`.
 - `bun run check` is the ordinary pre-commit gate. Its order is format check, lint, custom conventions, skip-budget verification, typecheck, then unit/integration/black-box tests.
 - Coverage is separate from `check`: use `bun run test:coverage:branches` for enforced per-file line/branch thresholds and `bun run test:coverage` for LCOV evidence.
+- `check` also verifies the reviewed production license inventory. Run `bun run check:security` for the registry advisory gate; new license expressions and public-release exceptions require review.
 - Use `bun run test:live` only for isolated supported-OpenCode compatibility. Store, secure-export, and package-portability acceptance commands require Docker and are separate release evidence.
 - For changes to package contents, entrypoints, tools, bundled skills, or published docs, run `bun run verify:package` and `bun run test:black-box`; the package verifier enforces a reviewed archive fingerprint and exact ordered tool/skill manifest.
 
@@ -34,3 +35,4 @@
 - The regular suite has an exact reviewed skip budget enforced by `tools/verify-test-skips.mjs`; adding or moving a skip requires explicit review.
 - `quality-exceptions.json` is the only escape hatch for enforced architecture, size, dependency, marker, and coverage rules. Each exception must name an exact path, rationale, and removal condition.
 - Any behavior change needs tests; bug fixes need a regression test. Public behavior changes also update the relevant README/docs in the same change.
+- Public v1 tags, npm versions, and release assets are immutable. Follow `docs/releases.md`; never bypass the runtime-bound stable-readiness gate or impersonate the author in automation.

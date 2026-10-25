@@ -96,12 +96,21 @@ describe("packed npm archive", () => {
       engines: { opencode: string };
     };
     expect(metadata).toMatchObject({
-      version: "0.9.1",
+      version: JSON.parse(await Bun.file(join(repository, "package.json")).text()).version,
+      author: { name: "Yidi Sprei", url: "https://github.com/YidiDev" },
+      license: "MIT",
       exports: { ".": "./src/index.ts" },
       os: ["linux"],
       cpu: ["x64"],
       engines: { opencode: ">=2.1.3 <2.2.0" },
     });
+    expect(await readFile(join(installedRoot, "THIRD_PARTY_NOTICES.md"), "utf8")).toContain(
+      "third-party",
+    );
+    expect(
+      JSON.parse(await readFile(join(installedRoot, "THIRD_PARTY_LICENSES.json"), "utf8")).packages
+        .length,
+    ).toBeGreaterThan(3);
     expect(
       await readFile(join(installedRoot, "skills/session-communication/SKILL.md"), "utf8"),
     ).toContain("session_read");

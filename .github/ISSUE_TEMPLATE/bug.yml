@@ -1,0 +1,22 @@
+name: Bug report
+description: Report a reproducible failure without private data
+body:
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions and platform
+      description: Plugin, OpenCode, OS/architecture, and installation method. No private paths.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Expected and actual outcomes. Do not include credentials, transcripts, or databases.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostic codes
+      description: Use stable error codes and payload-free evidence only.

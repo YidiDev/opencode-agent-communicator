@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { releaseVersion } from "./release-policy.mjs";
 
 export const expectedToolIds = Object.freeze([
   "session_list",
@@ -31,8 +32,8 @@ export const expectedToolIds = Object.freeze([
 // This is SHA-256(npm-reported pack paths joined with LF), not a content digest. Any added, removed,
 // renamed, or reordered archive entry requires an explicit review and fingerprint update.
 export const expectedPackedPathPolicy = Object.freeze({
-  entryCount: 302,
-  sha256: "6bf0e820905260eee97df0f963eb257da195bf72e72c02416f39a18920c51af3",
+  entryCount: 305,
+  sha256: "043ea733b78aea4443754424941b42980d9d0a4dfd13c04c0fbadf6c38186b2f",
 });
 
 const forbiddenPathSegments = new Set([
@@ -109,7 +110,21 @@ function packedReport(root) {
 
 export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
   const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
-  assert(packageJson.version === "0.9.1", "version must be 0.9.1");
+  releaseVersion(packageJson.version);
+  assert(
+    packageJson.name === "opencode-agent-communicator",
+    "public package identity must be exact",
+  );
+  assert(
+    packageJson.author?.name === "Yidi Sprei" &&
+      packageJson.author?.url === "https://github.com/YidiDev",
+    "project authorship must identify Yidi Sprei",
+  );
+  assert(
+    packageJson.publishConfig?.access === "public" &&
+      packageJson.publishConfig?.registry === "https://registry.npmjs.org/",
+    "public registry configuration must be exact",
+  );
   assert(packageJson.private !== true, "package must be publishable");
   assert(packageJson.license === "MIT", "license metadata must match LICENSE");
   assert(
@@ -137,7 +152,7 @@ export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
     packageJson.dependencies?.effect === "4.0.1",
     "Effect must match the certified plugin API version",
   );
-  assert(packageJson.dependencies?.zod === "4.4.3", "Zod must match the certified version");
+  assert(packageJson.dependencies?.zod === "4.6.6", "Zod must match the certified version");
   assert(
     packageJson.devDependencies?.typescript === "7.0.2",
     "TypeScript must match the certified compiler version",
@@ -158,8 +173,11 @@ export async function verifyPackage(root = resolve(import.meta.dirname, "..")) {
     "docs/session-read-security.md",
     "docs/session-export-security.md",
     "docs/linux-sqlite-store.md",
+    "docs/v1-compatibility.md",
     "CHANGELOG.md",
     "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "THIRD_PARTY_LICENSES.json",
     "README.md",
     "SECURITY.md",
   ];

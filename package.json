@@ -1,9 +1,16 @@
 {
   "name": "opencode-agent-communicator",
-  "version": "0.9.1",
+  "version": "1.0.0-rc.1",
   "description": "Durable communication between independent OpenCode agent sessions.",
   "license": "MIT",
-  "author": "YidiDev",
+  "author": {
+    "name": "Yidi Sprei",
+    "url": "https://github.com/YidiDev"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "homepage": "https://github.com/YidiDev/opencode-agent-communicator#readme",
   "bugs": {
     "url": "https://github.com/YidiDev/opencode-agent-communicator/issues"
@@ -33,8 +40,11 @@
     "docs/session-read-security.md",
     "docs/session-export-security.md",
     "docs/linux-sqlite-store.md",
+    "docs/v1-compatibility.md",
     "CHANGELOG.md",
     "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "THIRD_PARTY_LICENSES.json",
     "README.md",
     "SECURITY.md"
   ],
@@ -56,7 +66,7 @@
     "check:conventions": "bun tools/run-conventions.ts",
     "check:coverage": "bun tools/run-coverage.ts",
     "typecheck": "tsc --noEmit --skipLibCheck",
-    "check": "bun run format:check && bun run lint && bun run check:conventions && node tools/verify-test-skips.mjs && bun run typecheck && bun test --timeout=15000 test/unit test/integration test/black-box",
+    "check": "bun run format:check && bun run lint && bun run check:conventions && node tools/verify-test-skips.mjs && bun run typecheck && bun run check:licenses && bun test --timeout=15000 test/unit test/integration test/black-box",
     "test": "bun test --timeout=15000 test/unit test/integration test/black-box",
     "test:unit": "bun test --timeout=15000 test/unit",
     "test:integration": "bun test --timeout=15000 test/integration",
@@ -68,13 +78,15 @@
     "test:live": "bun test test/live",
     "test:model-eval": "bun test/model-eval/run.ts",
     "verify:package": "node tools/verify-package.mjs",
+    "check:licenses": "node tools/check-licenses.mjs",
+    "check:security": "bun audit --audit-level=high",
     "test:black-box": "bun test --timeout=15000 test/black-box",
     "prepack": "node tools/verify-package.mjs"
   },
   "dependencies": {
     "@opencode/plugin": "2.1.3",
     "effect": "4.0.1",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.10",
