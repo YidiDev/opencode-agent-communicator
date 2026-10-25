@@ -127,6 +127,40 @@ clock-discontinuity regressions. Record failures and recovery behavior; do not
 replace this evidence with an ordinary green CI run. Keep issue #46 open until
 its separate reliability acceptance criteria are satisfied.
 
+### Measured packed-runtime soak
+
+Use the original tag workflow's downloaded archive artifact, not a rebuilt tarball.
+Set `ARTIFACT_DIRECTORY` to that private artifact directory and `NEW_PRIVATE_OUTPUT`
+to a new directory outside the checkout. The runner refuses to overwrite or resume
+an earlier report. A short harness smoke is explicitly not stable evidence:
+
+```bash
+bun test/soak/runner.ts --artifact "$ARTIFACT_DIRECTORY" --output "$NEW_PRIVATE_OUTPUT" --smoke
+```
+
+Omit `--smoke` and choose another new output directory for the actual 48-hour run.
+The runner verifies the original archive checksum and runtime digest, installs its
+frozen lockfile in a private installation, and uses the actual `src/` plugin directory.
+It runs two isolated Git repositories with two concurrent roots each, five-minute
+idle intervals, hourly delivery/request/lock/read and fail-closed journeys, and one
+planned restart of the second host with its existing roots. The first host remains
+running throughout. Loopback servers use fresh private authentication and a local
+deterministic model; no personal model credentials or paid-model traffic are used.
+
+Controlled clock/store regressions and the Docker Linux ownership/crash matrix run
+before and after the full observation interval. They are companion evidence, not
+claims of changing the user's OS clock or continuously injecting crashes. Reports
+contain aggregate timing/resource metrics and safe assertion labels, not prompts,
+answers, session identifiers, server credentials, or workspace paths. Inspect the
+final `summary.json` and `events.jsonl`, including failures and resource trends.
+Interrupted runs, missed observation bounds, clock jumps, changed runtimes, failed
+companions, and cleanup failures cannot qualify. A `smoke_passed` result never
+qualifies, even if the smoke was left running longer. The runner never changes
+`release-readiness.json`; review and publish the measured evidence before approving
+stable readiness. Keep the host running until completion.
+
+### Publication privacy
+
 Before making the repository public, audit every reachable branch/tag, release
 asset, issue/PR attachment, CI artifact/log, and publication setting. Do not add
 local transcripts, private backups, credentials, databases, or machine-specific
