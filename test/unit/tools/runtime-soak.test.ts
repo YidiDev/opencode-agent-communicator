@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import type { V2Event } from "@opencode/client";
 import {
   recordSoakCompactions,
   requireSoakCompactionCoverage,
@@ -10,6 +11,59 @@ import {
 import { assertContinuousObservation, SoakAssertion, soakOutcome } from "../../soak/evidence";
 import { observeSoakStep } from "../../soak/host";
 import { decodeBlockingFixture, decodeSoakCall, soakMarker } from "../../soak/provider";
+import { waitForSoakReceipt } from "../../soak/tool-receipt";
+
+test("soak receipts use live session/call correlation even when compaction removes structured context", async () => {
+  const success = {
+    type: "session.tool.success",
+    data: {
+      sessionID: "fixture",
+      id: "soak_nonce",
+      content: [{ type: "text", text: '{"ok":true}' }],
+    },
+  };
+  let closed = false;
+  async function* events(values: unknown[]) {
+    try {
+      for (const value of values) yield value as V2Event;
+    } finally {
+      closed = true;
+    }
+  }
+  const content = await waitForSoakReceipt(
+    events([
+      { ...success, data: { ...success.data, sessionID: "other" } },
+      { ...success, data: { ...success.data, id: "other" } },
+      success,
+    ]),
+    "fixture",
+    "soak_nonce",
+  );
+  expect(JSON.stringify(content)).toBe(JSON.stringify(success.data.content));
+  expect(closed).toBe(true);
+  await expect(waitForSoakReceipt(events([]), "fixture", "soak_nonce")).rejects.toThrow(
+    "controlled soak assertion",
+  );
+  await expect(
+    waitForSoakReceipt(
+      events([{ ...success, type: "session.tool.failed" }]),
+      "fixture",
+      "soak_nonce",
+    ),
+  ).rejects.toThrow("controlled soak assertion");
+  const nonce = crypto.randomUUID();
+  expect(
+    decodeSoakCall({
+      messages: [
+        {
+          role: "user",
+          content: soakMarker + JSON.stringify({ name: "session_list", arguments: {}, nonce }),
+        },
+      ],
+      tools: [{ function: { name: "session_list" } }],
+    })?.nonce,
+  ).toBe(nonce);
+});
 
 test("soak compaction metrics deduplicate completed compactions and fail on native failure", () => {
   const seen = new Set<string>();

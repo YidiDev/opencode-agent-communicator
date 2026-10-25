@@ -152,6 +152,10 @@ tool calls. Automatic compaction remains enabled with the normal fixture model l
 Resource samples include deduplicated completed-compaction counts for each host
 process (reset on the planned restart); a full pass requires observed successful
 compaction in both final host processes. Smoke runs do not claim that coverage.
+The driver subscribes to public native events before each invocation and correlates
+the completed result with a fresh synthetic call identifier and target session.
+It does not assume a tool result remains in current context after automatic compaction,
+reconstruct results from summary text, or replay a completed command to recover evidence.
 
 Controlled clock/store regressions and the Docker Linux ownership/crash matrix run
 before and after the full observation interval. They are companion evidence, not

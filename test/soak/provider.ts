@@ -61,7 +61,9 @@ export function decodeBlockingFixture(
   };
 }
 
-export function decodeSoakCall(body: unknown): { name: string; arguments: string } | undefined {
+export function decodeSoakCall(
+  body: unknown,
+): { name: string; arguments: string; nonce?: string } | undefined {
   if (
     typeof body !== "object" ||
     body === null ||
@@ -92,7 +94,13 @@ export function decodeSoakCall(body: unknown): { name: string; arguments: string
   )
     throw new Error("Invalid soak tool command");
   if (!body.tools.some((tool) => tool?.function?.name === call.name)) return undefined;
-  return { name: call.name, arguments: JSON.stringify(call.arguments) };
+  if ("nonce" in call && (typeof call.nonce !== "string" || !/^[a-f0-9-]{36}$/.test(call.nonce)))
+    throw new Error("Invalid soak nonce");
+  return {
+    name: call.name,
+    arguments: JSON.stringify(call.arguments),
+    ...("nonce" in call ? { nonce: call.nonce as string } : {}),
+  };
 }
 
 export function launchSoakProvider() {
@@ -114,9 +122,12 @@ export function launchSoakProvider() {
             tool_calls: [
               {
                 index: 0,
-                id: `call_${crypto.randomUUID().replaceAll("-", "")}`,
+                id:
+                  "nonce" in call
+                    ? `soak_${call.nonce}`
+                    : `call_${crypto.randomUUID().replaceAll("-", "")}`,
                 type: "function",
-                function: call,
+                function: { name: call.name, arguments: call.arguments },
               },
             ],
           }
