@@ -24,10 +24,32 @@ the package's npm settings. npm may require interactive account verification or
 traditional tokens after trusted publishing succeeds. The first successful
 trusted publication must occur before npm's configuration-expiry deadline.
 
-If npm requires an initial owner-authenticated publication before trust can be
-configured, stop and agree on a separate bootstrap prerelease. A bootstrap without
-provenance must be labeled accurately; the automated attested RC uses a different
-version. Never silently adopt an unattested version or reuse a published version.
+For a new package, agree on the bootstrap before creating anything public. npm's
+`stage publish` can reserve the name with a minimal unapproved stub and an empty
+public `0.0.0-stage` placeholder. The stub is not project code or a real release;
+do not approve it. Configure the exact trusted publisher after reservation.
+
+**Keep the reservation stub pending until the first real, attested RC is
+published and verified.** Rejecting the final pending stage while only its
+placeholder exists automatically unpublishes the placeholder and removes trust.
+npm then enforces a 24-hour republication hold. Do not bypass it or rename the
+package to evade it. An HTTP 200 packument containing only `time.unpublished`
+is a tombstone, not proof that ownership or trust still exists.
+
+Before removing the reservation stub, verify the real release against the
+original release artifact and complete the public-consumer provenance checks:
+download the original run's archive artifact into `release/`, including
+`release-metadata.json` and the tarball. Do not rebuild it.
+
+```bash
+node tools/release-registry.mjs release --verify-download
+```
+
+Only after those checks succeed may the owner reject the unapproved stub. A
+bootstrap without provenance must be labeled accurately; never silently adopt
+an unattested version or reuse a published version. For an agent-driven browser
+MFA operation, keep the official npm CLI running in a PTY so it can finish the
+approval exchange; a non-interactive command exits instead of completing it.
 
 ## Release PR and signed tag
 
