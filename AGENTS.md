@@ -35,4 +35,3 @@
 - The regular suite has an exact reviewed skip budget enforced by `tools/verify-test-skips.mjs`; adding or moving a skip requires explicit review.
 - `quality-exceptions.json` is the only escape hatch for enforced architecture, size, dependency, marker, and coverage rules. Each exception must name an exact path, rationale, and removal condition.
 - Any behavior change needs tests; bug fixes need a regression test. Public behavior changes also update the relevant README/docs in the same change.
-- Public v1 tags, npm versions, and release assets are immutable. Follow `docs/releases.md`; never bypass the runtime-bound stable-readiness gate or impersonate the author in automation.
