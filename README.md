@@ -6,7 +6,7 @@
 [![OpenCode v2 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** preparing `v1.0.0-rc.1`, a release candidate, not stable v1. <!-- x-release-please-version -->
+**Release status:** `v1.0.0`, approved through an explicit owner exception to the 48-hour soak requirement. The soak did not pass; see [release evidence](https://github.com/YidiDev/opencode-agent-communicator/issues/46#issuecomment-6514468132). <!-- x-release-please-version -->
 The v1 line supports Linux x64 and
 stable OpenCode versions `>=2.1.3 <2.2.0`. Bun `1.4.0` is required for development and release verification. Other
 architectures, operating systems, OpenCode versions, and prereleases are unsupported.
@@ -68,7 +68,7 @@ metadata and release gates. Network and clustered filesystems are rejected for t
 After the RC is published, install its exact npm version outside OpenCode:
 
 ```bash
-plugin_version="1.0.0-rc.1" # x-release-please-version
+plugin_version="1.0.0" # x-release-please-version
 install_root="$HOME/.local/share/opencode-agent-communicator/v$plugin_version"
 install -d -m 0700 "$install_root"
 npm install --prefix "$install_root" --save-exact --ignore-scripts \

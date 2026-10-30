@@ -41,8 +41,12 @@ test("release bot prepares PRs without publishing or impersonating the human aut
   expect(source).not.toMatch(/GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL)/);
   expect(source).not.toContain("id-token: write");
   const policy = JSON.parse(await Bun.file("release-readiness.json").text());
-  expect(policy.schema_version).toBe(1);
+  expect([1, 2]).toContain(policy.schema_version);
   const metadata = JSON.parse(await Bun.file("package.json").text());
+  const releaseConfig = JSON.parse(await Bun.file("release-please-config.json").text());
+  const prerelease = metadata.version.includes("-rc.");
+  expect(releaseConfig.prerelease).toBe(prerelease);
+  expect(releaseConfig.versioning).toBe(prerelease ? "prerelease" : "default");
   const digest = await runtimeDigest(process.cwd());
   expect(() => assertStableReadiness(metadata.version, policy, digest)).not.toThrow();
 });

@@ -120,12 +120,25 @@ OIDC dist-tag changes require their own npm permission and a compatible npm CLI.
 
 ## Stable readiness and privacy
 
-Stable publication requires reviewed evidence of at least 48 hours with the same
+Stable publication normally requires reviewed evidence of at least 48 hours with the same
 runtime/dependency digest. Cover multiple isolated repositories, long-lived hosts,
 idle periods, concurrent roots, restarts, ownership contention, and controlled
 clock-discontinuity regressions. Record failures and recovery behavior; do not
 replace this evidence with an ordinary green CI run. Keep issue #46 open until
 its separate reliability acceptance criteria are satisfied.
+
+The maintainer may explicitly authorize an exception for one exact stable version and runtime
+digest. Record it in readiness schema 2 with `stable_approved: true` and an `approval` object:
+`method: "owner_exception"`, `approved_by: "YidiDev"`, exact `version` and `runtime_sha256`, a
+nonempty substantive `reason`, and a public repository issue or PR `report_url`. The release PR
+must make the exception visible and retain truthful failed/incomplete `soak` data. Changes to the
+version or runtime invalidate the exception. Schema 1 retains the normal passing 48-hour path.
+Exceptions do not waive ordinary CI, security, immutable archives/tags, trusted publishing,
+provenance, or fresh public-consumer verification, and do not close issue #46 by themselves.
+
+Stable `1.0.0` uses this owner-authorized exception: the WSL-hosted soak failed its clock-continuity
+guard and does not establish 48-hour stability. See the
+[public rationale](https://github.com/YidiDev/opencode-agent-communicator/issues/46#issuecomment-6514468132).
 
 ### Measured packed-runtime soak
 

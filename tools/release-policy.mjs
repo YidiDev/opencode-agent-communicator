@@ -22,8 +22,28 @@ export function releaseVersion(value) {
   };
 }
 
+function approvedOwnerException(version, readiness, digest) {
+  const approval = readiness?.approval;
+  return (
+    readiness?.schema_version === 2 &&
+    readiness.stable_approved === true &&
+    approval?.method === "owner_exception" &&
+    approval.approved_by === "YidiDev" &&
+    approval.version === version &&
+    /^[0-9a-f]{64}$/.test(digest) &&
+    approval.runtime_sha256 === digest &&
+    typeof approval.reason === "string" &&
+    approval.reason.trim().length >= 20 &&
+    approval.reason.length <= 2048 &&
+    /^https:\/\/github\.com\/YidiDev\/opencode-agent-communicator\/(?:issues|pull)\/[1-9]\d*(?:#issuecomment-\d+)?$/.test(
+      approval.report_url ?? "",
+    )
+  );
+}
+
 export function assertStableReadiness(version, readiness, digest) {
   if (releaseVersion(version).prerelease) return;
+  if (approvedOwnerException(version, readiness, digest)) return;
   if (
     readiness?.schema_version !== 1 ||
     readiness.stable_approved !== true ||
@@ -37,7 +57,7 @@ export function assertStableReadiness(version, readiness, digest) {
     )
   ) {
     throw new Error(
-      "Stable publishing requires reviewed passing 48-hour soak evidence for this runtime",
+      "Stable publishing requires reviewed passing 48-hour soak evidence or an explicit version/runtime-bound owner exception",
     );
   }
 }

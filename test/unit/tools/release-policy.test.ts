@@ -60,6 +60,58 @@ test("stable publication requires reviewed 48-hour evidence bound to the exact r
     expect(() => assertStableReadiness("1.0.0", readiness, digest)).toThrow("48-hour");
 });
 
+test("explicit owner exceptions are version/runtime-bound and never turn failed evidence into a pass", () => {
+  const digest = "a".repeat(64);
+  const valid = {
+    schema_version: 2,
+    stable_approved: true,
+    approval: {
+      method: "owner_exception",
+      approved_by: "YidiDev",
+      version: "1.0.0",
+      runtime_sha256: digest,
+      reason: "Owner explicitly accepts release without a qualifying soak.",
+      report_url:
+        "https://github.com/YidiDev/opencode-agent-communicator/issues/46#issuecomment-123",
+    },
+    soak: { result: "failed", duration_hours: 12.269325160276944 },
+  };
+  const before = JSON.stringify(valid);
+  expect(() => assertStableReadiness("1.0.0", valid, digest)).not.toThrow();
+  expect(JSON.stringify(valid)).toBe(before);
+  expect(() => assertStableReadiness("1.0.1", valid, digest)).toThrow();
+  expect(() => assertStableReadiness("1.0.0", valid, "b".repeat(64))).toThrow();
+  for (const change of [
+    { method: "automatic" },
+    { approved_by: "github-actions[bot]" },
+    { version: "1.0.1" },
+    { runtime_sha256: "b".repeat(64) },
+    { reason: "" },
+    { reason: " ".repeat(30) },
+    { reason: 123 },
+    { reason: "x".repeat(2049) },
+    { report_url: "https://example.com/approval" },
+    { report_url: "https://github.com/YidiDev/opencode-agent-communicator-evil/issues/46" },
+    { report_url: "https://github.com/YidiDev/opencode-agent-communicator/" },
+    { report_url: null },
+  ])
+    expect(() =>
+      assertStableReadiness(
+        "1.0.0",
+        { ...valid, approval: { ...valid.approval, ...change } },
+        digest,
+      ),
+    ).toThrow();
+  for (const change of [
+    { stable_approved: false },
+    { schema_version: 1 },
+    { schema_version: 3 },
+    { approval: undefined },
+  ])
+    expect(() => assertStableReadiness("1.0.0", { ...valid, ...change }, digest)).toThrow();
+  expect(() => assertStableReadiness("1.0.0", valid, "not-a-digest")).toThrow();
+});
+
 test("runtime evidence ignores release-only metadata but rejects source, dependency and symlink changes", async () => {
   const root = await mkdtemp(join(tmpdir(), "release-runtime-"));
   try {
