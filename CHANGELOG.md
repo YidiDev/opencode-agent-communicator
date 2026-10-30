@@ -19,6 +19,8 @@ All notable changes to this project are documented in this file. The format is b
 
 - This patch uses a new owner-authorized, version/runtime-bound soak exception. No qualifying
   48-hour soak passed; historical failed runs remain failed and issue #46 remains open.
+- The owner also authorized an unsigned annotated tag for 1.0.1 after local GPG pinentry timed
+  out. Its main merge commit and npm provenance remain verified; no existing tag is changed.
 
 ## [1.0.0] - 2026-10-30
 
