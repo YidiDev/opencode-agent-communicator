@@ -44,7 +44,10 @@ advisories. The reusable CI also scans reachable history with a checksum-pinned 
 Keep source/dependency verification separate from the minimal-permission npm OIDC job. Release
 PRs use the GitHub Actions bot identity and explicit CI dispatch, not a human author identity or
 a token-event loophole. Stable release approval must reference measured 48-hour soak evidence
-for the same runtime digest; it is not inferred from a passing release-candidate pipeline.
+for the same runtime digest, or an explicit owner exception bound to one stable version and runtime
+digest with a public rationale. An exception never makes a failed soak pass and does not waive CI,
+security, provenance or public-consumer verification. Approval is not inferred from a passing
+release-candidate pipeline.
 
 When rules compete, use this order:
 

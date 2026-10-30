@@ -1,6 +1,6 @@
 {
   "name": "opencode-agent-communicator",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0",
   "description": "Durable communication between independent OpenCode agent sessions.",
   "license": "MIT",
   "author": {

@@ -6,12 +6,28 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
-## [1.0.0-rc.1] - Unreleased candidate
+## [1.0.0] - 2026-10-30
+
+### Changed
+
+- Release the public v1 runtime with the same runtime/dependency digest as `1.0.0-rc.1`.
+- Permit an explicit owner-approved release-policy exception bound to one version and runtime
+  digest, retaining all ordinary CI, security, trusted publishing and consumer verification.
+- Prepare subsequent automated releases on the stable channel.
+
+### Validation limitation
+
+- This release uses an [owner-authorized exception](https://github.com/YidiDev/opencode-agent-communicator/issues/46#issuecomment-6514468132)
+  to the 48-hour soak requirement. The latest full soak failed its clock-continuity guard after
+  12.269325160276944 measured hours and 147 samples, before the planned restart. It is not a pass;
+  no failed-run time qualifies. Issue #46 remains open for reliability and causal investigation.
+
+## [1.0.0-rc.1] - 2026-10-26
 
 ### Added
 
-- Prepare the public v1 compatibility contract and release-candidate rollout. Stable publishing
-  remains blocked pending reviewed 48-hour runtime-bound soak evidence.
+- Prepare the public v1 compatibility contract and release-candidate rollout. At RC publication,
+  stable publishing required reviewed 48-hour runtime-bound soak evidence.
 - Identify Yidi Sprei as the author and copyright holder of original work; preserve third-party
   ownership through notices and a checked production dependency license inventory.
 - Prepare tokenless npm trusted publishing, shared GitHub/npm release archives, SBOMs, safe retry

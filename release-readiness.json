@@ -1,10 +1,18 @@
 {
-  "schema_version": 1,
-  "stable_approved": false,
+  "schema_version": 2,
+  "stable_approved": true,
+  "approval": {
+    "method": "owner_exception",
+    "approved_by": "YidiDev",
+    "version": "1.0.0",
+    "runtime_sha256": "73435694ded7a68fa8341ab8e3f517e523600bcd7fa6189753efde1173f8b78d",
+    "reason": "Owner-authorized stable release without a qualifying 48-hour soak; WSL clock disagreement invalidated observation. Failed soak evidence is retained, and issue #46 remains open.",
+    "report_url": "https://github.com/YidiDev/opencode-agent-communicator/issues/46#issuecomment-6514468132"
+  },
   "soak": {
-    "result": "pending",
-    "duration_hours": 0,
-    "runtime_sha256": null,
-    "report_url": null
+    "result": "failed",
+    "duration_hours": 12.269325160276944,
+    "runtime_sha256": "73435694ded7a68fa8341ab8e3f517e523600bcd7fa6189753efde1173f8b78d",
+    "report_url": "https://github.com/YidiDev/opencode-agent-communicator/issues/46#issuecomment-6396620953"
   }
 }
