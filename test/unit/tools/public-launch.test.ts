@@ -3,12 +3,15 @@ import { assertStableReadiness, runtimeDigest } from "../../../tools/release-pol
 
 test("public installation examples use native v2 plugin objects and valid JSON", async () => {
   const readme = await Bun.file("README.md").text();
+  const metadata = await Bun.file("package.json").json();
   const examples = [...readme.matchAll(/```json\n([\s\S]*?)\n```/g)].map((m) => m[1]);
   const configurations = examples.filter((value) => value?.includes('"plugins"'));
   expect(configurations).toHaveLength(2);
-  for (const value of configurations) {
+  for (const [index, value] of configurations.entries()) {
     const config = JSON.parse(value ?? "");
-    expect(config.plugins[0].package).toEndWith("/src");
+    if (index === 0)
+      expect(config.plugins[0].package).toBe(`opencode-agent-communicator@${metadata.version}`);
+    else expect(config.plugins[0].package).toEndWith("/src");
     expect(config.plugins[0].options.policies.start).toBe("deny");
   }
   expect(readme).not.toContain('"plugin":');

@@ -76,6 +76,12 @@ Do not tag an unrelated checkout. The tag-push workflow automatically performs
 the remaining release work; manual workflow dispatch on the exact tag is for
 recovery, not a bypass of checks. Never force-push or retarget public release tags.
 
+For **1.0.1 only**, the owner explicitly authorized an unsigned annotated tag because
+the local terminal-only GPG prompt timed out. It must target the exact GitHub-verified
+main merge commit and disclose the exception in its annotation. This is not a signed-tag
+claim or permission for future versions; npm OIDC provenance, registry signatures,
+archive/origin verification, immutable releases, and every CI gate remain required.
+
 ## Release pipeline
 
 1. Require the exact public repository, canonical tag/version, trusted-main

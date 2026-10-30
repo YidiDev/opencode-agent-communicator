@@ -32,8 +32,8 @@ live completed results and the existing adversarial regressions remain required 
 Public `session.list` is now available, but the plugin context has no authoritative current-activity
 query. Registry-driven discovery and explicit unsupported context/stop results are retained.
 
-Support is deliberately narrowed to stable `>=2.1.3 <2.2.0`; this change does not certify the old
-2.0/Effect-RC combination. The minimum and build-time host coincide. A later compatibility release,
+Support covers stable `>=2.1.3 <2.3.0`, with isolated packed live tests on 2.1.3 and 2.2.2; this does not certify the old
+2.0/Effect-RC combination. The minimum and build-time host remain 2.1.3. A later compatibility release,
 side-by-side immutable installation, coordinated service restart, and actual-environment smoke test
 are separate from isolated acceptance. Do not publish to npm or restart the active shared service
 as part of a compatibility test. Keep #46 open for its independent soak and causal investigation.

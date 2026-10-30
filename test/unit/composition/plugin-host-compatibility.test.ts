@@ -58,31 +58,34 @@ describe("production OpenCode v2 compatibility", () => {
     await expect(plugin(context, host.signal)).rejects.toThrow();
     expect(nativeCreations).toBe(0);
   });
-  test.each(["2.1.3", "2.1.4", "2.1.999"])("accepts supported stable patch %s", async (version) => {
-    const probe = compatibilityProbe({ healthy: true, version });
-    await expect(probe.plugin(context)).rejects.toThrow("compatible-host-proceeded");
-    expect(probe.nativeCreations()).toBe(1);
-  });
+  test.each(["2.1.3", "2.1.4", "2.1.999", "2.2.0", "2.2.2"])(
+    "accepts supported stable patch %s",
+    async (version) => {
+      const probe = compatibilityProbe({ healthy: true, version });
+      await expect(probe.plugin(context)).rejects.toThrow("compatible-host-proceeded");
+      expect(probe.nativeCreations()).toBe(1);
+    },
+  );
 
   test.each([
     "2.0.25",
     "2.0.26",
     "2.1.0",
     "2.1.2",
-    "2.2.0",
+    "2.3.0",
     "2.1.03",
     "2.1.3-rc.1",
     "2.1.3+build.1",
     `2.1.${Number.MAX_SAFE_INTEGER + 1}`,
   ])("rejects unsupported or noncanonical host %s before native creation", async (version) => {
     const probe = compatibilityProbe({ healthy: true, version });
-    await expect(probe.plugin(context)).rejects.toThrow(">=2.1.3 <2.2.0");
+    await expect(probe.plugin(context)).rejects.toThrow(">=2.1.3 <2.3.0");
     expect(probe.nativeCreations()).toBe(0);
   });
 
   test("rejects an unhealthy otherwise-supported host", async () => {
     const probe = compatibilityProbe({ healthy: false, version: "2.1.4" });
-    await expect(probe.plugin(context)).rejects.toThrow(">=2.1.3 <2.2.0");
+    await expect(probe.plugin(context)).rejects.toThrow(">=2.1.3 <2.3.0");
     expect(probe.nativeCreations()).toBe(0);
   });
 });

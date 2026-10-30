@@ -102,7 +102,7 @@ describe("packed npm archive", () => {
       exports: { ".": "./src/index.ts" },
       os: ["linux"],
       cpu: ["x64"],
-      engines: { opencode: ">=2.1.3 <2.2.0" },
+      engines: { opencode: ">=2.1.3 <2.3.0" },
     });
     expect(await readFile(join(installedRoot, "THIRD_PARTY_NOTICES.md"), "utf8")).toContain(
       "third-party",

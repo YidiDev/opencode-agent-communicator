@@ -1,16 +1,16 @@
 # v1 compatibility contract
 
-The 1.0.0 release candidates exercise this proposed contract. Stable 1.0.0 is
-blocked until `release-readiness.json` contains reviewed passing 48-hour soak
-evidence for the same runtime-source and dependency digest. An RC is not a
-production-readiness claim.
+The stable v1 line follows this contract. Stable publication requires reviewed passing
+48-hour soak evidence or an explicit owner exception bound to the exact version and
+runtime/dependency digest in `release-readiness.json`. An exception does not make a
+failed soak pass; an RC alone is not a production-readiness claim.
 
 ## Supported environment
 
 - Linux x64 and a private local filesystem compatible with the SQLite and secure
   export checks. Other architectures, network filesystems, and missing kernel
   capabilities are not silently supported through fallbacks.
-- Stable OpenCode `>=2.1.3 <2.2.0`. The deterministic build/live baseline is 2.1.3;
+- Stable OpenCode `>=2.1.3 <2.3.0`. The build baseline is 2.1.3; live CI tests 2.1.3 and 2.2.2;
   this range is not evidence that every future patch has been tested.
 - Bun 1.4.0 for development and release verification. OpenCode supplies the plugin
   execution runtime. The package is not a general Node.js application.

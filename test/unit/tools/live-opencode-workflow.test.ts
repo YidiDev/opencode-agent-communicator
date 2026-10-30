@@ -16,15 +16,20 @@ test("snapshots build runtime dependencies before running the pinned v2 harness"
   const workflow = Bun.YAML.parse(source) as {
     readonly jobs?: Record<
       string,
-      { readonly env?: Record<string, unknown>; readonly steps?: readonly WorkflowStep[] }
+      {
+        readonly env?: Record<string, unknown>;
+        readonly steps?: readonly WorkflowStep[];
+        readonly strategy?: { readonly matrix?: { readonly version?: readonly string[] } };
+      }
     >;
   };
   const job = workflow.jobs?.["opencode-2"];
+  expect(job?.strategy?.matrix?.version).toEqual(["2.1.3", "2.2.2"]);
   const steps = job?.steps ?? [];
   const prerequisites = steps.find((step) => step.name === "Verify live-gate prerequisites");
   const versionCheck = prerequisites?.run
     ?.split("\n")
-    .find((line) => line.includes("opencode --version"));
+    .find((line) => line.includes('/opencode" --version'));
   expect(versionCheck).toBeDefined();
   if (!versionCheck) throw new Error("Missing CLI version prerequisite");
   for (const [output, expected] of [
@@ -36,7 +41,10 @@ test("snapshots build runtime dependencies before running the pinned v2 harness"
       [
         "bash",
         "-c",
-        versionCheck.replace("$(./node_modules/.bin/opencode --version)", "$VERSION_OUTPUT"),
+        versionCheck.replace(
+          '$("$host_root/node_modules/.bin/opencode" --version)',
+          "$VERSION_OUTPUT",
+        ),
       ],
       {
         env: { VERSION_OUTPUT: output, OPENCODE_COMPAT_VERSION: "2.1.3" },
@@ -68,6 +76,48 @@ test("snapshots build runtime dependencies before running the pinned v2 harness"
   for (const step of steps) {
     if (step === snapshot || step === liveHarness) continue;
     expect(step.env?.OPENCODE_COMMUNICATOR_PACKED_RUNTIME_DEPENDENCIES_ROOT).toBeUndefined();
+  }
+});
+
+test("isolated newer CLI resolution checks exact version and refuses escaping binaries", async () => {
+  const root = await mkdtemp(join(tmpdir(), "compat-cli-resolution-"));
+  try {
+    const cli = join(root, "node_modules/@opencode/cli");
+    await mkdir(join(cli, "bin"), { recursive: true });
+    const manifest = { name: "@opencode/cli", version: "2.2.2", bin: { opencode: "bin/opencode" } };
+    await writeFile(join(cli, "package.json"), JSON.stringify(manifest));
+    await writeFile(join(cli, "bin/opencode"), "fixture");
+    const resolver = resolve("test/live/harness/cli.ts");
+    const script = `import { resolveExactProjectCli } from ${JSON.stringify(resolver)}; console.log(await resolveExactProjectCli("/unused-project"));`;
+    async function invoke() {
+      const child = Bun.spawn([process.execPath, "-e", script], {
+        env: { ...process.env, OPENCODE_COMPAT_VERSION: "2.2.2", OPENCODE_COMPAT_CLI_ROOT: root },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      return { exitCode, stdout, stderr };
+    }
+    expect(await invoke()).toEqual({
+      exitCode: 0,
+      stdout: `${join(cli, "bin/opencode")}\n`,
+      stderr: "",
+    });
+    await writeFile(join(cli, "package.json"), JSON.stringify({ ...manifest, version: "2.2.1" }));
+    expect((await invoke()).stderr).toContain("expected project-local @opencode/cli 2.2.2");
+    await writeFile(join(cli, "package.json"), JSON.stringify(manifest));
+    await rm(join(cli, "bin/opencode"));
+    await writeFile(join(root, "outside"), "fixture");
+    await symlink(join(root, "outside"), join(cli, "bin/opencode"));
+    const escaped = await invoke();
+    expect(escaped.exitCode).not.toBe(0);
+    expect(escaped.stderr).toContain("opencode CLI resolved outside its exact package");
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

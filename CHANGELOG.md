@@ -6,6 +6,22 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-30
+
+### Fixed
+
+- Accept stable OpenCode 2.2 hosts while retaining the 2.1.3 minimum, exact build SDK pins,
+  and fail-closed rejection of prereleases, malformed versions, and OpenCode 2.3 or later.
+- Run the actual packed-plugin live journeys on isolated OpenCode 2.1.3 and 2.2.2 hosts in CI.
+- Document the exact public npm plugin reference as the preferred installation method.
+
+### Validation limitation
+
+- This patch uses a new owner-authorized, version/runtime-bound soak exception. No qualifying
+  48-hour soak passed; historical failed runs remain failed and issue #46 remains open.
+- The owner also authorized an unsigned annotated tag for 1.0.1 after local GPG pinentry timed
+  out. Its main merge commit and npm provenance remain verified; no existing tag is changed.
+
 ## [1.0.0] - 2026-10-30
 
 ### Changed
