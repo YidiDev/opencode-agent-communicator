@@ -108,5 +108,5 @@ log projected content. Safe diagnostics exclude content, cursor plaintext, raw w
 unsanitized metadata. Use durable ask/wait requests for coordination; current-context text, tool
 markers, timing, and `is_live` do not prove completion, understanding, compliance, or lock discipline.
 
-The supported host range is stable OpenCode `>=2.1.3 <2.2.0` on Linux x64. The adapter uses only the
+The supported host range is stable OpenCode `>=2.1.3 <2.3.0` on Linux x64. The adapter uses only the
 public OpenCode v2 Effect plugin API.

@@ -21,7 +21,7 @@ This section is normative for issue #46 and supersedes the historical OpenCode 1
 transport, imperative approval, active-only ask/wait, native sanitizer, and raw-response-bound
 descriptions retained later in this plan. Those historical acceptance criteria are not v2 guarantees.
 
-- The current compatibility baseline is Linux x64 with Bun `1.4.0` and stable OpenCode `>=2.1.3 <2.2.0`.
+- The current compatibility baseline is Linux x64 with Bun `1.4.0` and stable OpenCode `>=2.1.3 <2.3.0`.
   `@opencode/plugin` and `@opencode/cli` are pinned to `2.1.3`, with Effect `4.0.1`.
   This supersedes v0.8.0's 2.0-only support. The installed `src/` directory is the local plugin
   source; a file URL ending in `src/index.ts` is rejected by the 2.1 loader before plugin setup.

@@ -15,6 +15,7 @@ function isContained(parent: string, candidate: string): boolean {
 }
 
 export async function resolveExactProjectCli(projectRoot: string): Promise<string> {
+  projectRoot = process.env.OPENCODE_COMPAT_CLI_ROOT ?? projectRoot;
   const packageDirectory = await realpath(join(projectRoot, "node_modules", "@opencode", "cli"));
   const expectedDirectory = await realpath(join(projectRoot, "node_modules"));
   if (!isContained(expectedDirectory, packageDirectory)) {

@@ -1,6 +1,6 @@
 {
   "name": "opencode-agent-communicator",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Durable communication between independent OpenCode agent sessions.",
   "license": "MIT",
   "author": {
@@ -56,7 +56,7 @@
   ],
   "engines": {
     "bun": "1.4.0",
-    "opencode": ">=2.1.3 <2.2.0"
+    "opencode": ">=2.1.3 <2.3.0"
   },
   "packageManager": "bun@1.4.0",
   "scripts": {
@@ -101,7 +101,7 @@
     "typescript-compiler-api": "npm:typescript@5.9.3"
   },
   "peerDependencies": {
-    "@opencode/cli": ">=2.1.3 <2.2.0"
+    "@opencode/cli": ">=2.1.3 <2.3.0"
   },
   "trustedDependencies": [
     "@opencode/cli"

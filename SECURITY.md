@@ -2,18 +2,20 @@
 
 ## Supported versions
 
-This project is prerelease software. Security fixes are provided only for the current release line.
+Security fixes are provided for the current stable release line.
 
 | Version | Supported | Required host |
 | --- | --- | --- |
+| 1.0.1 | Current stable | Linux x64, stable OpenCode >=2.1.3 <2.3.0; Bun 1.4.0 for verification |
+| 1.0.0 | Superseded by 1.0.1 | Linux x64, stable OpenCode >=2.1.3 <2.2.0 |
 | 1.0.0 release candidates | Preview; not stable | Linux x64, stable OpenCode >=2.1.3 <2.2.0; Bun 1.4.0 for verification |
 | 0.9.1 | Superseded; lacks the RC dependency security fixes | Linux x64, stable OpenCode >=2.1.3 <2.2.0 |
 | 0.9.0 and earlier | No | Not applicable |
 | Earlier development builds | No | Not applicable |
 
-Before v1 becomes stable, the release candidate is the security-fix target, not a stability
-guarantee. It updates the vulnerable Zod and locked Undici versions identified during the public
-launch audit. Existing release archives are not replaced or relabeled.
+The stable line retains the vulnerable Zod and locked Undici fixes identified during the public
+launch audit. Stable approval uses documented version/runtime-bound owner exceptions, not a
+claim that a 48-hour soak passed. Existing release archives are not replaced or relabeled.
 
 Host compatibility is part of the security boundary. Do not use this release on another operating
 system or CPU architecture, or with an OpenCode version outside the supported stable range. Bun

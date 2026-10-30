@@ -3,7 +3,7 @@
 ## Sources Of Truth
 
 - `PLAN.md` is normative for product behavior and architecture; `DEVELOPMENT.md` is normative for engineering conventions. Prefer executable scripts and checks when prose drifts.
-- This package supports only Linux x64, Bun `1.4.0`, and stable OpenCode `>=2.1.3 <2.2.0`. `@opencode/plugin` and `@opencode/cli` are pinned to the build-time patch and must remain aligned.
+- This package supports only Linux x64, Bun `1.4.0`, and stable OpenCode `>=2.1.3 <2.3.0`. `@opencode/plugin` and the build-time `@opencode/cli` remain pinned together at `2.1.3`; isolated live CI also tests host `2.2.2`.
 
 ## Commands
 

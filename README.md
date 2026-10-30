@@ -6,9 +6,9 @@
 [![OpenCode v2 compatibility](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml/badge.svg)](https://github.com/YidiDev/opencode-agent-communicator/actions/workflows/live-opencode.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
 
-**Release status:** `v1.0.0`, approved through an explicit owner exception to the 48-hour soak requirement. The soak did not pass; see [release evidence](https://github.com/YidiDev/opencode-agent-communicator/issues/46#issuecomment-6514468132). <!-- x-release-please-version -->
+**Release status:** `v1.0.1`, approved through an explicit owner exception to the 48-hour soak requirement. No qualifying soak passed; see [patch release evidence](https://github.com/YidiDev/opencode-agent-communicator/issues/46#issuecomment-6528491326). <!-- x-release-please-version -->
 The v1 line supports Linux x64 and
-stable OpenCode versions `>=2.1.3 <2.2.0`. Bun `1.4.0` is required for development and release verification. Other
+stable OpenCode versions `>=2.1.3 <2.3.0`. Bun `1.4.0` is required for development and release verification. Other
 architectures, operating systems, OpenCode versions, and prereleases are unsupported.
 The published `v0.8.0` tag supports OpenCode `>=2.0.26 <2.1.0`, not 2.1.3. The older `v0.7.4`
 tag targets OpenCode 1.18. Do not assume the version in an arbitrary checkout identifies its release.
@@ -50,7 +50,7 @@ execution.
 ## Requirements
 
 - Linux x64 with a local filesystem suitable for SQLite WAL
-- A stable OpenCode version in `>=2.1.3 <2.2.0`
+- A stable OpenCode version in `>=2.1.3 <2.3.0`
 - npm for installing an exact published version
 - Bun `1.4.0` for development and release verification
 - A dedicated private state directory owned by the account running OpenCode
@@ -65,10 +65,11 @@ metadata and release gates. Network and clustered filesystems are rejected for t
 
 ### 1. Install the plugin
 
-After the RC is published, install its exact npm version outside OpenCode:
+Prefer the exact public package reference in step 2; OpenCode installs it from npm.
+For an optional side-by-side filesystem installation instead:
 
 ```bash
-plugin_version="1.0.0" # x-release-please-version
+plugin_version="1.0.1" # x-release-please-version
 install_root="$HOME/.local/share/opencode-agent-communicator/v$plugin_version"
 install -d -m 0700 "$install_root"
 npm install --prefix "$install_root" --save-exact --ignore-scripts \
@@ -82,16 +83,19 @@ checksums, SBOM, and license inventory. Do not reuse an older installation direc
 
 ### 2. Add the plugin
 
-Configure the installed `src/` **directory**, not its `index.ts` file, as an absolute `file://` URL.
-Replace `/home/operator` with the installation account's home and `<VERSION>` with the exact installed version.
-OpenCode 2.1 rejects configured file sources before plugin setup:
+Configure the exact public npm version. Keep your existing options and private state directory
+when upgrading. If using the optional filesystem installation, replace the package reference with
+an absolute `file://` URL to its `src/` **directory**, not its `index.ts` file.
+OpenCode rejects configured file sources before plugin setup:
+
+<!-- x-release-please-start-version -->
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      "package": "file:///home/operator/.local/share/opencode-agent-communicator/v<VERSION>/node_modules/opencode-agent-communicator/src",
+      "package": "opencode-agent-communicator@1.0.1",
       "options": {
         "policies": {
           "message": "allow",
@@ -106,6 +110,8 @@ OpenCode 2.1 rejects configured file sources before plugin setup:
   ]
 }
 ```
+
+<!-- x-release-please-end -->
 
 OpenCode v2 accepts the object form for a plugin source and its strict package-specific options. The
 entrypoint uses the public `Plugin.define` Effect API and registers tools and skills through
@@ -151,7 +157,7 @@ partial tool set. Visible-root checks remain authoritative: task children cannot
 communicator even if a host snapshot happens to expose a tool name.
 
 If startup fails, run `opencode --version` and verify the installed entry first. OpenCode must report
-a stable version in `>=2.1.3 <2.2.0`; the configured absolute directory and its `index.ts` must exist and remain readable
+a stable version in `>=2.1.3 <2.3.0`; the configured absolute directory and its `index.ts` must exist and remain readable
 by the OpenCode account.
 
 ## Configure
@@ -688,7 +694,7 @@ are logical deletion, not secure erasure from old pages, snapshots, or media.
 ### Upgrade to OpenCode v2
 
 Stop every backend and back up the complete state directory before replacing an OpenCode 1.18
-installation. Install a stable host in `>=2.1.3 <2.2.0`, update policy values to static `allow` or
+installation. Install a stable host in `>=2.1.3 <2.3.0`, update policy values to static `allow` or
 `deny`, remove `export.executable`, `export.trustedWorkingDirectory`, and `exportUnsanitized`, then
 restart with the v2 plugin entry. Legacy `ask` policy is rejected. Migration v17 creates the bounded
 participant registry from historical communicator participant IDs without treating that history as
@@ -900,9 +906,9 @@ explicit unsupported context/stop outcomes, deny-default start and configured ex
 result. Additional live checks cover rejected file sources, authorized idempotent start, allowed and
 denied cross-session reads, and durable wait/signal/ack. Positive packed-host export evidence runs in
 the capability-required secure-export Docker cell; a host without that capability must instead
-return `unsafe_path` without installing a file. The minimum and build-time patches currently coincide
-at `2.1.3`, so one host exercises both
-endpoints.
+return `unsafe_path` without installing a file. The minimum and build-time patches remain `2.1.3`.
+CI runs the same packed live suite on both `2.1.3` and `2.2.2`, installing the newer host into an
+isolated prefix without changing the packed plugin's pinned SDK/dependency snapshot.
 The Effect-plugin unit suite verifies the exact 21-tool and three-skill manifests, static policy,
 and scoped disposal. Integration suites cover lock, delivery, durable request, start/stop, export,
 visibility races and projection limits. These are separate from live journey evidence; the live
